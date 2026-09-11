@@ -9,3 +9,5 @@ Content tracks are judged the same way in spirit: a ContentEvent is a departure 
 An earlier draft of this model treated Content tracks as "keep while loud". Walking through a concrete case killed it: during gaming the music runs continuously, so nothing would ever be removed — the same trap already identified for reaction videos. Relative detection is what makes the Gaming preset actually cut.
 
 Because relative detection is the riskier half, every Preset carries a switch that drops Content tracks to Ignored, leaving the Voice track alone in charge. That is the fallback if event detection disappoints on real material.
+
+SmartTrim's own implementation in Node measured about 130× realtime, not 800×; ADR-0010 has the measurement and the rules speech detection follows.
