@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+
+# ffmpeg + VAD-Modell werden beim ersten Start geladen, nicht eingecheckt
+vendor/
+
+# Messdaten und rohe PCM-Zwischenstände
+*.raw
+*.wav
+bench/out/
