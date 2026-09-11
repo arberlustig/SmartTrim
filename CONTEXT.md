@@ -17,7 +17,7 @@ One side of a stereo SourceTrack. A SourceTrack has two; Premiere addresses them
 _Avoid_: track, side
 
 **EmptyTrack**:
-A SourceTrack that carries no real audio because the user never routed anything to it. SmartTrim hides these rather than asking the user about them.
+A SourceTrack that carries no real audio because the user never routed anything to it. SmartTrim hides these rather than asking the user about them, but still exports them, so a SourceTrack misjudged as empty never loses audio in Premiere.
 _Avoid_: silent track, unused track, dead track
 
 **Interleaving**:

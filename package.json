@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@xmldom/xmldom": "^0.9.12",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   }
