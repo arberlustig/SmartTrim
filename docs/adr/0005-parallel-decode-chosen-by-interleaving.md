@@ -19,6 +19,8 @@ Measured on the owner's machine, all from the same slow external drive:
 
 Interleaving matters more than file size: the 21.9 GB Recording beat the 9.57 GB one. One process per track is worth roughly 2.5×.
 
+Only the per-SourceTrack strategy is built so far. On the finely interleaved 9.57 GB Recording above, two per-SourceTrack processes later took 43.0 s against these 60.3 s, and cutting time slices with `-ss`/`-t` did not reproduce one-piece decoding sample for sample. ADR-0011 has the measurements.
+
 ## Considered Options
 
 **A custom MP4 demuxer** reading only the audio byte ranges from the sample table was measured and rejected. `ffmpeg -vn` already seeks past video data, and on finely interleaved Recordings the ~1 million tiny reads such a demuxer would issue are about four times *slower* than the plain sequential path on the target hardware. Do not revive this without new measurements.
