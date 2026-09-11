@@ -6,7 +6,10 @@ export interface SourceTrackInfo {
   channelCount: number;
   sampleRate: number;
   bitDepth: number;
-  /** This SourceTrack's own length in whole frames. It can end a few frames before the video does. */
+  /**
+   * This SourceTrack's length in whole frames as Premiere counts it, not as the file holds it: the first SourceTrack
+   * runs as long as the video, every later one ends at its last whole frame (ADR-0009).
+   */
   durationFrames: number;
 }
 

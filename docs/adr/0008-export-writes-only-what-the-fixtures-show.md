@@ -21,7 +21,7 @@ auto-editor's Premiere export counts Channels the same way (`sourceTrackIndex: c
 
 ## What else the fixtures settled
 
-- **Every SourceTrack keeps its own length.** In the multi-track fixture five SourceTracks end two frames before the video, and Premiere ends their clips there. The export needs each SourceTrack's probed length. ffprobe does not explain the difference: for long-recording.mp4 it reports the same duration for all six audio streams (9111.509 s ≈ 546690.5 frames at 60 fps), yet Premiere gives SourceTrack 1 the video's 546692 frames and the other five 546690. How probed durations become Premiere's frame counts is unsolved; the probe module must measure it rather than pick a rounding.
+- **Every SourceTrack keeps its own length.** In the multi-track fixture five SourceTracks end two frames before the video, and Premiere ends their clips there. The export needs each SourceTrack's length as Premiere counts it: the first SourceTrack as long as the video, every later one rounded down to its last whole frame, although all six are equally long in the file. ADR-0009 records the measurement.
 - **Every clip of a KeepSegment links to all clips of that KeepSegment**, itself included; audio links carry `groupindex` 1, the video link carries none.
 
 ## Refused rather than guessed

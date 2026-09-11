@@ -1,16 +1,16 @@
 /**
  * Writes FCP7 XML for the owner's own long-recording.mp4, so a real Premiere import can confirm the export.
- * Not product code. The Recording's properties are transcribed from fixtures/premiere/multitrack-6audio-60fps.xml,
- * which Premiere wrote for this very file, and are checked against ffprobe before anything is written.
+ * Not product code. The Recording is read with the product's probeRecording, and the result is checked against what
+ * Premiere wrote for this very file in fixtures/premiere/multitrack-6audio-60fps.xml before anything is written.
  *
  * Usage (from the repository root): node bench/long_recording_import_check.ts "D:\path\to\long-recording.mp4"
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CutPlan } from "../src/cutting/planCuts.ts";
-import { exportFcp7Xml, type RecordingInfo } from "../src/export/exportFcp7Xml.ts";
+import { exportFcp7Xml } from "../src/export/exportFcp7Xml.ts";
+import { probeRecording } from "../src/probe/probeRecording.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ffprobe = resolve(repoRoot, "vendor", "ffprobe.exe");
@@ -26,78 +26,36 @@ if (!recordingPath) fail('Pfad zu long-recording.mp4 fehlt. Aufruf: node bench/l
 if (!existsSync(recordingPath)) fail(`Datei nicht gefunden: ${recordingPath}`);
 if (!existsSync(ffprobe)) fail(`ffprobe fehlt: ${ffprobe}`);
 
-// What Premiere wrote for long-recording.mp4 in fixtures/premiere/multitrack-6audio-60fps.xml.
-const FRAME_RATE = "60/1";
-const WIDTH = 1920;
-const HEIGHT = 1080;
-const VIDEO_FRAMES = 546692;
-const SOURCE_TRACK_FRAMES = [546692, 546690, 546690, 546690, 546690, 546690];
-const SAMPLE_RATE = "48000";
+// What Premiere wrote for long-recording.mp4 in fixtures/premiere/multitrack-6audio-60fps.xml, one line per value.
+const describeSourceTrack = (channels: number, sampleRate: number, bitDepth: number, frames: number) =>
+  `${channels} Kanäle, ${sampleRate} Hz, ${bitDepth} Bit, ${frames} Frames`;
+const expected = [
+  "Framerate 60/1",
+  "Video 1920x1080, 546692 Frames",
+  ...[546692, 546690, 546690, 546690, 546690, 546690].map(
+    (frames, index) => `SourceTrack ${index + 1}: ${describeSourceTrack(2, 48000, 16, frames)}`,
+  ),
+];
 
-interface ProbeStream {
-  codec_type: string;
-  width?: number;
-  height?: number;
-  r_frame_rate?: string;
-  channels?: number;
-  sample_rate?: string;
-  duration?: string;
-}
+const recording = await probeRecording(recordingPath, ffprobe);
+const probed = [
+  `Framerate ${recording.frameRate.numerator}/${recording.frameRate.denominator}`,
+  `Video ${recording.width}x${recording.height}, ${recording.durationFrames} Frames`,
+  ...recording.sourceTracks.map(
+    (sourceTrack, index) =>
+      `SourceTrack ${index + 1}: ${describeSourceTrack(sourceTrack.channelCount, sourceTrack.sampleRate, sourceTrack.bitDepth, sourceTrack.durationFrames)}`,
+  ),
+];
 
-// A too-small buffer makes execFileSync throw ENOBUFS; it never truncates silently.
-const probe = JSON.parse(
-  execFileSync(ffprobe, ["-v", "error", "-print_format", "json", "-show_streams", recordingPath], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  }),
-) as { streams: ProbeStream[] };
-
-const videoStreams = probe.streams.filter((stream) => stream.codec_type === "video");
-const audioStreams = probe.streams.filter((stream) => stream.codec_type === "audio");
-const problems: string[] = [];
-
-if (videoStreams.length !== 1) problems.push(`erwartet 1 Videostream, gefunden ${videoStreams.length}`);
-const video = videoStreams[0];
-if (video && (video.width !== WIDTH || video.height !== HEIGHT)) {
-  problems.push(`Video ist ${video.width}x${video.height}, erwartet ${WIDTH}x${HEIGHT}`);
-}
-if (video && video.r_frame_rate !== FRAME_RATE) problems.push(`Framerate ist ${video.r_frame_rate}, erwartet ${FRAME_RATE}`);
-if (audioStreams.length !== SOURCE_TRACK_FRAMES.length) {
-  problems.push(`erwartet ${SOURCE_TRACK_FRAMES.length} Audiospuren, gefunden ${audioStreams.length}`);
-}
-audioStreams.forEach((stream, index) => {
-  if (stream.channels !== 2) problems.push(`SourceTrack ${index + 1} hat ${stream.channels} Kanäle, erwartet 2`);
-  if (stream.sample_rate !== SAMPLE_RATE) {
-    problems.push(`SourceTrack ${index + 1} hat ${stream.sample_rate} Hz, erwartet ${SAMPLE_RATE}`);
-  }
-});
-
+const problems = Array.from({ length: Math.max(expected.length, probed.length) }, (_, index) => index)
+  .filter((index) => expected[index] !== probed[index])
+  .map((index) => `gelesen: ${probed[index] ?? "nichts"} | Premiere: ${expected[index] ?? "nichts"}`);
 if (problems.length > 0) {
-  fail(`Das ist nicht die Datei, zu der die Fixture gehört. Nichts geschrieben.\n  - ${problems.join("\n  - ")}`);
-}
-
-// For information only: how ffprobe's stream lengths compare with the frame counts Premiere wrote.
-// Turning durations into frames is the job of the probe module that does not exist yet.
-audioStreams.forEach((stream, index) => {
-  const probedFrames = Number(stream.duration) * 60;
-  console.log(
-    `SourceTrack ${index + 1}: ffprobe ${stream.duration} s ≈ ${probedFrames.toFixed(1)} Frames, Premiere ${SOURCE_TRACK_FRAMES[index]}`,
+  fail(
+    `long-recording.mp4 liest sich anders, als Premiere sie gelesen hat (falsche Datei oder Fehler im Probe-Modul). Nichts geschrieben.\n  - ${problems.join("\n  - ")}`,
   );
-});
-
-const recording: RecordingInfo = {
-  path: resolve(recordingPath),
-  frameRate: { numerator: 60, denominator: 1 },
-  width: WIDTH,
-  height: HEIGHT,
-  durationFrames: VIDEO_FRAMES,
-  sourceTracks: SOURCE_TRACK_FRAMES.map((durationFrames) => ({
-    channelCount: 2,
-    sampleRate: Number(SAMPLE_RATE),
-    bitDepth: 16,
-    durationFrames,
-  })),
-};
+}
+console.log("long-recording.mp4 liest sich genau so, wie Premiere sie gelesen hat.");
 
 // Premiere's own split of the long Recording, taken from the fixture. Imported, it should look exactly like the owner's sequence.
 const fixtureSplit: CutPlan = [
