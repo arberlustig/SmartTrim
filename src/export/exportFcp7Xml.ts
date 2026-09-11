@@ -180,12 +180,11 @@ export function exportFcp7Xml(recording: RecordingInfo, cutPlan: CutPlan): strin
     )
     .join("");
 
-  // Premiere fills <sourcetrack><trackindex> differently depending on how many SourceTracks there are.
-  // One stereo SourceTrack: the Channel number, 1 and 2 (fixtures/premiere/single-audio-30fps.xml).
-  // Several: the SourceTrack's number, the same for both Channels (fixtures/premiere/multitrack-6audio-60fps.xml).
-  // Only one and six are backed by fixtures; two to five are assumed to follow the six-track rule.
-  const sourceTrackReference = (sourceTrackIndex: number, channel: number) =>
-    recording.sourceTracks.length === 1 ? channel : sourceTrackIndex + 1;
+  // <sourcetrack><trackindex> is a Channel number counted across all SourceTracks: 1, 2 | 3, 4 | …
+  // Premiere's own multi-track export writes the SourceTrack's number instead (1, 1, 2, 2, …), and a real import
+  // proved Premiere misreads that: stereo spread over two TimelineTracks and louder on the left (ADR-0008).
+  // Every SourceTrack is stereo by now, so each SourceTrack before this one accounts for two Channels.
+  const sourceTrackReference = (sourceTrackIndex: number, channel: number) => sourceTrackIndex * 2 + channel;
 
   // Each SourceTrack keeps its own length: a SourceTrack that ends before the video ends its clips there.
   const audioClips = (timelineTrackNumber: number, sourceTrack: SourceTrackInfo, trackIndexInSource: number) =>

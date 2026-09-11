@@ -14,8 +14,8 @@ SmartTrim exports a CutPlan as FCP7 XML (xmeml version 4), the interchange forma
 
 The exact XML shape is not guessed. Two real exports from the user's own Premiere are checked in under `fixtures/premiere/` and serve as the ground truth: a single-SourceTrack sequence at 30 fps, and a six-SourceTrack sequence at 60 fps.
 
-The multi-track fixture settles the rule that broke the predecessor: each stereo SourceTrack becomes **two** TimelineTracks carrying the same `sourcetrack/trackindex` and differing in `currentExplodedTrackIndex` (0 and 1). Emitting one TimelineTrack per SourceTrack is what made every track import as mono.
+The multi-track fixture settles the rule that broke the predecessor: each stereo SourceTrack becomes **two** TimelineTracks, differing in `currentExplodedTrackIndex` (0 and 1). Emitting one TimelineTrack per SourceTrack is what made every track import as mono.
 
-The single-track fixture shows that `sourcetrack/trackindex` is not always the SourceTrack's number: with only one stereo SourceTrack, Premiere writes the Channel number there instead (1 and 2). Only one and six SourceTracks are backed by fixtures; the exporter assumes two to five follow the six-track rule until a fixture says otherwise.
+The fixture is wrong about one field, though. Premiere's multi-track export gives both TimelineTracks of a SourceTrack the same `sourcetrack/trackindex`, the SourceTrack's number, but Premiere's importer reads that field as a Channel number counted across all SourceTracks. Re-imported, Premiere's own export spreads each stereo SourceTrack across two TimelineTracks and plays louder on the left. Numbering Channels 1, 2 | 3, 4 | … imports correctly, confirmed in the owner's Premiere on 2026-09-11. See ADR-0008.
 
 Premiere also ends each SourceTrack's clips at that SourceTrack's own length, which in the multi-track fixture is two frames shorter than the video for five of the six SourceTracks. The export therefore needs every SourceTrack's length, not just the video's.

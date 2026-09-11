@@ -323,6 +323,17 @@ function wholeSequence(root: Element) {
   };
 }
 
+/** A whole-sequence projection with every audio clip's sourcetrack/trackindex taken out of the comparison. */
+function withoutSourceTrackIndex(sequence: ReturnType<typeof wholeSequence>) {
+  return {
+    ...sequence,
+    audioTracks: sequence.audioTracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => ({ ...clip, sourcetrack: { ...clip.sourcetrack, trackindex: "not compared" } })),
+    })),
+  };
+}
+
 describe("exportFcp7Xml", () => {
   test("the sequence is named after the Recording and runs at its frame rate for the length of the CutPlan", () => {
     const exported = parseXml(exportFcp7Xml(singleRecording, singleCutPlan));
@@ -379,10 +390,38 @@ describe("exportFcp7Xml", () => {
     expect(clipTicks(exported)).toEqual(clipTicks(singleFixture));
   });
 
+  // Everything except sourcetrack/trackindex, where Premiere's exporter writes what its own importer misreads (ADR-0008).
   test("six stereo SourceTracks match Premiere's multitrack export, each cut to its own length", () => {
     const exported = parseXml(exportFcp7Xml(multitrackRecording, multitrackCutPlan));
 
-    expect(wholeSequence(exported)).toEqual(wholeSequence(multitrackFixture));
+    expect(withoutSourceTrackIndex(wholeSequence(exported))).toEqual(
+      withoutSourceTrackIndex(wholeSequence(multitrackFixture)),
+    );
+  });
+
+  // Confirmed by the owner's Premiere import on 2026-09-11: counting Channels across all SourceTracks imports as one
+  // balanced stereo TimelineTrack per SourceTrack. Premiere's own numbering (1,1,2,2,…) imports split across two
+  // TimelineTracks and louder on the left — even when the file is Premiere's own export.
+  test("sourcetrack/trackindex counts Channels across all SourceTracks, the way Premiere's importer reads it", () => {
+    const exported = parseXml(exportFcp7Xml(multitrackRecording, multitrackCutPlan));
+    const trackIndexes = tracksWithClips(exported, "audio").map((track) =>
+      children(track, "clipitem").map((clip) => text(clip, "sourcetrack/trackindex")),
+    );
+
+    expect(trackIndexes).toEqual([
+      ["1", "1"],
+      ["2", "2"],
+      ["3", "3"],
+      ["4", "4"],
+      ["5", "5"],
+      ["6", "6"],
+      ["7", "7"],
+      ["8", "8"],
+      ["9", "9"],
+      ["10", "10"],
+      ["11", "11"],
+      ["12", "12"],
+    ]);
   });
 
   // No fixture covers NTSC. FCP7 XML spells 29.97 fps as timebase 30 with the ntsc flag set.
