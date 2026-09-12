@@ -19,6 +19,16 @@ The owner asked for a "Cut Heatmap" and pointed at QuietCut, whose picture is a 
 over it, not a heat strip. Both are here: the strip answers "where is much removed" at a glance, the zoom answers
 "and does that sound right".
 
+## The strip carries the sound as well as the cut
+
+It first carried only the cut, and the owner found it empty before anything was cut — reasonably, since a strip
+that shows a plan has nothing to show without one. It now carries both, like the waveforms below it: the cut as the
+band behind, the sound as a waveform in front. The waveform is the **loudest** of the shown SourceTracks in each
+column, which answers "is there any sound here at all" across a column that may be minutes wide.
+
+It is hidden entirely when no SourceTrack has a role. Audio read for a role that was taken away is kept in memory
+(ADR-0020), but keeping it on screen left an empty strip claiming to show a cut.
+
 ## The CutPlan still stays in the main process; its kept ranges do not
 
 ADR-0012 keeps the CutPlan in the main process and lets only the CutSummary cross to the window. The colours are
@@ -36,7 +46,8 @@ Agreed with the owner before any test was written:
 - `peakEnvelope` — decoded audio to one height per slice of time. Each slice reports its **loudest** sample, not its
   average, so a gunshot lasting a hundredth of a second keeps its full height.
 - `keptShareByColumn` — the strip. One column of a 2.5-hour Recording is minutes wide and holds dozens of cuts, so
-  it reports the *share* that survives rather than kept-or-removed, and the window draws that as brightness.
+  it reports the *share* that survives rather than kept-or-removed, and the window draws that as how green the
+  column's band is.
 - `bandsIn` — the coloured bands across the zoom window, clipped to it and covering it with no gaps.
 - `zoomedTo` / `pannedBy` — zooming keeps the middle of the window in the middle, and neither zooming nor sliding
   can carry the window off the Recording.

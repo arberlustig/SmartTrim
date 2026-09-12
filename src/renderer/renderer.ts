@@ -557,13 +557,34 @@ function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: Can
 }
 
 /** The strip over the whole Recording: brightness is how much of that column survives, plus the zoom window. */
+/**
+ * The loudest thing any shown SourceTrack does in each column of the strip. The strip spans the whole Recording,
+ * so one column is minutes wide; taking the loudest across the SourceTracks answers "is there any sound here at
+ * all", which is what the strip is for.
+ */
+function overviewPeaks(columns: number, recordingSeconds: number): number[] {
+  const loudest = new Array<number>(columns).fill(0);
+  for (const waveform of shownWaveforms()) {
+    for (let column = 0; column < columns; column += 1) {
+      const from = Math.floor((column / columns) * recordingSeconds * waveform.peaksPerSecond);
+      const to = Math.max(Math.floor(((column + 1) / columns) * recordingSeconds * waveform.peaksPerSecond), from + 1);
+      for (let peak = from; peak < to && peak < waveform.peaks.length; peak += 1) {
+        const height = waveform.peaks[peak] as number;
+        if (height > (loudest[column] as number)) loudest[column] = height;
+      }
+    }
+  }
+  return loudest;
+}
+
 function drawOverview(): void {
   const seconds = recordingSeconds();
   if (!seconds) return;
   const height = 34;
   const { paint, width } = canvasBrush(view.overview, height);
 
-  // Without a cut the strip is only a ruler for the zoom below: an empty one would claim everything is removed.
+  // The strip carries the same two things as the waveforms below: the cut behind, the sound in front. Without a
+  // cut the band is plain — an all-red one would claim the whole Recording is being removed.
   paint.fillStyle = finished ? REMOVED_BAND : PLAIN_BAND;
   paint.fillRect(0, 0, width, height);
 
@@ -571,13 +592,22 @@ function drawOverview(): void {
   for (let column = 0; column < width; column += 1) {
     const kept = share[column] as number;
     if (!(kept > 0)) continue;
-    // Full columns reach the top; a column half removed is drawn half as tall and dimmer.
+    // A column that only half survives is only half as green, which is what makes the strip read as a heat strip.
+    paint.globalAlpha = kept;
     paint.fillStyle = KEPT_BAND;
     paint.fillRect(column, 0, 1, height);
-    paint.globalAlpha = 0.35 + 0.65 * kept;
-    paint.fillStyle = KEPT_WAVE;
-    paint.fillRect(column, height - Math.max(kept * height, 1), 1, Math.max(kept * height, 1));
     paint.globalAlpha = 1;
+  }
+
+  // The sound itself, over the cut: one line per column, mirrored around the middle, as in the waveforms below.
+  const peaks = overviewPeaks(width, seconds);
+  const middle = height / 2;
+  for (let column = 0; column < width; column += 1) {
+    const loudest = peaks[column] as number;
+    if (loudest <= 0) continue;
+    const half = Math.max(loudest * (middle - 1.5), 0.5);
+    paint.fillStyle = !finished ? PLAIN_WAVE : (share[column] as number) > 0.5 ? KEPT_WAVE : REMOVED_WAVE;
+    paint.fillRect(column, middle - half, 1, half * 2);
   }
 
   // Where the zoom below is looking.
@@ -649,9 +679,18 @@ function waveformCanvas(position: number): HTMLCanvasElement {
   return canvas;
 }
 
+/**
+ * The waveforms belonging to SourceTracks that still have a role. Audio read for a role the user took away stays
+ * in `waveforms` so putting the role back is instant (ADR-0020), but none of it is drawn.
+ */
+function shownWaveforms(): SourceTrackWaveform[] {
+  return waveforms.filter((waveform) => roleOf(session, waveform.position) !== "ignored");
+}
+
 function drawWaveforms(): void {
   const seconds = recordingSeconds();
-  view.cutPicture.hidden = waveforms.length === 0 || !seconds;
+  // No SourceTrack with a role means nothing to picture — an empty strip would sit there claiming to show a cut.
+  view.cutPicture.hidden = shownWaveforms().length === 0 || !seconds;
   if (view.cutPicture.hidden) return;
 
   view.zoom.min = "0";
