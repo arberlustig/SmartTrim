@@ -28,6 +28,10 @@ const project: TrimProject = {
   decideBy: { kind: "loudness", thresholdDbfs: -40 },
   marginSeconds: 0.05,
   minimumDeadZoneSeconds: 0.25,
+  contentSourceTracks: [0],
+  eventLeadSeconds: 1.5,
+  eventTailSeconds: 2,
+  contentEvents: [{ startSeconds: 5, endSeconds: 5.4 }],
   worthKeeping: [
     { startSeconds: 2.112, endSeconds: 3.802 },
     { startSeconds: 7.713, endSeconds: 9.239 },
@@ -46,7 +50,8 @@ describe("the TrimProject file", () => {
     expect(() => readTrimProject("{}")).toThrow("not a SmartTrim project");
     expect(() => readTrimProject("this is not JSON at all")).toThrow("not a SmartTrim project");
     // A later version may hold things this one would silently drop on the next save.
-    expect(() => readTrimProject(trimProjectText(project).replace('"smarttrim": 1', '"smarttrim": 2'))).toThrow(
+    // Written by a SmartTrim that knows a format this one does not.
+    expect(() => readTrimProject(trimProjectText(project).replace(/"smarttrim": \d+/, '"smarttrim": 99'))).toThrow(
       "was saved by a newer version of SmartTrim",
     );
     // Half a project is not a project: a file without the analysis could not be replanned.
@@ -80,5 +85,20 @@ describe("the TrimProject file", () => {
     ]);
     // JSON has no -Infinity, so a silent SourceTrack's peak is written as null and read back as silence.
     expect(reopened.scan?.[1]).toEqual({ carriesSound: false, peakDbfs: -Infinity, slicesWithSound: 0, sliceCount: 5 });
+  });
+
+  // Format 1 knew nothing about Content SourceTracks. Its files must still open, with no moments and no EventLead.
+  test("a format 1 file opens as a session without Content SourceTracks", () => {
+    const text = readFileSync(
+      fileURLToPath(new URL("../../fixtures/trimproject/version-1.smarttrim", import.meta.url)),
+      "utf8",
+    );
+
+    const reopened = readTrimProject(text);
+
+    expect(reopened.contentSourceTracks ?? []).toEqual([]);
+    expect(reopened.contentEvents ?? []).toEqual([]);
+    expect(reopened.eventLeadSeconds ?? 0).toBe(0);
+    expect(reopened.eventTailSeconds ?? 0).toBe(0);
   });
 });

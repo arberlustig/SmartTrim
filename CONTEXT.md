@@ -39,7 +39,7 @@ The TrackRole for tracks that can keep material alive through a ContentEvent, wi
 The TrackRole for tracks that never influence cutting, such as alert sounds or a reacted-to video.
 
 **ContentEvent**:
-A moment where a Content track departs noticeably from its own recent baseline — an explosion, a fanfare, an abrupt drop. Continuous background audio is never a ContentEvent, however loud.
+A moment where a Content track departs noticeably from its own recent baseline — an explosion, a fanfare, an abrupt drop. Continuous background audio is never a ContentEvent, however loud: the baseline is the median level of the seconds just before, so a track that roars from end to end departs from nothing (ADR-0017).
 _Avoid_: peak, loud part, spike
 
 **EventLead**:
@@ -76,7 +76,7 @@ slices. It decides which SourceTracks are EmptyTracks and therefore hidden, and 
 _Avoid_: analysis, level check, probe
 
 **Preset**:
-A named set of TrackRoles and thresholds suited to a kind of video, such as Gaming, Reaction or Podcast.
+A named set of thresholds suited to a kind of video, such as Gaming, Reaction or Podcast. TrackRoles are **not** part of it: which SourceTrack carries the microphone belongs to the Recording's OBS setup, not to the kind of video (ADR-0017).
 
 ## Output
 

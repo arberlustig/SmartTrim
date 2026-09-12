@@ -1,26 +1,35 @@
 import {
+  EVENT_LEAD_SECONDS,
+  PRESETS,
+  EVENT_TAIL_SECONDS,
   MARGIN_SECONDS,
   MINIMUM_DEAD_ZONE_SECONDS,
   THRESHOLD_DBFS,
   analysisRequestFrom,
+  applyPreset,
   canCut,
   canExport,
   cutFinished,
   planFinished,
   planSettingsFrom,
+  presetNameOf,
   projectOpened,
   redoNeeded,
+  roleOf,
   savedChoicesFrom,
   chooseRecording,
   newCutSession,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   revealEmptySourceTracks,
+  setEventLeadSeconds,
+  setEventTailSeconds,
+  setSourceTrackRole,
   setThresholdDbfs,
   toggleExportSourceTrack,
-  toggleSourceTrack,
   visibleSourceTracks,
   type CutSession,
+  type TrackRole,
 } from "../app/cutSession.ts";
 import type { CutSummary } from "../app/runCut.ts";
 import type { Answer, SmartTrimApi } from "../preload/api.ts";
@@ -49,6 +58,12 @@ const view = {
   marginValue: element("marginValue"),
   deadZone: element<HTMLInputElement>("deadZone"),
   deadZoneValue: element("deadZoneValue"),
+  preset: element<HTMLSelectElement>("preset"),
+  eventSliders: element("eventSliders"),
+  eventLead: element<HTMLInputElement>("eventLead"),
+  eventLeadValue: element("eventLeadValue"),
+  eventTail: element<HTMLInputElement>("eventTail"),
+  eventTailValue: element("eventTailValue"),
   cut: element<HTMLButtonElement>("cut"),
   status: element("status"),
   result: element("result"),
@@ -131,7 +146,7 @@ function drawSourceTracks(): void {
 
   const head = document.createElement("div");
   head.className = "head";
-  for (const caption of ["schneiden", "nach Premiere", ""]) {
+  for (const caption of ["diese Spur …", "nach Premiere", ""]) {
     const cell = document.createElement("span");
     cell.textContent = caption;
     head.append(cell);
@@ -166,11 +181,29 @@ function drawSourceTracks(): void {
       `${channels(sourceTrack.channelCount)} · ${sourceTrack.sampleRate / 1000} kHz` +
       soundHint(session.scan?.[index]);
 
+    // One TrackRole per SourceTrack (CONTEXT.md): it drives the cut, it keeps its moments, or it is ignored.
+    const role = document.createElement("select");
+    role.disabled = working;
+    role.title = `Was Tonspur ${index + 1} zum Schnitt beiträgt`;
+    for (const [value, label] of [
+      ["ignored", "wird ignoriert"],
+      ["voice", "danach schneiden"],
+      ["content", "Momente behalten"],
+    ] as const) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      role.append(option);
+    }
+    role.value = roleOf(session, index);
+    role.addEventListener("change", () => {
+      session = setSourceTrackRole(session, index, role.value as TrackRole);
+      afterSettingChange();
+      draw();
+    });
+
     row.append(
-      box(session.listenTo.includes(index), `Nach Tonspur ${index + 1} schneiden`, () => {
-        session = toggleSourceTrack(session, index);
-        afterSettingChange();
-      }),
+      role,
       // Changing this changes the file, not the cut, so a finished cut stays on screen.
       box(session.exportSourceTracks.includes(index), `Tonspur ${index + 1} nach Premiere übernehmen`, () => {
         session = toggleExportSourceTrack(session, index);
@@ -184,10 +217,12 @@ function drawSourceTracks(): void {
   const hint = document.createElement("span");
   hint.textContent =
     session.listenTo.length === 0
-      ? "Links ankreuzen, wo du sprichst — danach wird geschnitten. Rechts, was in Premiere landen soll."
-      : canExport(session)
-        ? "Alles, was auf den links angekreuzten Spuren laut genug ist, bleibt erhalten."
-        : "Kreuze rechts mindestens eine Spur an, sonst hat das Premiere-Projekt keinen Ton.";
+      ? 'Stell bei der Spur, auf der du sprichst, "danach schneiden" ein. Rechts, was in Premiere landen soll.'
+      : !canExport(session)
+        ? "Kreuze rechts mindestens eine Spur an, sonst hat das Premiere-Projekt keinen Ton."
+        : session.contentSourceTracks.length === 0
+          ? 'Alles, was auf den Schnitt-Spuren laut genug ist, bleibt erhalten. "Momente behalten" hält Knaller am Leben, bei denen keiner redet.'
+          : "Auf den Momente-Spuren bleibt, was deutlich aus dem eigenen Grundton ausbricht — Explosionen, Fanfaren, abrupte Stille.";
   view.sourceTracksHint.append(hint);
 
   // A scan only listens to slices, so a hidden SourceTrack has to stay reachable.
@@ -213,13 +248,32 @@ function drawSourceTracks(): void {
   view.sourceTracksHint.append(document.createElement("br"), reveal);
 }
 
+/** The Preset dropdown. "eigene" is what the sliders are once one of them has been moved off a Preset. */
+const OWN_SETTINGS = "eigene";
+
 function drawSettings(): void {
+  const matched = presetNameOf(session);
+  view.preset.replaceChildren();
+  for (const name of [...PRESETS.map((preset) => preset.name), ...(matched ? [] : [OWN_SETTINGS])]) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    view.preset.append(option);
+  }
+  view.preset.value = matched ?? OWN_SETTINGS;
+  view.preset.disabled = working;
   view.threshold.value = String(session.thresholdDbfs);
   view.thresholdValue.textContent = `${decimals(session.thresholdDbfs, 0)} dB`;
   view.margin.value = String(session.marginSeconds);
   view.marginValue.textContent = `${decimals(session.marginSeconds, 2)} s`;
   view.deadZone.value = String(session.minimumDeadZoneSeconds);
   view.deadZoneValue.textContent = `${decimals(session.minimumDeadZoneSeconds, 2)} s`;
+  // What is kept around a moment only matters once a SourceTrack is looked at for moments.
+  view.eventSliders.hidden = session.contentSourceTracks.length === 0;
+  view.eventLead.value = String(session.eventLeadSeconds);
+  view.eventLeadValue.textContent = `${decimals(session.eventLeadSeconds, 1)} s`;
+  view.eventTail.value = String(session.eventTailSeconds);
+  view.eventTailValue.textContent = `${decimals(session.eventTailSeconds, 1)} s`;
 }
 
 function drawResult(): void {
@@ -288,6 +342,8 @@ function draw(): void {
   view.threshold.disabled = working;
   view.margin.disabled = working;
   view.deadZone.disabled = working;
+  view.eventLead.disabled = working;
+  view.eventTail.disabled = working;
   view.cut.disabled = working || preparing || !canCut(session);
   view.cut.textContent = working ? "Arbeitet …" : "Schneiden";
 }
@@ -369,6 +425,17 @@ function slider(
 slider(view.threshold, THRESHOLD_DBFS, (value) => (session = setThresholdDbfs(session, value)));
 slider(view.margin, MARGIN_SECONDS, (value) => (session = setMarginSeconds(session, value)));
 slider(view.deadZone, MINIMUM_DEAD_ZONE_SECONDS, (value) => (session = setMinimumDeadZoneSeconds(session, value)));
+slider(view.eventLead, EVENT_LEAD_SECONDS, (value) => (session = setEventLeadSeconds(session, value)));
+slider(view.eventTail, EVENT_TAIL_SECONDS, (value) => (session = setEventTailSeconds(session, value)));
+
+view.preset.addEventListener("change", () => {
+  const preset = PRESETS.find((each) => each.name === view.preset.value);
+  // "eigene" is not something to pick: it only describes sliders that match no Preset.
+  if (!preset) return;
+  session = applyPreset(session, preset);
+  afterSettingChange();
+  draw();
+});
 
 view.chooseRecording.addEventListener("click", async () => {
   clearStatus();

@@ -19,7 +19,13 @@ import {
   setMinimumDeadZoneSeconds,
   setThresholdDbfs,
   toggleExportSourceTrack,
-  toggleSourceTrack,
+  PRESETS,
+  applyPreset,
+  presetNameOf,
+  roleOf,
+  setEventLeadSeconds,
+  setEventTailSeconds,
+  setSourceTrackRole,
   visibleSourceTracks,
 } from "./cutSession";
 
@@ -72,11 +78,11 @@ describe("cutSession", () => {
     expect(canCut(chosen)).toBe(false);
 
     // SourceTrack 5 of the long Recording is the one the owner speaks on, so position 4.
-    const listening = toggleSourceTrack(chosen, 4);
+    const listening = setSourceTrackRole(chosen, 4, "voice");
     expect(listening.listenTo).toEqual([4]);
     expect(canCut(listening)).toBe(true);
 
-    const unticked = toggleSourceTrack(listening, 4);
+    const unticked = setSourceTrackRole(listening, 4, "ignored");
     expect(unticked.listenTo).toEqual([]);
     expect(canCut(unticked)).toBe(false);
   });
@@ -84,7 +90,7 @@ describe("cutSession", () => {
   // A tick is a position in one Recording. Carrying it over would listen to whatever sits at that position in the
   // next Recording, or to a SourceTrack that is not there at all.
   test("choosing another Recording forgets the ticks that pointed into the old one", () => {
-    const listening = toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\long-recording.mp4`, 6)), 4);
+    const listening = setSourceTrackRole(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\long-recording.mp4`, 6)), 4, "voice");
 
     const switched = chooseRecording(listening, probed(String.raw`C:\Aufnahmen\part3.mp4`, 2));
 
@@ -96,8 +102,8 @@ describe("cutSession", () => {
   test("ticking a SourceTrack the Recording does not have is refused", () => {
     const session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\part3.mp4`, 2));
 
-    expect(() => toggleSourceTrack(session, 4)).toThrow("SourceTrack 5");
-    expect(() => toggleSourceTrack(newCutSession(), 0)).toThrow(/Recording/);
+    expect(() => setSourceTrackRole(session, 4, "voice")).toThrow("SourceTrack 5");
+    expect(() => setSourceTrackRole(newCutSession(), 0, "voice")).toThrow(/Recording/);
   });
 
   // The sliders are the only way these reach the analysis, and each end of each slider is a value the owner could
@@ -120,14 +126,17 @@ describe("cutSession", () => {
 
   test("the session hands the analysis exactly what the user set", () => {
     let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\long-recording.mp4`, 6));
-    session = toggleSourceTrack(toggleSourceTrack(session, 4), 0);
+    session = setSourceTrackRole(setSourceTrackRole(session, 4, "voice"), 0, "voice");
     session = setThresholdDbfs(setMinimumDeadZoneSeconds(session, 0.8), -45);
 
     expect(analysisRequestFrom(session)).toEqual({
       recordingPath: String.raw`C:\Aufnahmen\long-recording.mp4`,
       voiceSourceTracks: [0, 4],
+      contentSourceTracks: [],
       decideBy: { kind: "loudness", thresholdDbfs: -45 },
       marginSeconds: 0.05,
+      eventLeadSeconds: 1.5,
+      eventTailSeconds: 2,
       minimumDeadZoneSeconds: 0.8,
     });
   });
@@ -162,7 +171,7 @@ describe("cutSession", () => {
     const revealed = revealEmptySourceTracks(session, true);
     expect(visibleSourceTracks(revealed)).toEqual([0, 1, 2, 3, 4, 5]);
 
-    const listening = toggleSourceTrack(revealed, 1);
+    const listening = setSourceTrackRole(revealed, 1, "voice");
     expect(listening.listenTo).toEqual([1]);
     expect(analysisRequestFrom(listening).voiceSourceTracks).toEqual([1]);
     // Hiding them again leaves the tick alone: it is the user's choice, not the scan's.
@@ -190,7 +199,7 @@ describe("cutSession", () => {
   // The export choice changes the file, never the cut, so a finished cut stays valid while it is changed.
   test("what is exported has no say in what is cut", () => {
     let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
-    session = toggleSourceTrack(session, 4);
+    session = setSourceTrackRole(session, 4, "voice");
 
     const request = analysisRequestFrom(toggleExportSourceTrack(session, 4));
 
@@ -221,7 +230,7 @@ describe("cutSession", () => {
   // ADR-0004: the Recording is read once. Luft and Pause only decide how the cuts are planned around what was
   // found, so moving them may not cost a second read; the threshold and the SourceTracks decide what is found at all.
   test("Luft and Pause only need replanning, the threshold decides again, another SourceTrack needs a new read", () => {
-    let session = toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4);
+    let session = setSourceTrackRole(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4, "voice");
     expect(redoNeeded(session)).toBe("analyse");
 
     session = cutFinished(session);
@@ -231,13 +240,15 @@ describe("cutSession", () => {
     expect(redoNeeded(setMinimumDeadZoneSeconds(session, 2))).toBe("replan");
     expect(planSettingsFrom(setMarginSeconds(session, 0.3))).toEqual({
       marginSeconds: 0.3,
+      eventLeadSeconds: 1.5,
+      eventTailSeconds: 2,
       minimumDeadZoneSeconds: 0.25,
     });
 
     // The decoded audio is still in memory, so another threshold is decided from it rather than read again (ADR-0004).
     expect(redoNeeded(setThresholdDbfs(session, -45))).toBe("redecide");
     // Another SourceTrack is audio nobody has decoded yet.
-    expect(redoNeeded(toggleSourceTrack(session, 0))).toBe("analyse");
+    expect(redoNeeded(setSourceTrackRole(session, 0, "voice"))).toBe("analyse");
     // A threshold and a Margin at once is still one job, and it is the one that decides again.
     expect(redoNeeded(setMarginSeconds(setThresholdDbfs(session, -45), 0.3))).toBe("redecide");
     // What is exported has no say in the plan at all (ADR-0014).
@@ -246,10 +257,10 @@ describe("cutSession", () => {
 
   test("choosing another Recording forgets that a plan was ever made", () => {
     const planned = cutFinished(
-      toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4),
+      setSourceTrackRole(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4, "voice"),
     );
 
-    const switched = toggleSourceTrack(chooseRecording(planned, probed(String.raw`C:\Aufnahmen\other.mp4`, 2)), 0);
+    const switched = setSourceTrackRole(chooseRecording(planned, probed(String.raw`C:\Aufnahmen\other.mp4`, 2)), 0, "voice");
 
     expect(redoNeeded(switched)).toBe("analyse");
   });
@@ -289,7 +300,7 @@ describe("cutSession", () => {
   // Replanning and deciding again catch the plan up with the settings; neither of them decodes anything, so
   // whether the audio is in memory is left exactly as it was.
   test("a replan after reopening does not pretend the audio is back", () => {
-    const cut = cutFinished(toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4));
+    const cut = cutFinished(setSourceTrackRole(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4, "voice"));
     expect(redoNeeded(setThresholdDbfs(cut, -45))).toBe("redecide");
 
     const replanned = planFinished(setMarginSeconds(cut, 0.3));
@@ -305,16 +316,104 @@ describe("cutSession", () => {
       probed(String.raw`C:\Aufnahmen\obs.mp4`, 6),
       scanned([true, false, true, false, true, true]),
     );
-    session = cutFinished(setThresholdDbfs(toggleSourceTrack(session, 4), -45));
+    session = cutFinished(setThresholdDbfs(setSourceTrackRole(session, 4, "voice"), -45));
     session = toggleExportSourceTrack(session, 0);
 
     expect(savedChoicesFrom(session)).toEqual({
       voiceSourceTracks: [4],
+      contentSourceTracks: [],
       exportSourceTracks: [2, 4, 5],
       decideBy: { kind: "loudness", thresholdDbfs: -45 },
       marginSeconds: 0.05,
+      eventLeadSeconds: 1.5,
+      eventTailSeconds: 2,
       minimumDeadZoneSeconds: 0.25,
       scan: scanned([true, false, true, false, true, true]),
     });
+  });
+
+  // CONTEXT.md: a SourceTrack has exactly one TrackRole. The game track drives no cuts of its own, it only keeps
+  // its moments alive, and the two lists must never hold the same SourceTrack.
+  test("a SourceTrack has exactly one role at a time", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    expect(roleOf(session, 2)).toBe("ignored");
+
+    session = setSourceTrackRole(session, 2, "voice");
+    expect(roleOf(session, 2)).toBe("voice");
+    expect(session.listenTo).toEqual([2]);
+
+    session = setSourceTrackRole(session, 2, "content");
+    expect(roleOf(session, 2)).toBe("content");
+    expect(session.listenTo).toEqual([]);
+    expect(session.contentSourceTracks).toEqual([2]);
+
+    session = setSourceTrackRole(session, 2, "ignored");
+    expect(roleOf(session, 2)).toBe("ignored");
+    expect(session.contentSourceTracks).toEqual([]);
+  });
+
+  test("the Content SourceTracks and what is kept around their moments reach the analysis", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    session = setSourceTrackRole(setSourceTrackRole(session, 4, "voice"), 2, "content");
+    session = setEventTailSeconds(setEventLeadSeconds(session, 1.5), 2.5);
+
+    expect(analysisRequestFrom(session)).toEqual({
+      recordingPath: String.raw`C:\Aufnahmen\obs.mp4`,
+      voiceSourceTracks: [4],
+      contentSourceTracks: [2],
+      decideBy: { kind: "loudness", thresholdDbfs: -40 },
+      marginSeconds: 0.05,
+      eventLeadSeconds: 1.5,
+      eventTailSeconds: 2.5,
+      minimumDeadZoneSeconds: 0.25,
+    });
+  });
+
+  // The moments have to be found in the audio, so a new Content SourceTrack is a new read. What is kept around
+  // them is planning, like the Margin.
+  test("a new Content SourceTrack needs a read, its EventLead and EventTail only a replan", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    session = cutFinished(setSourceTrackRole(setSourceTrackRole(session, 4, "voice"), 2, "content"));
+
+    expect(redoNeeded(session)).toBe("nothing");
+    expect(redoNeeded(setSourceTrackRole(session, 1, "content"))).toBe("analyse");
+    expect(redoNeeded(setSourceTrackRole(session, 2, "ignored"))).toBe("analyse");
+    expect(redoNeeded(setEventLeadSeconds(session, 2))).toBe("replan");
+    expect(redoNeeded(setEventTailSeconds(session, 3))).toBe("replan");
+  });
+
+  test("the event sliders stay inside their range", () => {
+    const session = newCutSession();
+
+    expect(setEventLeadSeconds(session, 9).eventLeadSeconds).toBe(5);
+    expect(setEventLeadSeconds(session, -1).eventLeadSeconds).toBe(0);
+    expect(setEventTailSeconds(session, 9).eventTailSeconds).toBe(5);
+  });
+
+  // A Preset is a named set of thresholds for a kind of video (CONTEXT.md). Gaming holds the settings the owner
+  // arrived at by listening (ADR-0003); the others are a starting point, not a measurement.
+  test("a Preset sets the sliders and leaves the roles alone", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    session = setSourceTrackRole(setSourceTrackRole(session, 4, "voice"), 2, "content");
+
+    const gaming = PRESETS.find((preset) => preset.name === "Gaming");
+    expect(gaming).toMatchObject({ thresholdDbfs: -40, marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 });
+
+    const podcast = applyPreset(session, PRESETS.find((preset) => preset.name === "Podcast")!);
+
+    expect(podcast.minimumDeadZoneSeconds).toBe(1.2);
+    expect(podcast.marginSeconds).toBe(0.2);
+    // Which SourceTrack carries what is a property of the Recording, not of the kind of video.
+    expect(podcast.listenTo).toEqual([4]);
+    expect(podcast.contentSourceTracks).toEqual([2]);
+  });
+
+  test("the window can say which Preset the settings match, and that they match none", () => {
+    const session = newCutSession();
+    // The owner's own settings are the Gaming Preset, so a fresh session starts on it.
+    expect(presetNameOf(session)).toBe("Gaming");
+
+    expect(presetNameOf(setMarginSeconds(session, 0.42))).toBe(null);
+    expect(presetNameOf(applyPreset(session, PRESETS[2]!))).toBe(PRESETS[2]!.name);
   });
 });

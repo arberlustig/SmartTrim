@@ -152,6 +152,32 @@ describe("runCut", () => {
   }, 60_000);
 });
 
+describe("replanCut with ContentEvents", () => {
+  // The moments found on a Content SourceTrack survive a replan, and EventLead and EventTail take the place of the
+  // Margin around them (CONTEXT.md) — so moving those two sliders alone changes how much of a bang is kept.
+  test("a moment is kept with its EventLead and EventTail, without anyone speaking", () => {
+    const cut = {
+      recording: probed(600),
+      listened: [],
+      worthKeeping: [],
+      contentEvents: [{ startSeconds: 5, endSeconds: 5.4 }],
+      cutPlan: [],
+      summary: summariseCutPlan(probed(600), []),
+    };
+
+    const replanned = replanCut(cut, {
+      marginSeconds: 0,
+      minimumDeadZoneSeconds: 0.25,
+      eventLeadSeconds: 1,
+      eventTailSeconds: 1,
+    });
+
+    // 60 fps: the bang at 5 s with a second on each side is frame 240 to frame 384.
+    expect(replanned.cutPlan).toEqual([{ recordingIn: 240, recordingOut: 384, timelineStart: 0, timelineEnd: 144 }]);
+    expect(replanned.contentEvents).toEqual(cut.contentEvents);
+  });
+});
+
 describe("saveCutPlan", () => {
   let workDir: string;
   beforeAll(() => {

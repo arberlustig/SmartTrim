@@ -149,4 +149,65 @@ describe("analyseRecording", () => {
       "Nothing on SourceTrack 2 reaches -5 dBFS, so nothing would be kept. Lower the threshold or choose other SourceTracks.",
     );
   });
+
+  // A ContentEvent is what keeps an explosion in the edit even though nobody says anything while it happens. The
+  // Recording built above holds the burst on SourceTrack 1, in the pause between the two phrases.
+  describe("a Content SourceTrack", () => {
+    let burstRecording: string;
+
+    // SourceTrack 1: quiet pink noise with a 0.4 s tone at 5 s — a bang in an otherwise quiet game.
+    // SourceTrack 2: the synthesized voice, whose phrases leave that moment in a pause.
+    beforeAll(() => {
+      burstRecording = join(workDir, "burst-and-voice.mp4");
+      execFileSync(vendor("ffmpeg.exe"), [
+        ...["-v", "error"],
+        ...["-f", "lavfi", "-i", `testsrc2=size=320x240:rate=${FRAMES_PER_SECOND}`],
+        ...["-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.01:seed=11:sample_rate=48000:duration=12.065"],
+        ...["-f", "lavfi", "-i", "sine=frequency=200:sample_rate=48000:duration=0.4"],
+        ...["-f", "s16le", "-ar", "16000", "-ac", "1", "-i", speechFixture("synthetic-speech-16k.pcm")],
+        ...[
+          "-filter_complex",
+          [
+            "[2:a]adelay=5000|5000,apad,atrim=0:12.065[bang]",
+            "[1:a][bang]amix=inputs=2:normalize=0,aformat=channel_layouts=stereo[content]",
+            "[3:a]aresample=48000,aformat=channel_layouts=stereo[voice]",
+          ].join(";"),
+        ],
+        ...["-map", "0:v", "-map", "[content]", "-map", "[voice]", "-frames:v", "362"],
+        ...["-c:v", "mpeg4", "-c:a", "aac", "-b:a", "128k", burstRecording],
+      ]);
+    });
+
+    /** Whether any KeepSegment covers the moment of the bang. */
+    const bangKept = (cutPlan: readonly { recordingIn: number; recordingOut: number }[]) =>
+      cutPlan.some(
+        (segment) => segment.recordingIn / FRAMES_PER_SECOND <= 5.1 && segment.recordingOut / FRAMES_PER_SECOND >= 5.3,
+      );
+
+    test("keeps the moment of a bang that the voice alone would have removed", async () => {
+      const listening = {
+        recordingPath: burstRecording,
+        voiceSourceTracks: [1],
+        marginSeconds: 0.3,
+        minimumDeadZoneSeconds: 1.5,
+      };
+
+      // Nobody speaks during the bang, so listening to the voice alone removes it with the rest of the pause.
+      const withoutContent = await analyseRecording(listening, tools);
+      expect(bangKept(withoutContent.cutPlan)).toBe(false);
+
+      const withContent = await analyseRecording(
+        { ...listening, contentSourceTracks: [0], eventLeadSeconds: 1, eventTailSeconds: 1 },
+        tools,
+      );
+
+      expect(withContent.contentEvents.length).toBeGreaterThan(0);
+      expect(bangKept(withContent.cutPlan)).toBe(true);
+      // EventLead and EventTail take the place of the Margin around a ContentEvent (CONTEXT.md), so a second before
+      // the bang is kept as well.
+      expect(
+        withContent.cutPlan.some((segment) => segment.recordingIn / FRAMES_PER_SECOND <= 4.2),
+      ).toBe(true);
+    }, 120_000);
+  });
 });

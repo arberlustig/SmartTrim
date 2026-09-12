@@ -20,6 +20,9 @@ export interface SliderRange {
 export const THRESHOLD_DBFS: SliderRange = { min: -60, max: -20, step: 1 };
 export const MARGIN_SECONDS: SliderRange = { min: 0, max: 1, step: 0.01 };
 export const MINIMUM_DEAD_ZONE_SECONDS: SliderRange = { min: 0.1, max: 5, step: 0.05 };
+/** Kept before and after a ContentEvent, in place of the Margin. Five seconds of run-up is still an edit. */
+export const EVENT_LEAD_SECONDS: SliderRange = { min: 0, max: 5, step: 0.1 };
+export const EVENT_TAIL_SECONDS: SliderRange = { min: 0, max: 5, step: 0.1 };
 
 /** Keeps a slider value inside its range and off floating-point noise like 0.15000000000000002. */
 function clamp(value: number, range: SliderRange): number {
@@ -38,8 +41,10 @@ export interface CutSession {
   scan: readonly SourceTrackScan[] | null;
   /** Whether the SourceTracks the scan found nothing on are shown anyway. */
   emptySourceTracksShown: boolean;
-  /** The SourceTracks the user ticked, by position in the Recording, 0 being the first: they decide what is kept. */
+  /** The Voice SourceTracks by position in the Recording, 0 being the first: they decide what is kept. */
   listenTo: readonly number[];
+  /** The Content SourceTracks: their moments keep material alive, their steady level does not matter. */
+  contentSourceTracks: readonly number[];
   /**
    * The SourceTracks that end up in the Premiere sequence, by position. A freshly chosen Recording has every
    * SourceTrack in here that a scan found sound on, or all of them where no scan looked: what is cut by and what is
@@ -55,16 +60,49 @@ export interface CutSession {
   audioInMemory: boolean;
   thresholdDbfs: number;
   marginSeconds: number;
+  eventLeadSeconds: number;
+  eventTailSeconds: number;
   minimumDeadZoneSeconds: number;
 }
 
 /** The settings a finished cut belongs to, so the window can tell what a change costs. */
 interface PlannedWith {
   listenTo: readonly number[];
+  contentSourceTracks: readonly number[];
   thresholdDbfs: number;
   marginSeconds: number;
+  eventLeadSeconds: number;
+  eventTailSeconds: number;
   minimumDeadZoneSeconds: number;
 }
+
+/** A named set of thresholds for one kind of video (CONTEXT.md). The TrackRoles are not in it: which
+ * SourceTrack carries the microphone is a property of the Recording and its OBS setup, not of the kind of video.
+ */
+export interface Preset {
+  name: string;
+  thresholdDbfs: number;
+  marginSeconds: number;
+  eventLeadSeconds: number;
+  eventTailSeconds: number;
+  minimumDeadZoneSeconds: number;
+}
+
+/**
+ * Gaming holds what the owner arrived at by listening to the alternatives (ADR-0003), and is what a fresh session
+ * starts on. The other two are a starting point and nothing more: nobody has judged them by ear yet (ADR-0017).
+ */
+export const PRESETS: readonly Preset[] = [
+  // Talking over a game: cut close, because the owner speaks most of the time anyway.
+  { name: "Gaming", thresholdDbfs: -40, marginSeconds: 0.05, eventLeadSeconds: 1.5, eventTailSeconds: 2, minimumDeadZoneSeconds: 0.25 },
+  // Watching something and reacting: leave the reacted-to video room to breathe, and keep longer run-ups.
+  { name: "Reaction", thresholdDbfs: -45, marginSeconds: 0.15, eventLeadSeconds: 2, eventTailSeconds: 2.5, minimumDeadZoneSeconds: 0.8 },
+  // Two people talking: only the long pauses go, and there are no moments to keep.
+  { name: "Podcast", thresholdDbfs: -45, marginSeconds: 0.2, eventLeadSeconds: 0, eventTailSeconds: 0, minimumDeadZoneSeconds: 1.2 },
+];
+
+/** What a SourceTrack contributes to the cutting decision. Exactly one of these (CONTEXT.md). */
+export type TrackRole = "voice" | "content" | "ignored";
 
 /** What has to happen before the cut on screen matches the settings again. */
 export type Redo = "nothing" | "replan" | "redecide" | "analyse";
@@ -76,11 +114,16 @@ export function newCutSession(): CutSession {
     scan: null,
     emptySourceTracksShown: false,
     listenTo: [],
+    contentSourceTracks: [],
     exportSourceTracks: [],
     plannedWith: null,
     audioInMemory: false,
     thresholdDbfs: -40,
     marginSeconds: 0.05,
+    // Provisional, like the ContentEvent thresholds themselves: a second and a half of run-up and two seconds
+    // after are what a bang needs to read as one, and nobody has judged them by ear yet (ADR-0017).
+    eventLeadSeconds: 1.5,
+    eventTailSeconds: 2,
     minimumDeadZoneSeconds: 0.25,
   };
 }
@@ -100,6 +143,7 @@ export function chooseRecording(
     scan,
     emptySourceTracksShown: false,
     listenTo: [],
+    contentSourceTracks: [],
     // Another Recording means the cut on screen belongs to nothing that is still chosen.
     plannedWith: null,
     audioInMemory: false,
@@ -130,8 +174,21 @@ export function revealEmptySourceTracks(session: CutSession, shown: boolean): Cu
   return { ...session, emptySourceTracksShown: shown };
 }
 
-/** Ticks or unticks one SourceTrack by its position in the Recording. */
-export function toggleSourceTrack(session: CutSession, sourceTrackIndex: number): CutSession {
+/** What one SourceTrack contributes: nothing, the cutting decision, or its moments. */
+export function roleOf(session: CutSession, sourceTrackIndex: number): TrackRole {
+  if (session.listenTo.includes(sourceTrackIndex)) return "voice";
+  if (session.contentSourceTracks.includes(sourceTrackIndex)) return "content";
+  return "ignored";
+}
+
+/** Kept in the Recording's own order so the analysis reads the SourceTracks front to back. */
+const withPosition = (positions: readonly number[], position: number, wanted: boolean) =>
+  wanted
+    ? [...positions.filter((each) => each !== position), position].sort((left, right) => left - right)
+    : positions.filter((each) => each !== position);
+
+/** Gives one SourceTrack its TrackRole. A SourceTrack has exactly one, so the other roles let go of it. */
+export function setSourceTrackRole(session: CutSession, sourceTrackIndex: number, role: TrackRole): CutSession {
   // A position without a SourceTrack behind it would reach the decoder as an ffmpeg stream that does not exist.
   if (!session.recording) throw new Error("No Recording is chosen, so it has no SourceTracks to listen to.");
   const { sourceTracks } = session.recording;
@@ -140,12 +197,11 @@ export function toggleSourceTrack(session: CutSession, sourceTrackIndex: number)
       `SourceTrack ${sourceTrackIndex + 1} does not exist: the Recording has ${sourceTracks.length}.`,
     );
   }
-  const ticked = session.listenTo.includes(sourceTrackIndex);
-  const listenTo = ticked
-    ? session.listenTo.filter((index) => index !== sourceTrackIndex)
-    // Kept in the Recording's own order so the analysis reads the SourceTracks front to back.
-    : [...session.listenTo, sourceTrackIndex].sort((left, right) => left - right);
-  return { ...session, listenTo };
+  return {
+    ...session,
+    listenTo: withPosition(session.listenTo, sourceTrackIndex, role === "voice"),
+    contentSourceTracks: withPosition(session.contentSourceTracks, sourceTrackIndex, role === "content"),
+  };
 }
 
 /** Whether Schneiden can be pressed. */
@@ -163,6 +219,16 @@ export function setMarginSeconds(session: CutSession, marginSeconds: number): Cu
   return { ...session, marginSeconds: clamp(marginSeconds, MARGIN_SECONDS) };
 }
 
+/** Kept before a ContentEvent, in place of the Margin. */
+export function setEventLeadSeconds(session: CutSession, eventLeadSeconds: number): CutSession {
+  return { ...session, eventLeadSeconds: clamp(eventLeadSeconds, EVENT_LEAD_SECONDS) };
+}
+
+/** Kept after a ContentEvent, in place of the Margin. */
+export function setEventTailSeconds(session: CutSession, eventTailSeconds: number): CutSession {
+  return { ...session, eventTailSeconds: clamp(eventTailSeconds, EVENT_TAIL_SECONDS) };
+}
+
 /** How long a DeadZone must last, after the Margin, before it is removed (ADR-0007). */
 export function setMinimumDeadZoneSeconds(session: CutSession, minimumDeadZoneSeconds: number): CutSession {
   return { ...session, minimumDeadZoneSeconds: clamp(minimumDeadZoneSeconds, MINIMUM_DEAD_ZONE_SECONDS) };
@@ -175,8 +241,11 @@ export function analysisRequestFrom(session: CutSession): AnalysisRequest {
   return {
     recordingPath: session.recording.path,
     voiceSourceTracks: [...session.listenTo],
+    contentSourceTracks: [...session.contentSourceTracks],
     decideBy: { kind: "loudness", thresholdDbfs: session.thresholdDbfs },
     marginSeconds: session.marginSeconds,
+    eventLeadSeconds: session.eventLeadSeconds,
+    eventTailSeconds: session.eventTailSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
   };
 }
@@ -203,8 +272,11 @@ export function canExport(session: CutSession): boolean {
 function settingsNow(session: CutSession): PlannedWith {
   return {
     listenTo: [...session.listenTo],
+    contentSourceTracks: [...session.contentSourceTracks],
     thresholdDbfs: session.thresholdDbfs,
     marginSeconds: session.marginSeconds,
+    eventLeadSeconds: session.eventLeadSeconds,
+    eventTailSeconds: session.eventTailSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
   };
 }
@@ -233,12 +305,15 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
     scan: project.scan ?? null,
     emptySourceTracksShown: false,
     listenTo: [...project.listenTo],
+    contentSourceTracks: [...(project.contentSourceTracks ?? [])],
     exportSourceTracks: [...project.exportSourceTracks],
     // The window only offers the loudness decision (ADR-0003); a project saved with the voice decision keeps the
     // threshold slider where it was.
     thresholdDbfs:
       project.decideBy.kind === "loudness" ? project.decideBy.thresholdDbfs : session.thresholdDbfs,
     marginSeconds: project.marginSeconds,
+    eventLeadSeconds: project.eventLeadSeconds ?? session.eventLeadSeconds,
+    eventTailSeconds: project.eventTailSeconds ?? session.eventTailSeconds,
     minimumDeadZoneSeconds: project.minimumDeadZoneSeconds,
     plannedWith: null,
     audioInMemory: false,
@@ -248,7 +323,12 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
 
 /** The two settings a replan needs; the rest of a request decides what was found, not how it is planned. */
 export function planSettingsFrom(session: CutSession): PlanSettings {
-  return { marginSeconds: session.marginSeconds, minimumDeadZoneSeconds: session.minimumDeadZoneSeconds };
+  return {
+    marginSeconds: session.marginSeconds,
+    eventLeadSeconds: session.eventLeadSeconds,
+    eventTailSeconds: session.eventTailSeconds,
+    minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
+  };
 }
 
 /**
@@ -262,15 +342,18 @@ export function planSettingsFrom(session: CutSession): PlanSettings {
 export function redoNeeded(session: CutSession): Redo {
   const planned = session.plannedWith;
   if (!planned) return "analyse";
-  const sameSourceTracks =
-    planned.listenTo.length === session.listenTo.length &&
-    planned.listenTo.every((position, index) => position === session.listenTo[index]);
-  if (!sameSourceTracks) return "analyse";
+  const same = (was: readonly number[], is: readonly number[]) =>
+    was.length === is.length && was.every((position, index) => position === is[index]);
+  // Another SourceTrack is audio nobody has decoded yet, whichever role it was given.
+  if (!same(planned.listenTo, session.listenTo)) return "analyse";
+  if (!same(planned.contentSourceTracks, session.contentSourceTracks)) return "analyse";
   // Deciding again plans as well, so a threshold that moved together with a Margin is still one job — but only
   // while the audio it would be decided from is still in memory.
   if (planned.thresholdDbfs !== session.thresholdDbfs) return session.audioInMemory ? "redecide" : "analyse";
   if (
     planned.marginSeconds !== session.marginSeconds ||
+    planned.eventLeadSeconds !== session.eventLeadSeconds ||
+    planned.eventTailSeconds !== session.eventTailSeconds ||
     planned.minimumDeadZoneSeconds !== session.minimumDeadZoneSeconds
   ) {
     return "replan";
@@ -278,13 +361,41 @@ export function redoNeeded(session: CutSession): Redo {
   return "nothing";
 }
 
+/** Puts a Preset's thresholds on the sliders. What each SourceTrack contributes is left as it is. */
+export function applyPreset(session: CutSession, preset: Preset): CutSession {
+  return {
+    ...session,
+    thresholdDbfs: preset.thresholdDbfs,
+    marginSeconds: preset.marginSeconds,
+    eventLeadSeconds: preset.eventLeadSeconds,
+    eventTailSeconds: preset.eventTailSeconds,
+    minimumDeadZoneSeconds: preset.minimumDeadZoneSeconds,
+  };
+}
+
+/** The Preset whose thresholds are on the sliders, or null once the user has moved one of them. */
+export function presetNameOf(session: CutSession): string | null {
+  const match = PRESETS.find(
+    (preset) =>
+      preset.thresholdDbfs === session.thresholdDbfs &&
+      preset.marginSeconds === session.marginSeconds &&
+      preset.eventLeadSeconds === session.eventLeadSeconds &&
+      preset.eventTailSeconds === session.eventTailSeconds &&
+      preset.minimumDeadZoneSeconds === session.minimumDeadZoneSeconds,
+  );
+  return match?.name ?? null;
+}
+
 /** What a saved project records about the session: the choices behind the cut, and the export ticks. */
 export function savedChoicesFrom(session: CutSession): SavedChoices {
   const choices: SavedChoices = {
     voiceSourceTracks: [...session.listenTo],
+    contentSourceTracks: [...session.contentSourceTracks],
     exportSourceTracks: [...session.exportSourceTracks],
     decideBy: { kind: "loudness", thresholdDbfs: session.thresholdDbfs },
     marginSeconds: session.marginSeconds,
+    eventLeadSeconds: session.eventLeadSeconds,
+    eventTailSeconds: session.eventTailSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
   };
   return session.scan ? { ...choices, scan: session.scan } : choices;

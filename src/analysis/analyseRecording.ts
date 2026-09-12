@@ -1,6 +1,7 @@
 import { planCuts, type CutPlan, type TimeRange } from "../cutting/planCuts.ts";
 import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import { detectContentEvents } from "../level/detectContentEvents.ts";
 import { detectLoudness } from "../level/detectLoudness.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
 import { detectSpeech, type MonoPcm } from "../speech/detectSpeech.ts";
@@ -13,9 +14,18 @@ export interface AnalysisRequest {
   recordingPath: string;
   /** The Voice SourceTracks by position in the Recording, 0 being the first: they decide what is kept. */
   voiceSourceTracks: readonly number[];
+  /**
+   * The Content SourceTracks by position: they keep material alive through a ContentEvent — an explosion, a
+   * fanfare, an abrupt drop — without their steady level mattering (CONTEXT.md).
+   */
+  contentSourceTracks?: readonly number[];
   /** Defaults to the voice. */
   decideBy?: Decision;
   marginSeconds: number;
+  /** Kept before a ContentEvent, in place of the Margin. */
+  eventLeadSeconds?: number;
+  /** Kept after a ContentEvent, in place of the Margin. */
+  eventTailSeconds?: number;
   /** ADR-0007: measured after the Margin is kept. */
   minimumDeadZoneSeconds: number;
 }
@@ -36,9 +46,11 @@ export async function analyseRecording(
   tools: AnalysisTools,
 ): Promise<{
   recording: RecordingInfo;
-  /** The decoded SourceTracks, kept so another threshold can be tried without reading the Recording (ADR-0004). */
+  /** The decoded Voice SourceTracks, kept so another threshold can be tried without a new read (ADR-0004). */
   listened: readonly MonoPcm[];
   worthKeeping: readonly TimeRange[];
+  /** The moments found on the Content SourceTracks. */
+  contentEvents: readonly TimeRange[];
   cutPlan: CutPlan;
 }> {
   // Without a SourceTrack to listen to nothing could ever be kept, so the Recording is not even read.
@@ -46,7 +58,15 @@ export async function analyseRecording(
   const decideBy: Decision = request.decideBy ?? { kind: "voice" };
 
   const recording = await probeRecording(request.recordingPath, tools.ffprobe);
-  const listened = await decodeSourceTracks(recording, request.voiceSourceTracks, tools.ffmpeg);
+
+  // Voice and Content SourceTracks are decoded in one go: the Recording is read once, whatever it is listened to
+  // for (ADR-0004). A SourceTrack named twice is decoded once.
+  const content = request.contentSourceTracks ?? [];
+  const decoded = [...new Set([...request.voiceSourceTracks, ...content])];
+  const audio = await decodeSourceTracks(recording, decoded, tools.ffmpeg);
+  const audioOf = (position: number) => audio[decoded.indexOf(position)] as MonoPcm;
+
+  const listened = request.voiceSourceTracks.map(audioOf);
   const worthKeeping = (
     await Promise.all(
       listened.map((pcm) =>
@@ -56,17 +76,18 @@ export async function analyseRecording(
       ),
     )
   ).flat();
+  const contentEvents = content.flatMap((position) => detectContentEvents(audioOf(position)));
 
   const cutPlan = planCuts({
     recording,
     // planCuts calls these the speech; with a loudness threshold they are simply the stretches loud enough to keep.
     speech: worthKeeping,
-    // ContentEvents and LockedRanges do not exist yet.
-    contentEvents: [],
+    contentEvents,
+    // LockedRanges do not exist yet.
     lockedRanges: [],
     marginSeconds: request.marginSeconds,
-    eventLeadSeconds: 0,
-    eventTailSeconds: 0,
+    eventLeadSeconds: request.eventLeadSeconds ?? 0,
+    eventTailSeconds: request.eventTailSeconds ?? 0,
     minimumDeadZoneSeconds: request.minimumDeadZoneSeconds,
   });
 
@@ -80,5 +101,5 @@ export async function analyseRecording(
         : `Nothing on ${sourceTracks} reaches ${decideBy.thresholdDbfs} dBFS, so nothing would be kept. Lower the threshold or choose other SourceTracks.`,
     );
   }
-  return { recording, listened, worthKeeping, cutPlan };
+  return { recording, listened, worthKeeping, contentEvents, cutPlan };
 }

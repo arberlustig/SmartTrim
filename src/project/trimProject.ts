@@ -6,8 +6,11 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 /**
  * The format number of the file, raised whenever a field is added that an older SmartTrim would drop. A file from a
  * newer version is refused rather than half read: saving it again would throw away what this version cannot see.
+ *
+ * 1: the first format. 2: Content SourceTracks, their moments, EventLead and EventTail — all absent in a format 1
+ * file, which therefore opens as a session that has no Content SourceTracks.
  */
-const FORMAT = 1;
+const FORMAT = 2;
 
 /**
  * A saved session: the Recording as it was probed, what the user chose, and — the point of the whole file — the
@@ -21,6 +24,14 @@ export interface TrimProject {
   listenTo: readonly number[];
   /** The SourceTracks that go into the Premiere sequence (ADR-0014). */
   exportSourceTracks: readonly number[];
+  /** The Content SourceTracks, whose moments keep material alive; absent in a file from format 1. */
+  contentSourceTracks?: readonly number[];
+  /** The moments found on them, saved for the same reason as `worthKeeping`: so nothing has to be read again. */
+  contentEvents?: readonly TimeRange[];
+  /** Kept before a ContentEvent, in place of the Margin. */
+  eventLeadSeconds?: number;
+  /** Kept after a ContentEvent, in place of the Margin. */
+  eventTailSeconds?: number;
   /** What a scan found on the SourceTracks, when one had run (ADR-0013). */
   scan?: readonly SourceTrackScan[];
   decideBy: Decision;
@@ -81,13 +92,23 @@ export function readTrimProject(text: string): TrimProject {
     minimumDeadZoneSeconds: need(file, "minimumDeadZoneSeconds", isNumber),
     worthKeeping: need(file, "worthKeeping", isRangeArray),
   };
+  // Format 2 added these. A file from format 1 simply has no Content SourceTracks, which is what an absent field
+  // means here — not a broken file.
+  const withContent: TrimProject = {
+    ...project,
+    ...(isNumberArray(file["contentSourceTracks"]) ? { contentSourceTracks: file["contentSourceTracks"] as number[] } : {}),
+    ...(isRangeArray(file["contentEvents"]) ? { contentEvents: file["contentEvents"] as TimeRange[] } : {}),
+    ...(isNumber(file["eventLeadSeconds"]) ? { eventLeadSeconds: file["eventLeadSeconds"] as number } : {}),
+    ...(isNumber(file["eventTailSeconds"]) ? { eventTailSeconds: file["eventTailSeconds"] as number } : {}),
+  };
+
   const scan = file["scan"];
-  if (!Array.isArray(scan)) return project;
+  if (!Array.isArray(scan)) return withContent;
   // JSON has no -Infinity: a silent SourceTrack's peak goes out as null and has to come back as silence, or a
   // reopened project would read "peak 0 dBFS" off a track that holds nothing.
   const restored = scan.map((sourceTrack) => {
     const entry = sourceTrack as SourceTrackScan;
     return { ...entry, peakDbfs: isNumber(entry.peakDbfs) ? entry.peakDbfs : -Infinity };
   });
-  return { ...project, scan: restored };
+  return { ...withContent, scan: restored };
 }

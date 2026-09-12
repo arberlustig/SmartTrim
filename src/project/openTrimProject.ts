@@ -8,9 +8,12 @@ import { readTrimProject, trimProjectText, type TrimProject } from "./trimProjec
 /** What the user chose, as the window holds it, for a project about to be saved. */
 export interface SavedChoices {
   voiceSourceTracks: readonly number[];
+  contentSourceTracks?: readonly number[];
   exportSourceTracks: readonly number[];
   decideBy?: Decision;
   marginSeconds: number;
+  eventLeadSeconds?: number;
+  eventTailSeconds?: number;
   minimumDeadZoneSeconds: number;
   scan?: TrimProject["scan"];
 }
@@ -25,6 +28,16 @@ export function trimProjectOf(cut: CutResult, choices: SavedChoices): TrimProjec
     marginSeconds: choices.marginSeconds,
     minimumDeadZoneSeconds: choices.minimumDeadZoneSeconds,
     worthKeeping: cut.worthKeeping,
+    // Only worth writing down when there are Content SourceTracks: a file that names none stays a format 1 session
+    // in everything but its version number.
+    ...(choices.contentSourceTracks?.length
+      ? {
+          contentSourceTracks: [...choices.contentSourceTracks],
+          contentEvents: cut.contentEvents,
+          eventLeadSeconds: choices.eventLeadSeconds ?? 0,
+          eventTailSeconds: choices.eventTailSeconds ?? 0,
+        }
+      : {}),
   };
   const { scan } = choices;
   return scan ? { ...project, scan } : project;
@@ -73,8 +86,20 @@ export async function openTrimProject(
 
   const cut = replanCut(
     // The audio itself was not saved, so a new threshold would have to read the Recording again.
-    { recording, listened: [], worthKeeping: project.worthKeeping, cutPlan: [], summary: EMPTY_SUMMARY },
-    { marginSeconds: project.marginSeconds, minimumDeadZoneSeconds: project.minimumDeadZoneSeconds },
+    {
+      recording,
+      listened: [],
+      worthKeeping: project.worthKeeping,
+      contentEvents: project.contentEvents ?? [],
+      cutPlan: [],
+      summary: EMPTY_SUMMARY,
+    },
+    {
+      marginSeconds: project.marginSeconds,
+      eventLeadSeconds: project.eventLeadSeconds,
+      eventTailSeconds: project.eventTailSeconds,
+      minimumDeadZoneSeconds: project.minimumDeadZoneSeconds,
+    },
   );
   return { project, cut };
 }

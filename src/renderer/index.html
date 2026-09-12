@@ -89,7 +89,7 @@
       #sourceTracks .row,
       #sourceTracks .head {
         display: grid;
-        grid-template-columns: 78px 100px 88px 1fr;
+        grid-template-columns: 170px 100px 88px 1fr;
         gap: 10px;
         align-items: center;
         padding: 6px 8px;
@@ -114,6 +114,16 @@
       #sourceTracks .row span {
         color: var(--muted);
       }
+      #sourceTracks .row select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 4px 6px;
+        background: var(--ground);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
       button.link {
         margin-top: 8px;
         border: none;
@@ -127,6 +137,23 @@
         margin: 10px 0 0;
         color: var(--muted);
         font-size: 13px;
+      }
+      .preset {
+        display: grid;
+        grid-template-columns: 200px 1fr;
+        gap: 14px;
+        align-items: center;
+        padding: 0 0 14px;
+      }
+      .preset select {
+        max-width: 220px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 5px 7px;
+        background: var(--ground);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
       }
       .slider {
         display: grid;
@@ -203,6 +230,10 @@
 
     <section>
       <h2>Einstellungen</h2>
+      <div class="preset">
+        <label for="preset">Voreinstellung</label>
+        <select id="preset"></select>
+      </div>
       <div class="slider">
         <label for="threshold">Lautstärke ab<small>Leiseres gilt als Pause</small></label>
         <input id="threshold" type="range" />
@@ -217,6 +248,18 @@
         <label for="deadZone">Pausen entfernen ab<small>Kürzere Pausen bleiben drin</small></label>
         <input id="deadZone" type="range" />
         <output id="deadZoneValue"></output>
+      </div>
+      <div id="eventSliders" hidden>
+        <div class="slider">
+          <label for="eventLead">Vorlauf bei Momenten<small>Bleibt vor einem Knall stehen</small></label>
+          <input id="eventLead" type="range" />
+          <output id="eventLeadValue"></output>
+        </div>
+        <div class="slider">
+          <label for="eventTail">Nachlauf bei Momenten<small>Bleibt danach stehen</small></label>
+          <input id="eventTail" type="range" />
+          <output id="eventTailValue"></output>
+        </div>
       </div>
     </section>
 

@@ -46,13 +46,19 @@ export interface CutResult {
    * those two settings can be changed without reading the Recording again (ADR-0004).
    */
   worthKeeping: readonly TimeRange[];
+  /** The moments found on the Content SourceTracks, kept so a replan keeps them too. */
+  contentEvents: readonly TimeRange[];
   cutPlan: CutPlan;
   summary: CutSummary;
 }
 
-/** The two settings that only decide how the cuts are planned, not what counts as worth keeping. */
+/** The settings that only decide how the cuts are planned, not what counts as worth keeping. */
 export interface PlanSettings {
   marginSeconds: number;
+  /** Kept before a ContentEvent, in place of the Margin. */
+  eventLeadSeconds?: number;
+  /** Kept after a ContentEvent, in place of the Margin. */
+  eventTailSeconds?: number;
   /** ADR-0007: measured after the Margin is kept. */
   minimumDeadZoneSeconds: number;
 }
@@ -78,12 +84,12 @@ export function replanCut(cut: CutResult, settings: PlanSettings): CutResult {
   const cutPlan = planCuts({
     recording: cut.recording,
     speech: cut.worthKeeping,
-    // ContentEvents and LockedRanges do not exist yet.
-    contentEvents: [],
+    contentEvents: cut.contentEvents,
+    // LockedRanges do not exist yet.
     lockedRanges: [],
     marginSeconds: settings.marginSeconds,
-    eventLeadSeconds: 0,
-    eventTailSeconds: 0,
+    eventLeadSeconds: settings.eventLeadSeconds ?? 0,
+    eventTailSeconds: settings.eventTailSeconds ?? 0,
     minimumDeadZoneSeconds: settings.minimumDeadZoneSeconds,
   });
   return { ...cut, cutPlan, summary: summariseCutPlan(cut.recording, cutPlan) };
@@ -94,8 +100,15 @@ export function replanCut(cut: CutResult, settings: PlanSettings): CutResult {
  * is only read (ADR-0006), and nothing is written until the user picks a place to save.
  */
 export async function runCut(request: AnalysisRequest, tools: AnalysisTools): Promise<CutResult> {
-  const { recording, listened, worthKeeping, cutPlan } = await analyseRecording(request, tools);
-  return { recording, listened, worthKeeping, cutPlan, summary: summariseCutPlan(recording, cutPlan) };
+  const { recording, listened, worthKeeping, contentEvents, cutPlan } = await analyseRecording(request, tools);
+  return {
+    recording,
+    listened,
+    worthKeeping,
+    contentEvents,
+    cutPlan,
+    summary: summariseCutPlan(recording, cutPlan),
+  };
 }
 
 /**
