@@ -9,6 +9,32 @@ eine Vorschau der Waveform gezeigt". They had also asked whether the waveform co
 did, but with nothing on screen before a cut there was nothing to see it happen on. Both halves were the same
 request.
 
+## The reading starts when the Recording is chosen, not when a role is given
+
+The owner used it and asked for the wait to move earlier still: "kann man das Einlesen der ganzen Spuren schon im
+Vorneherein machen? Also sobald ich die Datei eingefügt habe?" So every SourceTrack the scan found sound on is read
+as soon as the scan finishes, while the user is still looking at the list. Giving a role afterwards costs nothing
+at all.
+
+**In the background, not behind a loading screen.** The owner chose this over a blocking screen: the window stays
+usable — ticks, sliders, Presets — and a line says `Liest den Ton der Tonspuren … 2 von 5 fertig`. A loading screen
+would take the app away for half a minute to do work that does not block any of it.
+
+SourceTracks the scan found nothing on are skipped: reading silence costs the same time and memory as reading
+sound. One that was misjudged as empty is still read on demand, the moment the user reveals it and gives it a role.
+
+Choosing another Recording while a read is running makes that read refuse rather than file its audio under the new
+Recording's positions.
+
+### Measured, because the owner was promised a number
+
+`bench/decode_speed.ts` on long-recording.mp4 (23.5 GB, 2.5 hours, six stereo SourceTracks) **from the slow external drive**:
+**26.7 s for all six**, against 23.7 s from the internal SSD. The drive is not the bottleneck — ffmpeg is, and the
+six run side by side. Each SourceTrack is 278 MB of PCM, so six are **1.7 GB held** for the session, with a peak
+near 4 GB while decoding.
+
+That peak is the real cost of reading everything up front, and it is why the empty SourceTracks are skipped.
+
 ## It costs nothing, because it is the same read
 
 Reading one SourceTrack of a 2.5-hour Recording takes about a minute (ADR-0011). That minute was already being

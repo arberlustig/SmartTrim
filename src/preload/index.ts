@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { SmartTrimApi, ToolsProgress } from "./api.ts";
+import type { ReadProgress, SmartTrimApi, ToolsProgress } from "./api.ts";
 
 // The window runs without Node (contextIsolation), so this is the whole surface it can reach.
 const api: SmartTrimApi = {
@@ -10,6 +10,9 @@ const api: SmartTrimApi = {
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
   scan: () => ipcRenderer.invoke("recording:scan"),
   readSourceTracks: (positions) => ipcRenderer.invoke("sourceTrack:read", positions),
+  onReadProgress: (listen) => {
+    ipcRenderer.on("sourceTrack:progress", (_event, progress: ReadProgress) => listen(progress));
+  },
   cut: (request) => ipcRenderer.invoke("cut:run", request),
   waveforms: () => ipcRenderer.invoke("cut:waveforms"),
   replan: (settings) => ipcRenderer.invoke("cut:replan", settings),

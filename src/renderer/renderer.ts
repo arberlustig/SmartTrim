@@ -720,24 +720,34 @@ function showWindow(next: ZoomWindow): void {
 
 /** True while a SourceTrack is being read, so two role changes in a row do not start two reads at once. */
 let reading = false;
+/** How far that read has got, for the line the window shows while it runs. */
+let readingCount = { done: 0, total: 0 };
+
+/** Says how far reading the SourceTracks has got, without taking the status line away from a refusal. */
+function drawReading(): void {
+  if (!reading || view.status.classList.contains("bad")) return;
+  const { done, total } = readingCount;
+  view.status.textContent =
+    total === 1
+      ? "Liest den Ton der Tonspur …"
+      : `Liest den Ton der Tonspuren … ${done} von ${total} fertig`;
+}
 
 /**
  * Reads whatever SourceTrack has a role and no waveform yet, and draws it (ADR-0020). This is the same read the
  * cut needs, only earlier: what it brings in is kept in the main process and the cut reuses it.
  */
-async function readWaveforms(): Promise<void> {
+async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
   const seconds = recordingSeconds();
   if (reading || !seconds) return;
-  const missing = sourceTracksToRead(
-    session,
-    waveforms.map((waveform) => waveform.position),
-  );
+  const have = waveforms.map((waveform) => waveform.position);
+  // What a role asks for, plus whatever is being read ahead of being asked for.
+  const missing = [...new Set([...sourceTracksToRead(session, have), ...ahead.filter((one) => !have.includes(one))])];
   if (missing.length === 0) return;
 
   reading = true;
-  const names = missing.map((position) => `Tonspur ${position + 1}`).join(" und ");
-  view.status.textContent = `Liest ${names} für die Wellenform …`;
-  view.status.classList.remove("bad");
+  readingCount = { done: 0, total: missing.length };
+  drawReading();
   const drawn = show(await window.smarttrim.readSourceTracks(missing), "Die Tonspur ließ sich nicht lesen");
   reading = false;
   if (drawn) {
@@ -751,7 +761,7 @@ async function readWaveforms(): Promise<void> {
   }
   draw();
   // A role changed while this was running leaves more to read.
-  await readWaveforms();
+  await readWaveforms(ahead);
 }
 
 /**
@@ -973,6 +983,14 @@ view.chooseRecording.addEventListener("click", async () => {
     clearStatus();
   }
   draw();
+  if (!scan) return;
+
+  // Every SourceTrack that carries sound is read now, while the user is still deciding what to do with them: it is
+  // the same read the cut needs, and choosing a role afterwards then costs nothing (ADR-0020). SourceTracks the
+  // scan found nothing on are left out — reading them would spend time and memory on silence.
+  await readWaveforms(
+    scan.flatMap((sourceTrack, position) => (sourceTrack.carriesSound ? [position] : [])),
+  );
 });
 
 view.openProject.addEventListener("click", async () => {
@@ -1024,6 +1042,11 @@ draw();
 
 // A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
 // and this is over before the window has finished drawing.
+window.smarttrim.onReadProgress((progress) => {
+  readingCount = progress;
+  drawReading();
+});
+
 window.smarttrim.onToolsProgress(({ name, percent }) => {
   view.status.textContent = `Lädt ${name} … ${percent} % (nur beim ersten Start)`;
 });

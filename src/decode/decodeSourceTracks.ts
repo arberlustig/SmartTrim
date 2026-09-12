@@ -14,8 +14,21 @@ export function decodeSourceTracks(
   recording: RecordingInfo,
   sourceTrackIndexes: readonly number[],
   ffmpegPath: string,
+  /**
+   * Called as each SourceTrack finishes, so the window can say how far it has got. They are decoded side by side
+   * and finish in no particular order, which is why this reports a count rather than a position.
+   */
+  onDecoded?: (done: number, total: number) => void,
 ): Promise<MonoPcm[]> {
-  return Promise.all(sourceTrackIndexes.map((index) => decodeSourceTrack(recording.path, index, ffmpegPath)));
+  let done = 0;
+  return Promise.all(
+    sourceTrackIndexes.map(async (index) => {
+      const pcm = await decodeSourceTrack(recording.path, index, ffmpegPath);
+      done += 1;
+      onDecoded?.(done, sourceTrackIndexes.length);
+      return pcm;
+    }),
+  );
 }
 
 function decodeSourceTrack(path: string, sourceTrackIndex: number, ffmpegPath: string): Promise<MonoPcm> {

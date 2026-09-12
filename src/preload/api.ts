@@ -12,6 +12,12 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
  */
 export type Answer<Value> = { ok: true; value: Value } | { ok: false; message: string };
 
+/** How far reading the SourceTracks of a Recording has got. */
+export interface ReadProgress {
+  done: number;
+  total: number;
+}
+
 /** How far the first-run download has got. */
 export interface ToolsProgress {
   name: string;
@@ -35,6 +41,8 @@ export interface SmartTrimApi {
    * for the rest of the Recording, so the cut below does not read it a second time (ADR-0020).
    */
   readSourceTracks(positions: readonly number[]): Promise<Answer<SourceTrackWaveform[]>>;
+  /** Called as each SourceTrack finishes being read, so the window can say how far it has got. */
+  onReadProgress(listen: (progress: ReadProgress) => void): void;
   /** Analyses the Recording and plans the cuts. The plan stays in the main process until it is saved. */
   cut(request: AnalysisRequest): Promise<Answer<CutSummary>>;
   /**

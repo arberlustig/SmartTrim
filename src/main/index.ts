@@ -149,9 +149,19 @@ function registerHandlers(window: BrowserWindow): void {
     "sourceTrack:read",
     answering(async (positions: readonly number[]): Promise<SourceTrackWaveform[]> => {
       if (!chosen) throw new Error("No Recording is chosen, so there is no SourceTrack to read.");
+      const readingFor = chosen;
       const missing = positions.filter((position) => !readAudio.has(position));
       if (missing.length > 0) {
-        const audio = await decodeSourceTracks(chosen, missing, (await analysisTools(window)).ffmpeg);
+        const audio = await decodeSourceTracks(
+          readingFor,
+          missing,
+          (await analysisTools(window)).ffmpeg,
+          (done, total) => {
+            if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
+          },
+        );
+        // The user may have chosen another Recording while this ran; that audio belongs to the old one.
+        if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
         missing.forEach((position, index) => readAudio.set(position, audio[index] as MonoPcm));
       }
       return waveformsOf(positions.map((position) => ({ position, pcm: readAudio.get(position) as MonoPcm })));
