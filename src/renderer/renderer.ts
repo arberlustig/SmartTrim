@@ -4,12 +4,14 @@ import {
   THRESHOLD_DBFS,
   analysisRequestFrom,
   canCut,
+  canExport,
   chooseRecording,
   newCutSession,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   revealEmptySourceTracks,
   setThresholdDbfs,
+  toggleExportSourceTrack,
   toggleSourceTrack,
   visibleSourceTracks,
   type CutSession,
@@ -117,33 +119,66 @@ function drawSourceTracks(): void {
     return;
   }
   const visible = visibleSourceTracks(session);
+
+  const head = document.createElement("div");
+  head.className = "head";
+  for (const caption of ["schneiden", "nach Premiere", ""]) {
+    const cell = document.createElement("span");
+    cell.textContent = caption;
+    head.append(cell);
+  }
+  view.sourceTracks.append(head);
+
   recording.sourceTracks.forEach((sourceTrack, index) => {
     if (!visible.includes(index)) return;
-    const label = document.createElement("label");
-    const tick = document.createElement("input");
-    tick.type = "checkbox";
-    tick.checked = session.listenTo.includes(index);
-    tick.disabled = working;
-    tick.addEventListener("change", () => {
-      session = toggleSourceTrack(session, index);
-      staleNow();
-      draw();
-    });
+    const row = document.createElement("div");
+    row.className = "row";
+
+    /** One of the two ticks of a row. Only the cutting one makes a finished cut stale. */
+    const box = (checked: boolean, title: string, change: () => void) => {
+      const holder = document.createElement("label");
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = checked;
+      tick.disabled = working;
+      tick.title = title;
+      tick.addEventListener("change", () => {
+        change();
+        draw();
+      });
+      holder.append(tick);
+      return holder;
+    };
+
     const text = document.createElement("div");
     text.textContent = `Tonspur ${index + 1}`;
     const detail = document.createElement("span");
     detail.textContent =
       `${channels(sourceTrack.channelCount)} · ${sourceTrack.sampleRate / 1000} kHz` +
       soundHint(session.scan?.[index]);
-    label.append(tick, text, detail);
-    view.sourceTracks.append(label);
+
+    row.append(
+      box(session.listenTo.includes(index), `Nach Tonspur ${index + 1} schneiden`, () => {
+        session = toggleSourceTrack(session, index);
+        staleNow();
+      }),
+      // Changing this changes the file, not the cut, so a finished cut stays on screen.
+      box(session.exportSourceTracks.includes(index), `Tonspur ${index + 1} nach Premiere übernehmen`, () => {
+        session = toggleExportSourceTrack(session, index);
+      }),
+      text,
+      detail,
+    );
+    view.sourceTracks.append(row);
   });
   view.sourceTracksHint.replaceChildren();
   const hint = document.createElement("span");
   hint.textContent =
     session.listenTo.length === 0
-      ? "Kreuze die Spur an, auf der du sprichst. Nach ihr wird geschnitten."
-      : "Alles, was auf den angekreuzten Spuren laut genug ist, bleibt erhalten.";
+      ? "Links ankreuzen, wo du sprichst — danach wird geschnitten. Rechts, was in Premiere landen soll."
+      : canExport(session)
+        ? "Alles, was auf den links angekreuzten Spuren laut genug ist, bleibt erhalten."
+        : "Kreuze rechts mindestens eine Spur an, sonst hat das Premiere-Projekt keinen Ton.";
   view.sourceTracksHint.append(hint);
 
   // A scan only listens to slices, so a hidden SourceTrack has to stay reachable.
@@ -189,10 +224,12 @@ function drawResult(): void {
   const save = document.createElement("button");
   save.className = "primary";
   save.textContent = "Premiere-Datei speichern …";
+  // Without a SourceTrack to export the file would hold a sequence with no audio at all.
+  save.disabled = !canExport(session);
   save.addEventListener("click", async () => {
     save.disabled = true;
     clearStatus();
-    const saved = show(await window.smarttrim.save(), "Speichern ging nicht");
+    const saved = show(await window.smarttrim.save(session.exportSourceTracks), "Speichern ging nicht");
     save.disabled = false;
     // undefined is a refusal, already on screen; null means the user closed the dialog.
     if (saved === undefined || saved === null) return;

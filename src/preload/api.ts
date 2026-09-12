@@ -17,8 +17,11 @@ export interface SmartTrimApi {
   scan(): Promise<Answer<SourceTrackScan[]>>;
   /** Analyses the Recording and plans the cuts. The plan stays in the main process until it is saved. */
   cut(request: AnalysisRequest): Promise<Answer<CutSummary>>;
-  /** Opens the save dialog and writes the Premiere file. Returns where it landed. */
-  save(): Promise<Answer<string | null>>;
+  /**
+   * Opens the save dialog and writes the Premiere file, with TimelineTracks for the named SourceTracks only.
+   * Returns where it landed.
+   */
+  save(exportSourceTracks: readonly number[]): Promise<Answer<string | null>>;
   /** Shows a saved file in Explorer. */
   reveal(path: string): Promise<Answer<null>>;
 }

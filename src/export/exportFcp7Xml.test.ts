@@ -472,4 +472,64 @@ describe("exportFcp7Xml", () => {
       "KeepSegment 7 starts at frame 1828, after SourceTrack 1 ends at frame 1800",
     );
   });
+
+  // The owner cuts by the microphone but does not want the same mixdown three times in Premiere. A SourceTrack left
+  // out of the export must take its TimelineTracks with it — and the ones that stay must keep the Channels they have
+  // in the Recording, or Premiere plays the wrong SourceTrack's audio. Only a real import can confirm this.
+  test("only the chosen SourceTracks become TimelineTracks, and each keeps its Channels' own numbers", () => {
+    const exported = parseXml(exportFcp7Xml(multitrackRecording, multitrackCutPlan, [0, 4]));
+
+    const audio = tracksWithClips(exported, "audio");
+    expect(audio).toHaveLength(4);
+    // SourceTrack 1 owns Channels 1 and 2, SourceTrack 5 owns Channels 9 and 10 — counted in the Recording, not in
+    // the sequence, so leaving SourceTracks out does not renumber the Channels of the ones that stay.
+    expect(
+      audio.map((track) => children(track, "clipitem").map((clip) => text(clip, "sourcetrack/trackindex"))),
+    ).toEqual([
+      ["1", "1"],
+      ["2", "2"],
+      ["9", "9"],
+      ["10", "10"],
+    ]);
+    // Links point at TimelineTracks of the sequence, of which there are now four.
+    expect(
+      children(children(audio[0] as Element, "clipitem")[0] as Element, "link").map((link) => ({
+        mediatype: text(link, "mediatype"),
+        trackindex: text(link, "trackindex"),
+      })),
+    ).toEqual([
+      { mediatype: "video", trackindex: "1" },
+      { mediatype: "audio", trackindex: "1" },
+      { mediatype: "audio", trackindex: "2" },
+      { mediatype: "audio", trackindex: "3" },
+      { mediatype: "audio", trackindex: "4" },
+    ]);
+    // The file still describes the whole Recording: that is where Premiere reads which Channels the file holds.
+    const file = children(child(exported, "sequence/media/video/track/clipitem"), "file")[0] as Element;
+    expect(children(child(file, "media"), "audio")).toHaveLength(6);
+  });
+
+  // A sequence with no audio at all looks like a finished edit whose sound was lost on the way.
+  test("exporting no SourceTrack at all is refused, and so is one the Recording does not have", () => {
+    expect(() => exportFcp7Xml(multitrackRecording, multitrackCutPlan, [])).toThrow(
+      "Choose at least one SourceTrack to export.",
+    );
+    expect(() => exportFcp7Xml(multitrackRecording, multitrackCutPlan, [0, 6])).toThrow(
+      "SourceTrack 7 cannot be exported: the Recording has 6.",
+    );
+  });
+
+  // Refusing the whole Recording over a SourceTrack nobody asked for would make a mono placeholder track — which OBS
+  // writes without being asked — enough to stop the export.
+  test("a SourceTrack that is not stereo blocks the export only when it is being exported", () => {
+    const withMono: RecordingInfo = {
+      ...multitrackRecording,
+      sourceTracks: multitrackRecording.sourceTracks.map((sourceTrack, index) =>
+        index === 1 ? { ...sourceTrack, channelCount: 1 } : sourceTrack,
+      ),
+    };
+
+    expect(() => exportFcp7Xml(withMono, multitrackCutPlan, [0, 2])).not.toThrow();
+    expect(() => exportFcp7Xml(withMono, multitrackCutPlan, [0, 1])).toThrow("SourceTrack 2 has 1 channel(s)");
+  });
 });

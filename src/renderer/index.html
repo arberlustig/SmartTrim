@@ -86,18 +86,32 @@
         display: grid;
         gap: 2px;
       }
-      #sourceTracks label {
-        display: flex;
+      #sourceTracks .row,
+      #sourceTracks .head {
+        display: grid;
+        grid-template-columns: 78px 100px 88px 1fr;
         gap: 10px;
         align-items: center;
         padding: 6px 8px;
         border-radius: 6px;
-        cursor: pointer;
       }
-      #sourceTracks label:hover {
+      #sourceTracks .head {
+        padding-bottom: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      #sourceTracks .row:hover {
         background: var(--raised);
       }
-      #sourceTracks span {
+      #sourceTracks .row label {
+        cursor: pointer;
+      }
+      #sourceTracks .row input {
+        cursor: pointer;
+      }
+      #sourceTracks .row span {
         color: var(--muted);
       }
       button.link {

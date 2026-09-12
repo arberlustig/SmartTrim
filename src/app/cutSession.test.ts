@@ -6,10 +6,12 @@ import {
   canCut,
   chooseRecording,
   newCutSession,
+  canExport,
   revealEmptySourceTracks,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   setThresholdDbfs,
+  toggleExportSourceTrack,
   toggleSourceTrack,
   visibleSourceTracks,
 } from "./cutSession";
@@ -158,5 +160,33 @@ describe("cutSession", () => {
     expect(analysisRequestFrom(listening).voiceSourceTracks).toEqual([1]);
     // Hiding them again leaves the tick alone: it is the user's choice, not the scan's.
     expect(revealEmptySourceTracks(listening, false).listenTo).toEqual([1]);
+  });
+
+  // Which SourceTracks are cut by and which end up in Premiere are two different questions. Everything is exported
+  // until the user says otherwise, so nobody loses the game audio by ticking only the microphone (ADR-0014).
+  test("every SourceTrack is exported to begin with, and unticking them one by one is allowed until none is left", () => {
+    const session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    expect(session.exportSourceTracks).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(canExport(session)).toBe(true);
+
+    // The owner's Recordings hold the same mixdown three times; dropping two of them is the point of this.
+    const fewer = toggleExportSourceTrack(toggleExportSourceTrack(session, 0), 5);
+    expect(fewer.exportSourceTracks).toEqual([1, 2, 3, 4]);
+    expect(toggleExportSourceTrack(fewer, 0).exportSourceTracks).toEqual([0, 1, 2, 3, 4]);
+
+    const none = [1, 2, 3, 4].reduce(toggleExportSourceTrack, fewer);
+    expect(none.exportSourceTracks).toEqual([]);
+    // A Premiere sequence without any audio looks like an edit whose sound was lost.
+    expect(canExport(none)).toBe(false);
+  });
+
+  // The export choice changes the file, never the cut, so a finished cut stays valid while it is changed.
+  test("what is exported has no say in what is cut", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    session = toggleSourceTrack(session, 4);
+
+    const request = analysisRequestFrom(toggleExportSourceTrack(session, 4));
+
+    expect(request.voiceSourceTracks).toEqual([4]);
   });
 });

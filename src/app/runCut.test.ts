@@ -159,4 +159,22 @@ describe("saveCutPlan", () => {
 
     expect(existsSync(destination)).toBe(false);
   });
+
+  // The owner cuts by the microphone but does not want the same mixdown three times in the sequence (ADR-0014).
+  test("only the chosen SourceTracks reach the Premiere file, keeping their own Channel numbers", async () => {
+    const destination = join(workDir, "two-tracks.xml");
+    const stereo = { channelCount: 2, sampleRate: 48000, bitDepth: 16, durationFrames: 600 };
+    const recording = { ...probed(600), sourceTracks: [stereo, stereo] };
+
+    await saveCutPlan(destination, recording, [{ recordingIn: 0, recordingOut: 60, timelineStart: 0, timelineEnd: 60 }], [1]);
+
+    const xml = new DOMParser().parseFromString(readFileSync(destination, "utf8"), "text/xml");
+    const sourceTrackRefs = Array.from(xml.getElementsByTagName("sourcetrack"));
+    // One clip per exported TimelineTrack: SourceTrack 2 alone, exploded into its two Channels.
+    expect(sourceTrackRefs).toHaveLength(2);
+    // SourceTrack 2 owns Channels 3 and 4 of the Recording, whether or not SourceTrack 1 is exported.
+    expect(
+      sourceTrackRefs.map((reference) => reference.getElementsByTagName("trackindex")[0]?.textContent),
+    ).toEqual(["3", "4"]);
+  });
 });

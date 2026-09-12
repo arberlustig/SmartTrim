@@ -84,6 +84,11 @@ A named set of TrackRoles and thresholds suited to a kind of video, such as Gami
 The ordered KeepSegments produced by analysing a Recording — the complete description of what the finished edit contains.
 _Avoid_: cutlist, EDL, timeline, edit list
 
+**ExportedSourceTrack**:
+A SourceTrack the user kept in the Premiere sequence. Which SourceTracks are exported is a separate choice from which
+ones the cut is decided by, and every SourceTrack starts exported (ADR-0014).
+_Avoid_: selected track, output track
+
 **TimelineTrack**:
 One audio track in the exported Premiere sequence. Premiere explodes every stereo SourceTrack into two TimelineTracks, one per Channel.
 _Avoid_: track, output track

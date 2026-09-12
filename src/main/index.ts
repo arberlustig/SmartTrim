@@ -90,7 +90,7 @@ function registerHandlers(window: BrowserWindow): void {
 
   ipcMain.handle(
     "cut:save",
-    answering(async (): Promise<string | null> => {
+    answering(async (exportSourceTracks: readonly number[]): Promise<string | null> => {
       // Saving a plan that is no longer the one on screen would hand the user a file for settings they changed.
       if (!lastCut) throw new Error("There is no finished cut to save. Press Schneiden first.");
       const { recording, cutPlan } = lastCut;
@@ -100,7 +100,7 @@ function registerHandlers(window: BrowserWindow): void {
         filters: [{ name: "Premiere-Projekt (FCP7 XML)", extensions: ["xml"] }],
       });
       if (canceled || !filePath) return null;
-      await saveCutPlan(filePath, recording, cutPlan);
+      await saveCutPlan(filePath, recording, cutPlan, exportSourceTracks);
       return filePath;
     }),
   );

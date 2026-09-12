@@ -53,8 +53,18 @@ function toPathUrl(path: string): string {
   return `file://localhost/${segments.join("/")}`;
 }
 
-/** Renders a CutPlan as FCP7 XML (xmeml version 4) that references the Recording itself (ADR-0006). */
-export function exportFcp7Xml(recording: RecordingInfo, cutPlan: CutPlan): string {
+/**
+ * Renders a CutPlan as FCP7 XML (xmeml version 4) that references the Recording itself (ADR-0006).
+ *
+ * `exportSourceTracks` names the SourceTracks the sequence gets TimelineTracks for, by position in the Recording;
+ * by default every one of them, so a SourceTrack is only ever left out because the user said so. The Channel
+ * numbers of the SourceTracks that stay do not change (ADR-0014).
+ */
+export function exportFcp7Xml(
+  recording: RecordingInfo,
+  cutPlan: CutPlan,
+  exportSourceTracks?: readonly number[],
+): string {
   const parsedPath = win32.parse(recording.path);
   const name = escapeXml(parsedPath.name);
   const fileName = escapeXml(parsedPath.base);
@@ -65,29 +75,52 @@ export function exportFcp7Xml(recording: RecordingInfo, cutPlan: CutPlan): strin
   const duration = cutPlan.at(-1)?.timelineEnd ?? 0;
   const firstSourceTrack = recording.sourceTracks[0];
   if (!firstSourceTrack) throw new Error("A Recording without audio SourceTracks cannot be exported.");
-  // Both fixtures are stereo only. The owner chose to refuse other channel layouts until a real Premiere export
-  // shows how they look, rather than guess — a guess is exactly how the predecessor imported everything as mono.
-  recording.sourceTracks.forEach((sourceTrack, index) => {
-    if (sourceTrack.channelCount !== 2) {
+
+  // The positions to export, in the Recording's own order and without repeats, so the TimelineTracks come out in the
+  // order the user sees them.
+  const positions = [...new Set(exportSourceTracks ?? recording.sourceTracks.map((_sourceTrack, index) => index))]
+    .sort((left, right) => left - right);
+  for (const position of positions) {
+    if (position < 0 || position >= recording.sourceTracks.length) {
       throw new Error(
-        `SourceTrack ${index + 1} has ${sourceTrack.channelCount} channel(s); only stereo SourceTracks can be exported so far.`,
+        `SourceTrack ${position + 1} cannot be exported: the Recording has ${recording.sourceTracks.length}.`,
       );
     }
-  });
+  }
+  // A sequence with no audio at all looks like a finished edit whose sound was lost.
+  if (positions.length === 0) throw new Error("Choose at least one SourceTrack to export.");
+
+  /** The exported SourceTracks with the position each one has in the Recording. */
+  const exported = positions.map((position) => ({
+    position,
+    sourceTrack: recording.sourceTracks[position] as SourceTrackInfo,
+  }));
+
+  // Both fixtures are stereo only. The owner chose to refuse other channel layouts until a real Premiere export
+  // shows how they look, rather than guess — a guess is exactly how the predecessor imported everything as mono.
+  // A SourceTrack nobody exports is never written, so its layout does not matter.
+  for (const { position, sourceTrack } of exported) {
+    if (sourceTrack.channelCount !== 2) {
+      throw new Error(
+        `SourceTrack ${position + 1} has ${sourceTrack.channelCount} channel(s); only stereo SourceTracks can be exported so far.`,
+      );
+    }
+  }
   // A SourceTrack can end a few frames before the video. No fixture shows what Premiere does with a KeepSegment lying
   // entirely past that end, and writing one anyway would produce an audio clip of negative length.
-  recording.sourceTracks.forEach((sourceTrack, sourceIndex) => {
+  for (const { position, sourceTrack } of exported) {
     cutPlan.forEach((segment, segmentIndex) => {
       if (segment.recordingIn >= sourceTrack.durationFrames) {
         throw new Error(
-          `KeepSegment ${segmentIndex + 1} starts at frame ${segment.recordingIn}, after SourceTrack ${sourceIndex + 1} ends at frame ${sourceTrack.durationFrames}.`,
+          `KeepSegment ${segmentIndex + 1} starts at frame ${segment.recordingIn}, after SourceTrack ${position + 1} ends at frame ${sourceTrack.durationFrames}.`,
         );
       }
     });
-  });
+  }
 
   // Clips are numbered the way Premiere numbers them: the video TimelineTrack first, then each audio TimelineTrack.
-  const audioTimelineTrackCount = recording.sourceTracks.length * 2;
+  // These are the sequence's own TimelineTracks, so only the exported SourceTracks count.
+  const audioTimelineTrackCount = exported.length * 2;
   const clipId = (timelineTrackOffset: number, segmentIndex: number) =>
     `clipitem-${timelineTrackOffset * cutPlan.length + segmentIndex + 1}`;
 
@@ -183,7 +216,8 @@ export function exportFcp7Xml(recording: RecordingInfo, cutPlan: CutPlan): strin
     )
     .join("");
 
-  // <sourcetrack><trackindex> is a Channel number counted across all SourceTracks: 1, 2 | 3, 4 | …
+  // <sourcetrack><trackindex> is a Channel number counted across all SourceTracks of the Recording: 1, 2 | 3, 4 | …
+  // It says which Channel of the file to play, so it counts SourceTracks that are not exported as well (ADR-0014).
   // Premiere's own multi-track export writes the SourceTrack's number instead (1, 1, 2, 2, …), and a real import
   // proved Premiere misreads that: stereo spread over two TimelineTracks and louder on the left (ADR-0008).
   // Every SourceTrack is stereo by now, so each SourceTrack before this one accounts for two Channels.
@@ -220,11 +254,11 @@ export function exportFcp7Xml(recording: RecordingInfo, cutPlan: CutPlan): strin
       .join("");
 
   // ADR-0002: Premiere explodes every stereo SourceTrack into two TimelineTracks, one per Channel.
-  const audioTimelineTracks = recording.sourceTracks
-    .flatMap((sourceTrack, index) =>
+  const audioTimelineTracks = exported
+    .flatMap(({ position, sourceTrack }, order) =>
       [1, 2].map(
         (channel) => `
-				<track premiereTrackType="Stereo" currentExplodedTrackIndex="${channel - 1}" totalExplodedTrackCount="2">${audioClips(index * 2 + channel, sourceTrack, sourceTrackReference(index, channel))}
+				<track premiereTrackType="Stereo" currentExplodedTrackIndex="${channel - 1}" totalExplodedTrackCount="2">${audioClips(order * 2 + channel, sourceTrack, sourceTrackReference(position, channel))}
 					<enabled>TRUE</enabled>
 					<locked>FALSE</locked>
 					<outputchannelindex>${channel}</outputchannelindex>

@@ -35,8 +35,13 @@ export interface CutSession {
   scan: readonly SourceTrackScan[] | null;
   /** Whether the SourceTracks the scan found nothing on are shown anyway. */
   emptySourceTracksShown: boolean;
-  /** The SourceTracks the user ticked, by position in the Recording, 0 being the first. */
+  /** The SourceTracks the user ticked, by position in the Recording, 0 being the first: they decide what is kept. */
   listenTo: readonly number[];
+  /**
+   * The SourceTracks that end up in the Premiere sequence, by position. Every SourceTrack of a freshly chosen
+   * Recording is in here: what is cut by and what is exported are two different choices (ADR-0014).
+   */
+  exportSourceTracks: readonly number[];
   thresholdDbfs: number;
   marginSeconds: number;
   minimumDeadZoneSeconds: number;
@@ -49,6 +54,7 @@ export function newCutSession(): CutSession {
     scan: null,
     emptySourceTracksShown: false,
     listenTo: [],
+    exportSourceTracks: [],
     thresholdDbfs: -40,
     marginSeconds: 0.05,
     minimumDeadZoneSeconds: 0.25,
@@ -64,7 +70,16 @@ export function chooseRecording(
   recording: RecordingInfo,
   scan: readonly SourceTrackScan[] | null = null,
 ): CutSession {
-  return { ...session, recording, scan, emptySourceTracksShown: false, listenTo: [] };
+  return {
+    ...session,
+    recording,
+    scan,
+    emptySourceTracksShown: false,
+    listenTo: [],
+    // Everything is exported until the user says otherwise: an EmptyTrack misjudged by the scan then still keeps
+    // its audio in Premiere (ADR-0013).
+    exportSourceTracks: recording.sourceTracks.map((_sourceTrack, position) => position),
+  };
 }
 
 /**
@@ -135,4 +150,22 @@ export function analysisRequestFrom(session: CutSession): AnalysisRequest {
     marginSeconds: session.marginSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
   };
+}
+
+/** Takes one SourceTrack out of the Premiere sequence, or puts it back. It has no say in what is cut. */
+export function toggleExportSourceTrack(session: CutSession, sourceTrackIndex: number): CutSession {
+  if (!session.recording) throw new Error("No Recording is chosen, so it has no SourceTracks to export.");
+  const { sourceTracks } = session.recording;
+  if (sourceTrackIndex < 0 || sourceTrackIndex >= sourceTracks.length) {
+    throw new Error(`SourceTrack ${sourceTrackIndex + 1} does not exist: the Recording has ${sourceTracks.length}.`);
+  }
+  const exportSourceTracks = session.exportSourceTracks.includes(sourceTrackIndex)
+    ? session.exportSourceTracks.filter((position) => position !== sourceTrackIndex)
+    : [...session.exportSourceTracks, sourceTrackIndex].sort((left, right) => left - right);
+  return { ...session, exportSourceTracks };
+}
+
+/** Whether the Premiere file can be written: a sequence without any audio looks like an edit that lost its sound. */
+export function canExport(session: CutSession): boolean {
+  return session.exportSourceTracks.length > 0;
 }

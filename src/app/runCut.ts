@@ -47,10 +47,18 @@ export async function runCut(request: AnalysisRequest, tools: AnalysisTools): Pr
   return { recording, cutPlan, summary: summariseCutPlan(recording, cutPlan) };
 }
 
-/** Writes the CutPlan where the user chose, as the FCP7 XML Premiere imports (ADR-0002). */
-export async function saveCutPlan(destinationPath: string, recording: RecordingInfo, cutPlan: CutPlan): Promise<void> {
+/**
+ * Writes the CutPlan where the user chose, as the FCP7 XML Premiere imports (ADR-0002).
+ * `exportSourceTracks` names the SourceTracks the sequence gets TimelineTracks for; by default every one of them.
+ */
+export async function saveCutPlan(
+  destinationPath: string,
+  recording: RecordingInfo,
+  cutPlan: CutPlan,
+  exportSourceTracks?: readonly number[],
+): Promise<void> {
   // The whole file is rendered before the write starts, so a refused destination leaves nothing behind at all.
-  const xml = exportFcp7Xml(recording, cutPlan);
+  const xml = exportFcp7Xml(recording, cutPlan, exportSourceTracks);
   try {
     await writeFile(destinationPath, xml, "utf8");
   } catch (error) {

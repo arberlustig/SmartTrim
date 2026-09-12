@@ -19,6 +19,8 @@ Architecture decisions live in [docs/adr/](./docs/adr/). Read the relevant one b
 
 `fixtures/premiere/` holds two real exports from Premiere — ground truth for what Premiere *writes*, not for what it *reads*. Test generated XML against them. The multi-track fixture encodes the rule that matters: each stereo SourceTrack becomes **two** TimelineTracks, differing `currentExplodedTrackIndex` (0 and 1). But `sourcetrack/trackindex` must count Channels across all SourceTracks (1, 2 | 3, 4 | …), not repeat the SourceTrack number the way Premiere's own export does: that export re-imports spread over two TimelineTracks and louder on the left. A real import proved it — see ADR-0008. Where a fixture and a real import disagree, the import wins. Premiere also needs `explodedTracks`, `premiereTrackType`, `premiereChannelType`, `masterclipid` and `groupindex` on links.
 
+Exporting only some SourceTracks is the one case no fixture and no import covers: the Channel numbers of the exported SourceTracks stay as they are in the Recording (ADR-0014), which is reasoned, not measured. An import check is still open.
+
 Only Premiere can confirm an import truly works, and only the owner can run it. When export behaviour changes, say that a real import check is needed rather than claiming it works.
 
 ## Tooling
