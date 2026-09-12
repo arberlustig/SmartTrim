@@ -3,6 +3,8 @@ import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
+import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
+import type { MonoPcm } from "../speech/detectSpeech.ts";
 import {
   redecideCut,
   replanCut,
@@ -10,7 +12,9 @@ import {
   saveCutPlan,
   type CutResult,
   type CutSummary,
+  waveformsOf,
   type PlanSettings,
+  type SourceTrackWaveform,
 } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
@@ -67,6 +71,12 @@ async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
 let lastCut: CutResult | null = null;
 /** The Recording on screen, so the scan and the save work on the one the user actually chose. */
 let chosen: RecordingInfo | null = null;
+/**
+ * Which SourceTracks a reopened project was cut from, so its audio can be read again for the waveform. A project
+ * holds what the analysis found, never the audio itself (ADR-0016), so this is the only record of them.
+ */
+let reopenedVoice: readonly number[] = [];
+let reopenedSourceTracks: readonly number[] = [];
 
 /** Turns a handler's refusal into an answer the window can show, rather than an IPC exception. */
 function answering<Request, Value>(
@@ -132,6 +142,16 @@ function registerHandlers(window: BrowserWindow): void {
     }),
   );
 
+  // Asked for once after an analysis: the shape of the sound does not change when a slider moves, only the colours
+  // drawn over it do, and those travel with every summary (ADR-0019).
+  ipcMain.handle(
+    "cut:waveforms",
+    answering(async (): Promise<SourceTrackWaveform[]> => {
+      if (!lastCut) throw new Error("There is no cut to draw a waveform for.");
+      return waveformsOf(lastCut);
+    }),
+  );
+
   // ADR-0004: Margin and MinimumDeadZone only decide how the cuts are planned around what the analysis found, so
   // moving those sliders must not read the Recording again.
   ipcMain.handle(
@@ -185,7 +205,32 @@ function registerHandlers(window: BrowserWindow): void {
       const opened = await openTrimProject(text, (await analysisTools(window)).ffprobe);
       lastCut = opened.cut;
       chosen = opened.cut.recording;
+      // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
+      // found, never the audio (ADR-0016), so this is the only record of what was listened to.
+      reopenedVoice = opened.project.listenTo;
+      reopenedSourceTracks = [...new Set([...reopenedVoice, ...(opened.project.contentSourceTracks ?? [])])];
       return { project: opened.project, summary: opened.cut.summary };
+    }),
+  );
+
+  /**
+   * Reads the audio of a reopened project in the background, so its waveform appears and a threshold can be tried
+   * again without the user pressing Schneiden. The plan on screen is not touched: it was recomputed on opening.
+   */
+  ipcMain.handle(
+    "project:readAudio",
+    answering(async (): Promise<SourceTrackWaveform[]> => {
+      if (!lastCut) throw new Error("There is no project whose audio could be read.");
+      if (lastCut.decoded.length > 0) return waveformsOf(lastCut);
+      if (reopenedSourceTracks.length === 0) throw new Error("This project names no SourceTrack to listen to.");
+
+      const { recording } = lastCut;
+      const audio = await decodeSourceTracks(recording, reopenedSourceTracks, (await analysisTools(window)).ffmpeg);
+      const decoded = reopenedSourceTracks.map((position, index) => ({ position, pcm: audio[index] as MonoPcm }));
+      // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
+      const listened = reopenedVoice.map((position) => audio[reopenedSourceTracks.indexOf(position)] as MonoPcm);
+      lastCut = { ...lastCut, decoded, listened };
+      return waveformsOf(lastCut);
     }),
   );
 

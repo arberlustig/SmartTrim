@@ -33,7 +33,9 @@ import {
   type TrackRole,
 } from "../app/cutSession.ts";
 import { allPresets, presetFromSliders } from "../app/presets.ts";
-import type { CutSummary } from "../app/runCut.ts";
+import { bandsIn, keptShareByColumn } from "../waveform/cutShape.ts";
+import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
+import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
 import type { Answer, SmartTrimApi } from "../preload/api.ts";
 
 declare global {
@@ -78,6 +80,11 @@ const view = {
   eventTail: element<HTMLInputElement>("eventTail"),
   eventTailValue: element("eventTailValue"),
   cut: element<HTMLButtonElement>("cut"),
+  waveforms: element("waveforms"),
+  overview: element<HTMLCanvasElement>("overview"),
+  zoom: element<HTMLInputElement>("zoom"),
+  zoomValue: element("zoomValue"),
+  waveformRows: element("waveformRows"),
   status: element("status"),
   result: element("result"),
 };
@@ -96,6 +103,10 @@ let asking: { question: string; yes: () => void } | null = null;
 let working = false;
 /** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
 let preparing = true;
+/** The waveform of every SourceTrack the last analysis read. Empty until one has run. */
+let waveforms: SourceTrackWaveform[] = [];
+/** The stretch of the Recording the zoomed waveforms are showing. */
+let zoom: ZoomWindow = { fromSeconds: 0, toSeconds: 1 };
 /** The finished cut on screen, or null once a setting made it stale. */
 let finished: CutSummary | null = null;
 
@@ -395,6 +406,8 @@ function draw(): void {
   drawSourceTracks();
   drawSettings();
   drawResult();
+  // The colours over the waveform come from the plan, so every redraw of the numbers redraws them too.
+  drawWaveforms();
   view.chooseRecording.disabled = working || preparing;
   view.openProject.disabled = working || preparing;
   view.threshold.disabled = working;
@@ -495,6 +508,155 @@ view.preset.addEventListener("change", () => {
   draw();
 });
 
+
+/* ── The waveforms ─────────────────────────────────────────────────────────────────────────────────────────── */
+
+/** Kept stretches are green, removed ones a dark red that is also plainly darker, so the two differ without hue. */
+const KEPT_BAND = "#1f3a2e";
+const REMOVED_BAND = "#2a1416";
+const KEPT_WAVE = "#7fd6b4";
+const REMOVED_WAVE = "#7a4046";
+
+/** Draws one canvas at the screen's own pixel density, and hands back its context and size in CSS pixels. */
+function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: CanvasRenderingContext2D; width: number } {
+  const width = Math.max(Math.round(canvas.clientWidth), 1);
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(cssHeight * ratio);
+  const paint = canvas.getContext("2d") as CanvasRenderingContext2D;
+  paint.setTransform(ratio, 0, 0, ratio, 0, 0);
+  paint.clearRect(0, 0, width, cssHeight);
+  return { paint, width };
+}
+
+/** The strip over the whole Recording: brightness is how much of that column survives, plus the zoom window. */
+function drawOverview(): void {
+  const seconds = finished?.recordingSeconds;
+  if (!seconds) return;
+  const height = 34;
+  const { paint, width } = canvasBrush(view.overview, height);
+
+  paint.fillStyle = REMOVED_BAND;
+  paint.fillRect(0, 0, width, height);
+
+  const share = keptShareByColumn(finished?.keptRanges ?? [], seconds, width);
+  for (let column = 0; column < width; column += 1) {
+    const kept = share[column] as number;
+    if (kept <= 0) continue;
+    // Full columns reach the top; a column half removed is drawn half as tall and dimmer.
+    paint.fillStyle = KEPT_BAND;
+    paint.fillRect(column, 0, 1, height);
+    paint.globalAlpha = 0.35 + 0.65 * kept;
+    paint.fillStyle = KEPT_WAVE;
+    paint.fillRect(column, height - Math.max(kept * height, 1), 1, Math.max(kept * height, 1));
+    paint.globalAlpha = 1;
+  }
+
+  // Where the zoom below is looking.
+  const left = (zoom.fromSeconds / seconds) * width;
+  const right = (zoom.toSeconds / seconds) * width;
+  paint.strokeStyle = "#e8eaed";
+  paint.lineWidth = 1.5;
+  paint.strokeRect(left + 0.75, 0.75, Math.max(right - left - 1.5, 1), height - 1.5);
+}
+
+/** One SourceTrack's waveform across the zoom window, with the cut painted behind it. */
+function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform): void {
+  const seconds = finished?.recordingSeconds;
+  if (!seconds) return;
+  const height = 66;
+  const { paint, width } = canvasBrush(canvas, height);
+  const span = zoom.toSeconds - zoom.fromSeconds;
+  const xOf = (second: number) => ((second - zoom.fromSeconds) / span) * width;
+
+  const bands = bandsIn(finished?.keptRanges ?? [], zoom.fromSeconds, zoom.toSeconds);
+  for (const band of bands) {
+    paint.fillStyle = band.kept ? KEPT_BAND : REMOVED_BAND;
+    const from = xOf(band.startSeconds);
+    paint.fillRect(from, 0, Math.max(xOf(band.endSeconds) - from, 0.5), height);
+  }
+
+  // The waveform itself, one vertical line per pixel column, mirrored around the middle.
+  const middle = height / 2;
+  for (let column = 0; column < width; column += 1) {
+    const at = zoom.fromSeconds + (column / width) * span;
+    const from = Math.floor(at * waveform.peaksPerSecond);
+    const to = Math.max(Math.floor((at + span / width) * waveform.peaksPerSecond), from + 1);
+    let loudest = 0;
+    for (let peak = from; peak < to && peak < waveform.peaks.length; peak += 1) {
+      const peakHeight = waveform.peaks[peak] as number;
+      if (peakHeight > loudest) loudest = peakHeight;
+    }
+    const half = Math.max(loudest * (height / 2 - 2), 0.5);
+    paint.fillStyle = keptAt(at) ? KEPT_WAVE : REMOVED_WAVE;
+    paint.fillRect(column, middle - half, 1, half * 2);
+  }
+}
+
+/** Whether the plan keeps this second — what decides the colour of one column of the waveform. */
+function keptAt(second: number): boolean {
+  const ranges = finished?.keptRanges ?? [];
+  return ranges.some((range) => second >= range.startSeconds && second < range.endSeconds);
+}
+
+/** Rebuilds one row per SourceTrack the analysis read, and draws them all. */
+function drawWaveforms(): void {
+  const seconds = finished?.recordingSeconds;
+  view.waveforms.hidden = waveforms.length === 0 || !seconds;
+  if (view.waveforms.hidden) return;
+
+  view.zoom.min = "0";
+  view.zoom.max = "1000";
+  view.zoom.step = "1";
+  // The slider runs from the whole Recording at the left to the closest zoom at the right, and the ends are far
+  // apart, so it moves in steps of a fixed ratio rather than of a fixed number of seconds.
+  const widest = seconds as number;
+  const closest = Math.min(CLOSEST_WINDOW_SECONDS, widest);
+  const span = zoom.toSeconds - zoom.fromSeconds;
+  view.zoom.value = String(Math.round((Math.log(widest / span) / Math.log(widest / closest)) * 1000));
+  view.zoomValue.textContent = duration(span);
+
+  if (view.waveformRows.childElementCount !== waveforms.length) {
+    view.waveformRows.replaceChildren();
+    for (const waveform of waveforms) {
+      const row = document.createElement("div");
+      row.className = "waveformRow";
+      const name = document.createElement("span");
+      const role = roleOf(session, waveform.position);
+      name.textContent = `Tonspur ${waveform.position + 1} · ${role === "voice" ? "danach geschnitten" : "Momente behalten"}`;
+      const canvas = document.createElement("canvas");
+      canvas.dataset["position"] = String(waveform.position);
+      row.append(name, canvas);
+      view.waveformRows.append(row);
+    }
+  }
+
+  const canvases = [...view.waveformRows.querySelectorAll("canvas")];
+  waveforms.forEach((waveform, index) => {
+    const canvas = canvases[index];
+    if (canvas) drawWaveform(canvas, waveform);
+  });
+  drawOverview();
+}
+
+/** Moves the zoom window and redraws, without touching anything else on screen. */
+function showWindow(next: ZoomWindow): void {
+  zoom = next;
+  drawWaveforms();
+}
+
+/**
+ * Fetches the waveforms of the analysis that just finished and starts the zoom showing the whole Recording. The
+ * shape of the sound does not change with a slider, so this is asked for once per analysis (ADR-0019).
+ */
+async function loadWaveforms(recordingSeconds: number): Promise<void> {
+  const drawn = show(await window.smarttrim.waveforms(), "Die Wellenform ließ sich nicht zeichnen");
+  if (!drawn) return;
+  waveforms = drawn;
+  zoom = { fromSeconds: 0, toSeconds: recordingSeconds };
+  drawWaveforms();
+}
+
 /** Closes whatever row was open and gives the keyboard back to the dropdown, which would otherwise hold nothing. */
 function closePresetRow(): void {
   naming = false;
@@ -590,6 +752,72 @@ view.deletePreset.addEventListener("click", () => {
   });
 });
 
+
+/* ── Zooming, dragging and the strip ───────────────────────────────────────────────────────────────────────── */
+
+view.zoom.addEventListener("input", () => {
+  const seconds = finished?.recordingSeconds;
+  if (!seconds) return;
+  const closest = Math.min(CLOSEST_WINDOW_SECONDS, seconds);
+  // The slider is a ratio, not a number of seconds: 0 is the whole Recording, 1000 is the closest zoom.
+  const along = Number(view.zoom.value) / 1000;
+  showWindow(zoomedTo(zoom, seconds, seconds * (closest / seconds) ** along));
+});
+
+/** Puts the middle of the zoom window where the user clicked in the overview strip. */
+view.overview.addEventListener("click", (event) => {
+  const seconds = finished?.recordingSeconds;
+  if (!seconds) return;
+  const box = view.overview.getBoundingClientRect();
+  const at = ((event.clientX - box.left) / box.width) * seconds;
+  const span = zoom.toSeconds - zoom.fromSeconds;
+  showWindow(pannedBy(zoom, seconds, at - (zoom.fromSeconds + span / 2)));
+});
+
+/** Dragging a waveform sideways slides the window; the wheel zooms around where the pointer is. */
+view.waveformRows.addEventListener("pointerdown", (event) => {
+  const canvas = (event.target as HTMLElement).closest("canvas");
+  const seconds = finished?.recordingSeconds;
+  if (!canvas || !seconds) return;
+  const box = canvas.getBoundingClientRect();
+  let lastX = event.clientX;
+  canvas.classList.add("dragging");
+
+  const move = (moved: PointerEvent) => {
+    const span = zoom.toSeconds - zoom.fromSeconds;
+    // Dragging right pulls the Recording along with the pointer, so the window moves the other way.
+    showWindow(pannedBy(zoom, seconds, -((moved.clientX - lastX) / box.width) * span));
+    lastX = moved.clientX;
+  };
+  const stop = () => {
+    canvas.classList.remove("dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+  };
+  // On the window, not the canvas: a drag that wanders off the waveform keeps working, and it keeps working even
+  // where capturing the pointer is refused — a silent stop mid-drag is worse than a drag that leaves the canvas.
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+});
+
+view.waveformRows.addEventListener(
+  "wheel",
+  (event) => {
+    const canvas = (event.target as HTMLElement).closest("canvas");
+    const seconds = finished?.recordingSeconds;
+    if (!canvas || !seconds) return;
+    event.preventDefault();
+    const span = zoom.toSeconds - zoom.fromSeconds;
+    showWindow(zoomedTo(zoom, seconds, event.deltaY > 0 ? span * 1.25 : span / 1.25));
+  },
+  { passive: false },
+);
+
+// The canvases are sized in percent, so their pixel width changes with the window and they have to be redrawn.
+window.addEventListener("resize", () => drawWaveforms());
+
 view.chooseRecording.addEventListener("click", async () => {
   clearStatus();
   const recording = show(await window.smarttrim.chooseRecording(), "Die Aufnahme ließ sich nicht lesen");
@@ -616,7 +844,21 @@ view.openProject.addEventListener("click", async () => {
   if (!opened) return;
   session = projectOpened(session, opened.project);
   finished = opened.summary;
+  waveforms = [];
   clearStatus();
+  draw();
+
+  // The project holds what the analysis found, not the audio, so the waveform has to be read again. It runs in the
+  // background: the sliders and the numbers are already usable, and the waveform appears when it arrives.
+  view.status.textContent = "Liest den Ton für die Wellenform …";
+  const drawn = show(await window.smarttrim.readProjectAudio(), "Der Ton ließ sich nicht nachlesen");
+  if (drawn) {
+    waveforms = drawn;
+    zoom = { fromSeconds: 0, toSeconds: opened.summary.recordingSeconds };
+    // The audio is back in memory, so moving the threshold decides again instead of asking for a whole new cut.
+    session = cutFinished(session);
+    clearStatus();
+  }
   draw();
 });
 
@@ -624,6 +866,9 @@ view.cut.addEventListener("click", async () => {
   clearStatus();
   working = true;
   finished = null;
+  // The old waveforms belong to the old analysis. Left on screen they would draw one Recording's sound under
+  // another Recording's cut.
+  waveforms = [];
   draw();
   view.status.textContent = "Liest die Aufnahme …";
   const summary = show(await window.smarttrim.cut(analysisRequestFrom(session)), "Der Schnitt ging nicht");
@@ -635,6 +880,7 @@ view.cut.addEventListener("click", async () => {
     clearStatus();
   }
   draw();
+  if (summary) await loadWaveforms(summary.recordingSeconds);
 });
 
 draw();

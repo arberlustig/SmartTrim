@@ -109,6 +109,22 @@ and the three settings. It is replaced, never changed in place, and knows nothin
 _Avoid_: state, settings object, form, config
 
 **CutSummary**:
-What the window says about a finished CutPlan — how much of the Recording survives, how much SmartTrim removes and
-in how many KeepSegments. The plan itself stays in the main process (ADR-0012).
+What the window says about a finished CutPlan — how much of the Recording survives, how much SmartTrim removes, in
+how many KeepSegments, and the kept stretches in seconds so the window can draw them (ADR-0019). The plan itself
+stays in the main process (ADR-0012).
 _Avoid_: stats, report, result
+
+**OverviewStrip**:
+The thin band above the waveforms, spanning the whole Recording. One column can be minutes wide, so its brightness
+is the *share* of that column the cut keeps, not kept-or-removed. A frame inside it shows where the ZoomWindow is.
+_Avoid_: heatmap, minimap, timeline
+
+**ZoomWindow**:
+The stretch of the Recording the waveforms are showing, from the whole Recording down to ten seconds. It can never
+be carried off either end of the Recording, and zooming keeps whatever was in the middle in the middle.
+_Avoid_: viewport, view range, selection
+
+**PeakEnvelope**:
+One height per slice of time, 0 to 1 — what a waveform is drawn from. Each slice reports its **loudest** sample
+rather than its average, so a bang far shorter than a slice keeps its full height (ADR-0019).
+_Avoid_: waveform data, samples, levels

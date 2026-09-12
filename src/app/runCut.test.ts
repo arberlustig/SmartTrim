@@ -49,6 +49,11 @@ describe("summariseCutPlan", () => {
       removedSeconds: 7,
       removedShare: 0.7,
       keepSegments: 2,
+      // What the window colours the strip and the waveforms with (ADR-0019).
+      keptRanges: [
+        { startSeconds: 2, endSeconds: 3 },
+        { startSeconds: 5, endSeconds: 7 },
+      ],
     });
   });
 });
@@ -159,6 +164,7 @@ describe("replanCut with ContentEvents", () => {
     const cut = {
       recording: probed(600),
       listened: [],
+      decoded: [],
       worthKeeping: [],
       contentEvents: [{ startSeconds: 5, endSeconds: 5.4 }],
       cutPlan: [],

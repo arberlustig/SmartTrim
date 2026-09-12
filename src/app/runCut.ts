@@ -1,9 +1,15 @@
 import { writeFile } from "node:fs/promises";
-import { analyseRecording, type AnalysisRequest, type AnalysisTools } from "../analysis/analyseRecording.ts";
+import {
+  analyseRecording,
+  type AnalysisRequest,
+  type AnalysisTools,
+  type DecodedSourceTrack,
+} from "../analysis/analyseRecording.ts";
 import { planCuts, type CutPlan, type TimeRange } from "../cutting/planCuts.ts";
 import { exportFcp7Xml, type RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { detectLoudness } from "../level/detectLoudness.ts";
 import type { MonoPcm } from "../speech/detectSpeech.ts";
+import { peakEnvelope } from "../waveform/peakEnvelope.ts";
 
 /** What the window reports once a CutPlan exists. Seconds, because that is what the user recognises. */
 export interface CutSummary {
@@ -13,6 +19,12 @@ export interface CutSummary {
   /** Removed share of the Recording, 0 to 1. */
   removedShare: number;
   keepSegments: number;
+  /**
+   * The stretches of the Recording the plan keeps, in seconds. The CutPlan itself still stays in the main process
+   * (ADR-0012); this is what the window needs to colour the strip and the waveforms, and it changes with every
+   * slider, so it travels with the summary (ADR-0019).
+   */
+  keptRanges: readonly TimeRange[];
 }
 
 /** Rounds to milliseconds, so a frame count that divides badly does not report 133.59999999999998 seconds. */
@@ -30,6 +42,10 @@ export function summariseCutPlan(recording: RecordingInfo, cutPlan: CutPlan): Cu
     removedSeconds: toSeconds(removedFrames, recording.frameRate),
     removedShare: recording.durationFrames === 0 ? 0 : Number((removedFrames / recording.durationFrames).toFixed(4)),
     keepSegments: cutPlan.length,
+    keptRanges: cutPlan.map((segment) => ({
+      startSeconds: toSeconds(segment.recordingIn, recording.frameRate),
+      endSeconds: toSeconds(segment.recordingOut, recording.frameRate),
+    })),
   };
 }
 
@@ -41,6 +57,11 @@ export interface CutResult {
    * threshold can be decided without touching the Recording again (ADR-0004). Never sent to the window.
    */
   listened: readonly MonoPcm[];
+  /**
+   * Every SourceTrack that was decoded, by its position in the Recording — the ones the window draws a waveform
+   * for. Never sent over IPC either; `waveformsOf` turns it into something small enough to send (ADR-0019).
+   */
+  decoded: readonly DecodedSourceTrack[];
   /**
    * The stretches the analysis found worth keeping, before any Margin or MinimumDeadZone was applied. Kept so that
    * those two settings can be changed without reading the Recording again (ADR-0004).
@@ -100,15 +121,42 @@ export function replanCut(cut: CutResult, settings: PlanSettings): CutResult {
  * is only read (ADR-0006), and nothing is written until the user picks a place to save.
  */
 export async function runCut(request: AnalysisRequest, tools: AnalysisTools): Promise<CutResult> {
-  const { recording, listened, worthKeeping, contentEvents, cutPlan } = await analyseRecording(request, tools);
+  const { recording, listened, decoded, worthKeeping, contentEvents, cutPlan } = await analyseRecording(request, tools);
   return {
     recording,
     listened,
+    decoded,
     worthKeeping,
     contentEvents,
     cutPlan,
     summary: summariseCutPlan(recording, cutPlan),
   };
+}
+
+/** One SourceTrack's waveform as the window draws it: a height per slice of time, 0 to 1. */
+export interface SourceTrackWaveform {
+  /** Position in the Recording, 0 being the first — the number the window puts on the row. */
+  position: number;
+  peaksPerSecond: number;
+  peaks: Float32Array;
+}
+
+/**
+ * How finely the waveform is drawn. Twenty a second is a peak every 50 ms: at the closest zoom that is two peaks
+ * per pixel, and over a 2.5-hour Recording it is 182 000 numbers — 728 KB, sent once per analysis (ADR-0019).
+ */
+export const PEAKS_PER_SECOND = 20;
+
+/**
+ * The waveforms for every SourceTrack the analysis decoded. Computed on demand rather than kept in the CutResult:
+ * a replan changes the colours, never the shape of the sound, so the window asks for these once.
+ */
+export function waveformsOf(cut: CutResult): SourceTrackWaveform[] {
+  return cut.decoded.map(({ position, pcm }) => ({
+    position,
+    peaksPerSecond: PEAKS_PER_SECOND,
+    peaks: peakEnvelope(pcm, PEAKS_PER_SECOND),
+  }));
 }
 
 /**

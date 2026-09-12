@@ -30,6 +30,12 @@ export interface AnalysisRequest {
   minimumDeadZoneSeconds: number;
 }
 
+/** One decoded SourceTrack, kept with the position it has in the Recording so the window can label its waveform. */
+export interface DecodedSourceTrack {
+  position: number;
+  pcm: MonoPcm;
+}
+
 /** Where ffprobe, ffmpeg and the Silero model are: vendor/ during development. */
 export interface AnalysisTools {
   ffprobe: string;
@@ -48,6 +54,11 @@ export async function analyseRecording(
   recording: RecordingInfo;
   /** The decoded Voice SourceTracks, kept so another threshold can be tried without a new read (ADR-0004). */
   listened: readonly MonoPcm[];
+  /**
+   * Every SourceTrack that was decoded, Voice and Content alike, by its position in the Recording. The window draws
+   * a waveform for each of these and only for these: a SourceTrack with no role was never read (ADR-0019).
+   */
+  decoded: readonly DecodedSourceTrack[];
   worthKeeping: readonly TimeRange[];
   /** The moments found on the Content SourceTracks. */
   contentEvents: readonly TimeRange[];
@@ -67,6 +78,7 @@ export async function analyseRecording(
   const audioOf = (position: number) => audio[decoded.indexOf(position)] as MonoPcm;
 
   const listened = request.voiceSourceTracks.map(audioOf);
+  const decodedByPosition = decoded.map((position) => ({ position, pcm: audioOf(position) }));
   const worthKeeping = (
     await Promise.all(
       listened.map((pcm) =>
@@ -101,5 +113,5 @@ export async function analyseRecording(
         : `Nothing on ${sourceTracks} reaches ${decideBy.thresholdDbfs} dBFS, so nothing would be kept. Lower the threshold or choose other SourceTracks.`,
     );
   }
-  return { recording, listened, worthKeeping, contentEvents, cutPlan };
+  return { recording, listened, decoded: decodedByPosition, worthKeeping, contentEvents, cutPlan };
 }
