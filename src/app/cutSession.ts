@@ -38,8 +38,9 @@ export interface CutSession {
   /** The SourceTracks the user ticked, by position in the Recording, 0 being the first: they decide what is kept. */
   listenTo: readonly number[];
   /**
-   * The SourceTracks that end up in the Premiere sequence, by position. Every SourceTrack of a freshly chosen
-   * Recording is in here: what is cut by and what is exported are two different choices (ADR-0014).
+   * The SourceTracks that end up in the Premiere sequence, by position. A freshly chosen Recording has every
+   * SourceTrack in here that a scan found sound on, or all of them where no scan looked: what is cut by and what is
+   * exported are two different choices (ADR-0014).
    */
   exportSourceTracks: readonly number[];
   thresholdDbfs: number;
@@ -76,9 +77,11 @@ export function chooseRecording(
     scan,
     emptySourceTracksShown: false,
     listenTo: [],
-    // Everything is exported until the user says otherwise: an EmptyTrack misjudged by the scan then still keeps
-    // its audio in Premiere (ADR-0013).
-    exportSourceTracks: recording.sourceTracks.map((_sourceTrack, position) => position),
+    // What the window shows is what it exports: a SourceTrack hidden as an EmptyTrack would otherwise arrive in
+    // Premiere with a tick nobody can see (ADR-0014). Where no scan looked, nothing is dropped.
+    exportSourceTracks: recording.sourceTracks
+      .map((_sourceTrack, position) => position)
+      .filter((position) => !scan || scan[position]?.carriesSound !== false),
   };
 }
 

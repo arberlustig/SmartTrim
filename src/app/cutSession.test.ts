@@ -189,4 +189,25 @@ describe("cutSession", () => {
 
     expect(request.voiceSourceTracks).toEqual([4]);
   });
+
+  // The owner asked for this on 2026-09-12: a SourceTrack the window hides must not arrive in Premiere anyway, or
+  // the only way to drop it is to show the hidden SourceTracks again and untick them one by one (ADR-0014).
+  test("SourceTracks the scan found nothing on start out unexported, like they start out hidden", () => {
+    const recording = probed(String.raw`C:\Aufnahmen\obs.mp4`, 6);
+
+    const session = chooseRecording(newCutSession(), recording, scanned([true, false, true, false, true, true]));
+
+    expect(session.exportSourceTracks).toEqual([0, 2, 4, 5]);
+    expect(canExport(session)).toBe(true);
+    // Showing them does not export them: that stays the user's tick.
+    expect(revealEmptySourceTracks(session, true).exportSourceTracks).toEqual([0, 2, 4, 5]);
+    expect(toggleExportSourceTrack(session, 1).exportSourceTracks).toEqual([0, 1, 2, 4, 5]);
+  });
+
+  // Without a scan nothing is known, so nothing may be dropped — the same rule that keeps them all visible.
+  test("with no scan every SourceTrack is exported", () => {
+    const session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+
+    expect(session.exportSourceTracks).toEqual([0, 1, 2, 3, 4, 5]);
+  });
 });

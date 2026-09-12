@@ -17,7 +17,7 @@ One side of a stereo SourceTrack. A SourceTrack has two; Premiere addresses them
 _Avoid_: track, side
 
 **EmptyTrack**:
-A SourceTrack that carries no real audio because the user never routed anything to it. SmartTrim hides these rather than asking the user about them, but still exports them, so a SourceTrack misjudged as empty never loses audio in Premiere.
+A SourceTrack that carries no real audio because the user never routed anything to it. SmartTrim hides these rather than asking the user about them, and leaves them out of the export as well — what the window shows is what it exports (ADR-0014). Since it is judged from samples (ADR-0013), the window can always show them again.
 _Avoid_: silent track, unused track, dead track
 
 **Interleaving**:
@@ -86,7 +86,8 @@ _Avoid_: cutlist, EDL, timeline, edit list
 
 **ExportedSourceTrack**:
 A SourceTrack the user kept in the Premiere sequence. Which SourceTracks are exported is a separate choice from which
-ones the cut is decided by, and every SourceTrack starts exported (ADR-0014).
+ones the cut is decided by; every SourceTrack a scan found sound on starts exported, and so does every SourceTrack of
+a Recording nothing was scanned on (ADR-0014).
 _Avoid_: selected track, output track
 
 **TimelineTrack**:

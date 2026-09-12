@@ -184,11 +184,18 @@ function drawSourceTracks(): void {
   // A scan only listens to slices, so a hidden SourceTrack has to stay reachable.
   const hidden = recording.sourceTracks.length - visible.length;
   if (hidden === 0 && !session.emptySourceTracksShown) return;
+  // A tick nobody can see is exactly what the hiding must not cause, in either direction.
+  const hiddenExported = recording.sourceTracks.filter(
+    (_sourceTrack, index) => !visible.includes(index) && session.exportSourceTracks.includes(index),
+  ).length;
   const reveal = document.createElement("button");
   reveal.className = "link";
   reveal.textContent = session.emptySourceTracksShown
     ? "Leere Tonspuren ausblenden"
-    : `${hidden} leere ${hidden === 1 ? "Tonspur" : "Tonspuren"} trotzdem zeigen`;
+    : `${hidden} leere ${hidden === 1 ? "Tonspur" : "Tonspuren"} zeigen ` +
+      (hiddenExported === 0
+        ? `(${hidden === 1 ? "kommt" : "kommen"} nicht nach Premiere)`
+        : `(${hiddenExported} davon ${hiddenExported === 1 ? "kommt" : "kommen"} nach Premiere)`);
   reveal.disabled = working;
   reveal.addEventListener("click", () => {
     session = revealEmptySourceTracks(session, !session.emptySourceTracksShown);

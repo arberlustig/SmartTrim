@@ -29,10 +29,15 @@ anything above -70 dBFS, and the window says "Ton durchgehend" or "Ton stellenwe
 Five slices of ten seconds are 3 % of a 25-minute Recording and under 1 % of a 2.5-hour one. A SourceTrack that only
 makes a sound between the slices looks empty. Two things follow, and neither may be removed:
 
-- the window offers "N leere Tonspuren trotzdem zeigen", so a hidden SourceTrack is always reachable and can still be
-  ticked;
-- the export writes every SourceTrack regardless (ADR-0008), so a SourceTrack misjudged as empty never loses its
-  audio in Premiere.
+- the window offers "N leere Tonspuren zeigen", so a hidden SourceTrack is always reachable and can still be ticked,
+  both for cutting and for the export;
+- that link says what hiding costs — "(kommen nicht nach Premiere)", or how many hidden SourceTracks are exported
+  anyway — because a hidden SourceTrack carries ticks nobody can see otherwise.
+
+A hidden SourceTrack is **not** exported by default. It was, until the owner pointed out on 2026-09-12 that hiding a
+SourceTrack and then exporting it anyway means the only way to drop it is to show the hidden SourceTracks again and
+untick them one by one. The cost is real and accepted: a SourceTrack that only makes a sound between the slices is
+now missing from Premiere unless the user shows it and ticks it. ADR-0014 carries that decision.
 
 A missing measurement is refused rather than read as silence: if ffmpeg reports no level for a SourceTrack,
 `sourceTrackLevelsFromAstats` throws instead of returning -Infinity, because silence and "we did not hear" mean

@@ -25,10 +25,10 @@ Renumbering them densely would play a different SourceTrack's audio — the same
 predecessor import everything as mono, and that ADR-0008 had to fix once already. `<file>` keeps describing the whole
 Recording, all six `<audio>` blocks of it, because that is where Premiere reads which Channels the file holds.
 
-**No fixture and no import covers a partial export.** Premiere's own exports in `fixtures/premiere/` always contain
-every SourceTrack, so the rule above is reasoned from ADR-0008's measurement, not measured itself. It needs a real
-Premiere import before anyone relies on it — see the note in CLAUDE.md: where a fixture and a real import disagree,
-the import wins.
+No fixture covers a partial export: Premiere's own exports in `fixtures/premiere/` always contain every SourceTrack,
+so the rule above was reasoned from ADR-0008's measurement rather than measured. **The owner imported both cases in
+Premiere on 2026-09-12 and confirmed them**: a full export sounds as before, and an export of SourceTrack 5 alone
+arrives as one TimelineTrack carrying SourceTrack 5's audio, balanced across both ears.
 
 ## Consequences
 
@@ -41,5 +41,8 @@ being asked — can be excluded instead of blocking the whole export.
 Changing an export tick does not invalidate a finished cut: it changes the file, never the CutPlan, so the result
 stays on screen and only the save writes something different. The cutting ticks do invalidate it.
 
-EmptyTracks stay exported by default even while the window hides them (ADR-0013), so a SourceTrack the scan misjudged
-never loses its audio without the user choosing that.
+A SourceTrack the window hides as an EmptyTrack (ADR-0013) starts **unexported**. It started out exported, on the
+grounds that a misjudged EmptyTrack should never lose its audio; the owner asked for the opposite on 2026-09-12,
+because a hidden SourceTrack with an invisible tick could only be dropped by showing the hidden SourceTracks again
+and unticking them. What the window shows is now what it exports, and the link that shows them says as much. Where no
+scan looked, nothing is dropped: every SourceTrack of a Recording without a scan is exported.
