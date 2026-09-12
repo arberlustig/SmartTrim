@@ -1,14 +1,17 @@
 import { describe, expect, test } from "vitest";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
+import type { SourceTrackScan } from "../scan/scanSourceTracks";
 import {
   analysisRequestFrom,
   canCut,
   chooseRecording,
   newCutSession,
+  revealEmptySourceTracks,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   setThresholdDbfs,
   toggleSourceTrack,
+  visibleSourceTracks,
 } from "./cutSession";
 
 /** A probed Recording with `sourceTracks` stereo SourceTracks, like the OBS captures the owner feeds SmartTrim. */
@@ -26,6 +29,16 @@ function probed(path: string, sourceTracks: number): RecordingInfo {
       durationFrames: 600,
     })),
   };
+}
+
+/** A scan saying which SourceTracks carried sound, the way `scanSourceTracks` reports it. */
+function scanned(carriesSound: readonly boolean[]): SourceTrackScan[] {
+  return carriesSound.map((sound) => ({
+    carriesSound: sound,
+    peakDbfs: sound ? -12 : -Infinity,
+    slicesWithSound: sound ? 5 : 0,
+    sliceCount: 5,
+  }));
 }
 
 describe("cutSession", () => {
@@ -114,5 +127,36 @@ describe("cutSession", () => {
     expect(() => analysisRequestFrom(newCutSession())).toThrow(/Recording/);
     const chosen = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\long-recording.mp4`, 6));
     expect(() => analysisRequestFrom(chosen)).toThrow(/SourceTrack/);
+  });
+
+  // A real OBS Recording had two SourceTracks nobody was ever routed to. Offering them means the user has to work
+  // out which of six tracks are real; CONTEXT.md says SmartTrim hides them rather than asking.
+  test("SourceTracks that carry no sound are left out of the list", () => {
+    const recording = probed(String.raw`C:\Aufnahmen\obs.mp4`, 6);
+
+    const withScan = chooseRecording(newCutSession(), recording, scanned([true, false, true, false, true, true]));
+    expect(visibleSourceTracks(withScan)).toEqual([0, 2, 4, 5]);
+
+    // Without a scan nothing is known about the SourceTracks, so nothing may be hidden.
+    expect(visibleSourceTracks(chooseRecording(newCutSession(), recording))).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // A slice is a sample: a SourceTrack that only makes a sound between the slices looks empty. The user has to be
+  // able to reach it, and a tick must still mean the SourceTrack it was drawn next to.
+  test("the hidden SourceTracks can be shown again, and ticking one still points at that SourceTrack", () => {
+    const session = chooseRecording(
+      newCutSession(),
+      probed(String.raw`C:\Aufnahmen\obs.mp4`, 6),
+      scanned([true, false, true, false, true, true]),
+    );
+
+    const revealed = revealEmptySourceTracks(session, true);
+    expect(visibleSourceTracks(revealed)).toEqual([0, 1, 2, 3, 4, 5]);
+
+    const listening = toggleSourceTrack(revealed, 1);
+    expect(listening.listenTo).toEqual([1]);
+    expect(analysisRequestFrom(listening).voiceSourceTracks).toEqual([1]);
+    // Hiding them again leaves the tick alone: it is the user's choice, not the scan's.
+    expect(revealEmptySourceTracks(listening, false).listenTo).toEqual([1]);
   });
 });

@@ -70,6 +70,11 @@ _Avoid_: threshold, min silence
 A time range the user marks so that SmartTrim never removes anything inside it. Its edges are exact — no Margin is added — but a pause beside it follows the same MinimumDeadZone rule as a pause beside speech.
 _Avoid_: protected zone, do-not-touch, safe zone
 
+**SourceTrackScan**:
+What listening to a few short slices of a SourceTrack found: whether it carries sound at all, and in how many of the
+slices. It decides which SourceTracks are EmptyTracks and therefore hidden, and it is a sample, never proof (ADR-0013).
+_Avoid_: analysis, level check, probe
+
 **Preset**:
 A named set of TrackRoles and thresholds suited to a kind of video, such as Gaming, Reaction or Podcast.
 

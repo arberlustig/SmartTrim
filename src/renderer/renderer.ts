@@ -8,8 +8,10 @@ import {
   newCutSession,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
+  revealEmptySourceTracks,
   setThresholdDbfs,
   toggleSourceTrack,
+  visibleSourceTracks,
   type CutSession,
 } from "../app/cutSession.ts";
 import type { CutSummary } from "../app/runCut.ts";
@@ -60,6 +62,13 @@ function duration(seconds: number): string {
   return `${Math.floor(minutes / 60)} Std ${String(minutes % 60).padStart(2, "0")} Min`;
 }
 
+/** What the scan found on one SourceTrack, in the user's words. */
+function soundHint(scan: { carriesSound: boolean; slicesWithSound: number; sliceCount: number } | undefined): string {
+  if (!scan) return "";
+  if (!scan.carriesSound) return " · kein Ton gefunden";
+  return scan.slicesWithSound === scan.sliceCount ? " · Ton durchgehend" : " · Ton stellenweise";
+}
+
 function channels(count: number): string {
   if (count === 2) return "Stereo";
   if (count === 1) return "Mono";
@@ -107,7 +116,9 @@ function drawSourceTracks(): void {
     view.sourceTracksHint.textContent = "Wähle zuerst eine Aufnahme.";
     return;
   }
+  const visible = visibleSourceTracks(session);
   recording.sourceTracks.forEach((sourceTrack, index) => {
+    if (!visible.includes(index)) return;
     const label = document.createElement("label");
     const tick = document.createElement("input");
     tick.type = "checkbox";
@@ -121,14 +132,34 @@ function drawSourceTracks(): void {
     const text = document.createElement("div");
     text.textContent = `Tonspur ${index + 1}`;
     const detail = document.createElement("span");
-    detail.textContent = `${channels(sourceTrack.channelCount)} · ${sourceTrack.sampleRate / 1000} kHz`;
+    detail.textContent =
+      `${channels(sourceTrack.channelCount)} · ${sourceTrack.sampleRate / 1000} kHz` +
+      soundHint(session.scan?.[index]);
     label.append(tick, text, detail);
     view.sourceTracks.append(label);
   });
-  view.sourceTracksHint.textContent =
+  view.sourceTracksHint.replaceChildren();
+  const hint = document.createElement("span");
+  hint.textContent =
     session.listenTo.length === 0
       ? "Kreuze die Spur an, auf der du sprichst. Nach ihr wird geschnitten."
       : "Alles, was auf den angekreuzten Spuren laut genug ist, bleibt erhalten.";
+  view.sourceTracksHint.append(hint);
+
+  // A scan only listens to slices, so a hidden SourceTrack has to stay reachable.
+  const hidden = recording.sourceTracks.length - visible.length;
+  if (hidden === 0 && !session.emptySourceTracksShown) return;
+  const reveal = document.createElement("button");
+  reveal.className = "link";
+  reveal.textContent = session.emptySourceTracksShown
+    ? "Leere Tonspuren ausblenden"
+    : `${hidden} leere ${hidden === 1 ? "Tonspur" : "Tonspuren"} trotzdem zeigen`;
+  reveal.disabled = working;
+  reveal.addEventListener("click", () => {
+    session = revealEmptySourceTracks(session, !session.emptySourceTracksShown);
+    draw();
+  });
+  view.sourceTracksHint.append(document.createElement("br"), reveal);
 }
 
 function drawSettings(): void {
@@ -224,6 +255,15 @@ view.chooseRecording.addEventListener("click", async () => {
   if (!recording) return;
   session = chooseRecording(session, recording);
   finished = null;
+  draw();
+
+  // The slices take a few seconds on a long Recording, so the Recording is on screen before they are measured.
+  view.status.textContent = "Prüft die Tonspuren …";
+  const scan = show(await window.smarttrim.scan(), "Die Tonspuren ließen sich nicht prüfen");
+  if (scan) {
+    session = chooseRecording(session, recording, scan);
+    clearStatus();
+  }
   draw();
 });
 

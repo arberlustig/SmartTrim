@@ -1,5 +1,6 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /** What one slider can be set to. `step` is what the window moves by, not something this module enforces. */
 export interface SliderRange {
@@ -30,6 +31,10 @@ function clamp(value: number, range: SliderRange): number {
 export interface CutSession {
   /** The Recording as probed, or null while none is chosen. */
   recording: RecordingInfo | null;
+  /** What a scan found on the Recording's SourceTracks, or null while nothing was measured. */
+  scan: readonly SourceTrackScan[] | null;
+  /** Whether the SourceTracks the scan found nothing on are shown anyway. */
+  emptySourceTracksShown: boolean;
   /** The SourceTracks the user ticked, by position in the Recording, 0 being the first. */
   listenTo: readonly number[];
   thresholdDbfs: number;
@@ -41,6 +46,8 @@ export interface CutSession {
 export function newCutSession(): CutSession {
   return {
     recording: null,
+    scan: null,
+    emptySourceTracksShown: false,
     listenTo: [],
     thresholdDbfs: -40,
     marginSeconds: 0.05,
@@ -48,9 +55,35 @@ export function newCutSession(): CutSession {
   };
 }
 
-/** Chooses a probed Recording. Ticks from the previous Recording are dropped: its SourceTracks are gone with it. */
-export function chooseRecording(session: CutSession, recording: RecordingInfo): CutSession {
-  return { ...session, recording, listenTo: [] };
+/**
+ * Chooses a probed Recording, with what a scan found on its SourceTracks when that is known. Ticks from the previous
+ * Recording are dropped: its SourceTracks are gone with it.
+ */
+export function chooseRecording(
+  session: CutSession,
+  recording: RecordingInfo,
+  scan: readonly SourceTrackScan[] | null = null,
+): CutSession {
+  return { ...session, recording, scan, emptySourceTracksShown: false, listenTo: [] };
+}
+
+/**
+ * The SourceTracks the window draws, by position. EmptyTracks are left out (CONTEXT.md) — but only where a scan
+ * actually looked: without one, nothing is known and nothing may be hidden.
+ */
+export function visibleSourceTracks(session: CutSession): readonly number[] {
+  const positions = session.recording?.sourceTracks.map((_sourceTrack, position) => position) ?? [];
+  const { scan } = session;
+  if (!scan || session.emptySourceTracksShown) return positions;
+  return positions.filter((position) => scan[position]?.carriesSound !== false);
+}
+
+/**
+ * Shows or hides the SourceTracks the scan found nothing on. A scan only listens to slices, so a SourceTrack that
+ * speaks up between them looks empty and the user has to be able to reach it. Ticks are left as they are.
+ */
+export function revealEmptySourceTracks(session: CutSession, shown: boolean): CutSession {
+  return { ...session, emptySourceTracksShown: shown };
 }
 
 /** Ticks or unticks one SourceTrack by its position in the Recording. */

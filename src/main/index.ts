@@ -7,6 +7,7 @@ import { runCut, saveCutPlan, type CutResult, type CutSummary } from "../app/run
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Answer } from "../preload/api.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
+import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
  * Where ffprobe and ffmpeg live. vendor/ is git-ignored and, until the first-run download exists, has to be filled
@@ -29,6 +30,8 @@ function analysisTools(): AnalysisTools {
 
 /** The finished cut waits here for the user to choose where to save it, so the plan never crosses into the window. */
 let lastCut: CutResult | null = null;
+/** The Recording on screen, so the scan and the save work on the one the user actually chose. */
+let chosen: RecordingInfo | null = null;
 
 /** Turns a handler's refusal into an answer the window can show, rather than an IPC exception. */
 function answering<Request, Value>(
@@ -56,12 +59,22 @@ function registerHandlers(window: BrowserWindow): void {
           { name: "Alle Dateien", extensions: ["*"] },
         ],
       });
-      const chosen = filePaths[0];
-      if (canceled || !chosen) return null;
+      const chosenPath = filePaths[0];
+      if (canceled || !chosenPath) return null;
       // Probing reads only the stream descriptions, so this stays instant even on a 20 GB Recording.
-      const recording = await probeRecording(chosen, analysisTools().ffprobe);
+      const recording = await probeRecording(chosenPath, analysisTools().ffprobe);
       lastCut = null;
+      chosen = recording;
       return recording;
+    }),
+  );
+
+  // Kept apart from choosing so the window can show the Recording at once and the slices afterwards.
+  ipcMain.handle(
+    "recording:scan",
+    answering(async (): Promise<SourceTrackScan[]> => {
+      if (!chosen) throw new Error("No Recording is chosen, so there are no SourceTracks to listen to.");
+      return scanSourceTracks(chosen, analysisTools().ffmpeg);
     }),
   );
 

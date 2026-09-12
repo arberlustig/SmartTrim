@@ -1,0 +1,101 @@
+[in#0 @ 00000178f1bbbb80] UDTA parsing failed retrying raw
+    Last message repeated 6 times
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'D:/Aufnahmen/obs-6-sourcetracks.mp4':
+  Metadata:
+    major_brand     : iso4
+    minor_version   : 0
+    compatible_brands: iso4isomobs1iso2mp41
+    creation_time   : 2026-09-09T15:05:01.000000Z
+    encoder         : OBS Studio (32.2.1)
+  Duration: 00:25:13.98, start: 0.000000, bitrate: 20598 kb/s
+  Stream #0:0[0x1](und): Video: hevc (Main) (hvc1 / 0x31637668), yuv420p(tv, bt709), 1920x1080 [SAR 1:1 DAR 16:9], 20000 kb/s, 60 fps, 60 tbr, 60 tbn (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Video Handler
+      encoder         : obs_nvenc_hevc_tex
+      name            : advanced_video_recording
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 159 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track1
+  Stream #0:2[0x3](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 6 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track2
+  Stream #0:3[0x4](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 81 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track3
+  Stream #0:4[0x5](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track4
+  Stream #0:5[0x6](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 160 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track5
+  Stream #0:6[0x7](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 160 kb/s (default)
+    Metadata:
+      creation_time   : 2026-09-09T15:05:01.000000Z
+      handler_name    : OBS Audio Handler
+      name            : Track6
+Stream mapping:
+  Stream #0:1 (aac) -> astats:default
+  Stream #0:2 (aac) -> astats:default
+  Stream #0:3 (aac) -> astats:default
+  Stream #0:4 (aac) -> astats:default
+  Stream #0:5 (aac) -> astats:default
+  Stream #0:6 (aac) -> astats:default
+  astats:default -> Stream #0:0 (pcm_s16le)
+  astats:default -> Stream #0:1 (pcm_s16le)
+  astats:default -> Stream #0:2 (pcm_s16le)
+  astats:default -> Stream #0:3 (pcm_s16le)
+  astats:default -> Stream #0:4 (pcm_s16le)
+  astats:default -> Stream #0:5 (pcm_s16le)
+Press [q] to stop, [?] for help
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf63.6.100
+  Stream #0:0: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+  Stream #0:1: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+  Stream #0:2: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+  Stream #0:3: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+  Stream #0:4: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+  Stream #0:5: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc63.11.101 pcm_s16le
+[Parsed_astats_0 @ 00000178f3a80500] Overall
+[Parsed_astats_0 @ 00000178f3a80500] Peak level dB: -0.457506
+[Parsed_astats_0 @ 00000178f3a80500] RMS level dB: -20.818519
+[Parsed_astats_5 @ 00000178f49213c0] Overall
+[Parsed_astats_5 @ 00000178f49213c0] Peak level dB: -0.146304
+[Parsed_astats_5 @ 00000178f49213c0] RMS level dB: -20.810727
+[Parsed_astats_4 @ 00000178f4921ec0] Overall
+[Parsed_astats_4 @ 00000178f4921ec0] Peak level dB: -0.146304
+[Parsed_astats_4 @ 00000178f4921ec0] RMS level dB: -20.810727
+[Parsed_astats_3 @ 00000178f3a9e540] Overall
+[Parsed_astats_3 @ 00000178f3a9e540] Peak level dB: -inf
+[Parsed_astats_3 @ 00000178f3a9e540] RMS level dB: -inf
+[Parsed_astats_2 @ 00000178f3a9e440] Overall
+[Parsed_astats_2 @ 00000178f3a9e440] Peak level dB: -38.748844
+[Parsed_astats_2 @ 00000178f3a9e440] RMS level dB: -57.709075
+[Parsed_astats_1 @ 00000178f3a9e340] Overall
+[Parsed_astats_1 @ 00000178f3a9e340] Peak level dB: -inf
+[Parsed_astats_1 @ 00000178f3a9e340] RMS level dB: -inf
+[out#0/null @ 00000178f3b9d340] video:0KiB audio:11250KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:00:10.00 bitrate=N/A speed=24.4x elapsed=0:00:00.40    
