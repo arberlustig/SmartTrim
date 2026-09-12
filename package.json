@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -11,10 +14,13 @@
   "devDependencies": {
     "@types/node": "^22.20.2",
     "@xmldom/xmldom": "^0.9.12",
+    "electron": "^44.3.0",
+    "electron-vite": "^5.0.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   },
   "dependencies": {
     "onnxruntime-node": "^1.29.0"
-  }
+  },
+  "main": "out/main/index.js"
 }

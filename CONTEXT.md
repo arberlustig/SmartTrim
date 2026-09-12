@@ -89,3 +89,15 @@ _Avoid_: project file, session, save file
 
 **Cut** (verb):
 To remove a DeadZone. Note that in Premiere "cut" means splitting a clip *without* removing anything — prefer "remove" or "split" wherever the sentence could be read either way.
+
+## Window
+
+**CutSession**:
+Everything the window remembers about one planned cut: the chosen Recording, the SourceTracks ticked to listen to,
+and the three settings. It is replaced, never changed in place, and knows nothing about how it is drawn.
+_Avoid_: state, settings object, form, config
+
+**CutSummary**:
+What the window says about a finished CutPlan — how much of the Recording survives, how much SmartTrim removes and
+in how many KeepSegments. The plan itself stays in the main process (ADR-0012).
+_Avoid_: stats, report, result

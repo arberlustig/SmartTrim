@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2023",
+    // The renderer is part of src/, so DOM types belong to the project.
+    "lib": ["ES2023", "DOM"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
