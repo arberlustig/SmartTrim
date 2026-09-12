@@ -1,0 +1,30 @@
+appId: com.schneilight.smarttrim
+productName: SmartTrim
+directories:
+  buildResources: build
+  output: release
+# Only what the app runs: the three bundles, the manifest, and the one runtime dependency. ffmpeg and the Silero
+# model are not in here — they are downloaded on first run into the user's own folder (ADR-0015).
+files:
+  - out/**/*
+  - package.json
+  - node_modules/onnxruntime-node/**/*
+  # The ONNX runtime ships a copy for every operating system it supports. A Windows x64 app needs one of them, and
+  # the other four are 220 MB of macOS, Linux and ARM libraries.
+  - "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+# The ONNX runtime is a native module and cannot be loaded from inside the asar archive.
+asarUnpack:
+  - "**/node_modules/onnxruntime-node/**"
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: SmartTrim

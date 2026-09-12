@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
@@ -7,24 +6,33 @@ import { runCut, saveCutPlan, type CutResult, type CutSummary } from "../app/run
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Answer } from "../preload/api.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
+import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
 import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
- * Where ffprobe and ffmpeg live. vendor/ is git-ignored and, until the first-run download exists, has to be filled
- * by hand — so a missing binary is reported as such instead of as an ffmpeg error.
+ * Where ffmpeg, ffprobe and the Silero model live: next to the installed app they belong to the user, so they go in
+ * the writable per-user folder. In a checkout they stay in the git-ignored vendor/, where the bench scripts find them.
  */
-function analysisTools(): AnalysisTools {
-  const root = app.isPackaged ? process.resourcesPath : app.getAppPath();
-  const vendor = join(root, "vendor");
-  const tools: AnalysisTools = {
-    ffprobe: join(vendor, "ffprobe.exe"),
-    ffmpeg: join(vendor, "ffmpeg.exe"),
-    // Only speech detection needs the model, and the window decides by loudness (ADR-0003).
-    sileroModel: join(vendor, "silero_vad.onnx"),
-  };
-  for (const path of [tools.ffprobe, tools.ffmpeg]) {
-    if (!existsSync(path)) throw new Error(`${path} is missing. Put the ffmpeg build into ${vendor}.`);
-  }
+function toolsDirectory(): string {
+  return app.isPackaged ? join(app.getPath("userData"), "tools") : join(app.getAppPath(), "vendor");
+}
+
+/** The tools, once they have been found or downloaded. Downloading 172 MB is a first-run affair. */
+let tools: AnalysisTools | null = null;
+
+/**
+ * Hands back the tools, downloading what is missing (ADR-0015) and telling the window how far it has got. The
+ * progress is thinned out to whole percent: 172 MB arrive in thousands of chunks, and the window only draws a line.
+ */
+async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
+  if (tools) return tools;
+  let lastPercent = -1;
+  tools = await ensureTools(toolsDirectory(), PINNED_TOOLS, (step) => {
+    const percent = Math.floor((step.receivedBytes / Math.max(step.totalBytes, 1)) * 100);
+    if (percent === lastPercent || window.isDestroyed()) return;
+    lastPercent = percent;
+    window.webContents.send("tools:progress", { ...step, percent });
+  });
   return tools;
 }
 
@@ -47,6 +55,15 @@ function answering<Request, Value>(
 }
 
 function registerHandlers(window: BrowserWindow): void {
+  // Called once when the window opens, so a first run downloads while the user is still reading the window.
+  ipcMain.handle(
+    "tools:ensure",
+    answering(async (): Promise<null> => {
+      await analysisTools(window);
+      return null;
+    }),
+  );
+
   ipcMain.handle(
     "recording:choose",
     answering(async (): Promise<RecordingInfo | null> => {
@@ -62,7 +79,7 @@ function registerHandlers(window: BrowserWindow): void {
       const chosenPath = filePaths[0];
       if (canceled || !chosenPath) return null;
       // Probing reads only the stream descriptions, so this stays instant even on a 20 GB Recording.
-      const recording = await probeRecording(chosenPath, analysisTools().ffprobe);
+      const recording = await probeRecording(chosenPath, (await analysisTools(window)).ffprobe);
       lastCut = null;
       chosen = recording;
       return recording;
@@ -74,7 +91,7 @@ function registerHandlers(window: BrowserWindow): void {
     "recording:scan",
     answering(async (): Promise<SourceTrackScan[]> => {
       if (!chosen) throw new Error("No Recording is chosen, so there are no SourceTracks to listen to.");
-      return scanSourceTracks(chosen, analysisTools().ffmpeg);
+      return scanSourceTracks(chosen, (await analysisTools(window)).ffmpeg);
     }),
   );
 
@@ -82,7 +99,7 @@ function registerHandlers(window: BrowserWindow): void {
     "cut:run",
     answering(async (request: AnalysisRequest): Promise<CutSummary> => {
       lastCut = null;
-      const result = await runCut(request, analysisTools());
+      const result = await runCut(request, await analysisTools(window));
       lastCut = result;
       return result.summary;
     }),

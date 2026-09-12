@@ -1,8 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { SmartTrimApi } from "./api.ts";
+import type { SmartTrimApi, ToolsProgress } from "./api.ts";
 
 // The window runs without Node (contextIsolation), so this is the whole surface it can reach.
 const api: SmartTrimApi = {
+  ensureTools: () => ipcRenderer.invoke("tools:ensure"),
+  onToolsProgress: (listen) => {
+    ipcRenderer.on("tools:progress", (_event, progress: ToolsProgress) => listen(progress));
+  },
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
   scan: () => ipcRenderer.invoke("recording:scan"),
   cut: (request) => ipcRenderer.invoke("cut:run", request),

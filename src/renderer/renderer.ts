@@ -50,6 +50,8 @@ const view = {
 let session: CutSession = newCutSession();
 /** True while the analysis runs, so nothing can be started twice or changed underneath it. */
 let working = false;
+/** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
+let preparing = true;
 /** The finished cut on screen, or null once a setting made it stale. */
 let finished: CutSummary | null = null;
 
@@ -257,11 +259,11 @@ function draw(): void {
   drawSourceTracks();
   drawSettings();
   drawResult();
-  view.chooseRecording.disabled = working;
+  view.chooseRecording.disabled = working || preparing;
   view.threshold.disabled = working;
   view.margin.disabled = working;
   view.deadZone.disabled = working;
-  view.cut.disabled = working || !canCut(session);
+  view.cut.disabled = working || preparing || !canCut(session);
   view.cut.textContent = working ? "Arbeitet …" : "Schneiden";
 }
 
@@ -327,3 +329,15 @@ view.cut.addEventListener("click", async () => {
 });
 
 draw();
+
+// A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
+// and this is over before the window has finished drawing.
+window.smarttrim.onToolsProgress(({ name, percent }) => {
+  view.status.textContent = `Lädt ${name} … ${percent} % (nur beim ersten Start)`;
+});
+void (async () => {
+  const ready = show(await window.smarttrim.ensureTools(), "Die Werkzeuge fehlen");
+  preparing = false;
+  if (ready !== undefined) clearStatus();
+  draw();
+})();
