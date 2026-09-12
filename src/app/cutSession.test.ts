@@ -23,6 +23,7 @@ import {
   applyPreset,
   presetChoice,
   sourceTracksToRead,
+  audioBackInMemory,
   type Preset,
   roleOf,
   setEventLeadSeconds,
@@ -408,6 +409,33 @@ describe("cutSession", () => {
     // Which SourceTrack carries what is a property of the Recording, not of the kind of video.
     expect(podcast.listenTo).toEqual([4]);
     expect(podcast.contentSourceTracks).toEqual([2]);
+  });
+
+  // After a project is opened its audio is read again in the background (ADR-0020). That makes a new threshold a
+  // decision from memory instead of a whole new analysis — but it says nothing about the sliders, and a slider the
+  // user moved while the read ran still needs the plan redone. Marking the cut as freshly planned swallowed that.
+  test("audio read back for an opened project does not pretend the sliders were planned with", () => {
+    const project: TrimProject = {
+      recording: probed(String.raw`C:\Aufnahmen\obs.mp4`, 6),
+      listenTo: [4],
+      exportSourceTracks: [0, 4],
+      decideBy: { kind: "loudness", thresholdDbfs: -40 },
+      marginSeconds: 0.05,
+      minimumDeadZoneSeconds: 0.25,
+      worthKeeping: [{ startSeconds: 1, endSeconds: 2 }],
+    };
+    const opened = projectOpened(newCutSession(), project);
+    // The user nudges a slider while the background read is still running.
+    const nudged = setMinimumDeadZoneSeconds(opened, 1.5);
+    expect(redoNeeded(nudged)).toBe("replan");
+
+    const back = audioBackInMemory(nudged);
+
+    // Still needs replanning: reading the audio again did not plan anything.
+    expect(redoNeeded(back)).toBe("replan");
+    // But a threshold no longer costs a whole new analysis, because the audio is there again.
+    expect(redoNeeded(setThresholdDbfs(back, -47))).toBe("redecide");
+    expect(back.audioInMemory).toBe(true);
   });
 
   test("a SourceTrack given a role has to be read, so its waveform can be shown before any cut", () => {

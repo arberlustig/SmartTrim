@@ -74,6 +74,26 @@ let lastCut: CutResult | null = null;
  * emptied with it; the cut reuses it rather than reading the Recording a second time (ADR-0020).
  */
 const readAudio = new Map<number, MonoPcm>();
+/**
+ * The waveform made from each of those, kept beside it. Building one walks every sample of a SourceTrack — 144
+ * million of them on a 2.5-hour Recording — so it is done once, not on every request.
+ */
+const readWaveforms = new Map<number, SourceTrackWaveform>();
+
+/** Files decoded audio and its waveform together, so no SourceTrack is walked twice to draw the same picture. */
+function keepAudio(position: number, pcm: MonoPcm): SourceTrackWaveform {
+  readAudio.set(position, pcm);
+  const [waveform] = waveformsOf([{ position, pcm }]);
+  readWaveforms.set(position, waveform as SourceTrackWaveform);
+  return waveform as SourceTrackWaveform;
+}
+
+/** The waveforms of the named SourceTracks, making any that is missing from what was read. */
+function waveformsKept(positions: readonly number[]): SourceTrackWaveform[] {
+  return positions.map(
+    (position) => readWaveforms.get(position) ?? keepAudio(position, readAudio.get(position) as MonoPcm),
+  );
+}
 
 /** The Recording on screen, so the scan and the save work on the one the user actually chose. */
 let chosen: RecordingInfo | null = null;
@@ -127,6 +147,7 @@ function registerHandlers(window: BrowserWindow): void {
       chosen = recording;
       // The audio read for the old Recording says nothing about this one.
       readAudio.clear();
+      readWaveforms.clear();
       return recording;
     }),
   );
@@ -162,9 +183,9 @@ function registerHandlers(window: BrowserWindow): void {
         );
         // The user may have chosen another Recording while this ran; that audio belongs to the old one.
         if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-        missing.forEach((position, index) => readAudio.set(position, audio[index] as MonoPcm));
+        missing.forEach((position, index) => keepAudio(position, audio[index] as MonoPcm));
       }
-      return waveformsOf(positions.map((position) => ({ position, pcm: readAudio.get(position) as MonoPcm })));
+      return waveformsKept(positions);
     }),
   );
 
@@ -177,7 +198,7 @@ function registerHandlers(window: BrowserWindow): void {
       const result = await runCut(request, await analysisTools(window), alreadyRead);
       lastCut = result;
       // An analysis may have read more SourceTracks than the waveforms did; keep those too.
-      for (const { position, pcm } of result.decoded) readAudio.set(position, pcm);
+      for (const { position, pcm } of result.decoded) if (!readAudio.has(position)) keepAudio(position, pcm);
       return result.summary;
     }),
   );
@@ -188,7 +209,8 @@ function registerHandlers(window: BrowserWindow): void {
     "cut:waveforms",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no cut to draw a waveform for.");
-      return waveformsOf(lastCut.decoded);
+      for (const { position, pcm } of lastCut.decoded) if (!readAudio.has(position)) keepAudio(position, pcm);
+      return waveformsKept(lastCut.decoded.map(({ position }) => position));
     }),
   );
 
@@ -245,6 +267,9 @@ function registerHandlers(window: BrowserWindow): void {
       const opened = await openTrimProject(text, (await analysisTools(window)).ffprobe);
       lastCut = opened.cut;
       chosen = opened.cut.recording;
+      // Audio read for whatever was open before belongs to that Recording, not to this project's one.
+      readAudio.clear();
+      readWaveforms.clear();
       // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
       // found, never the audio (ADR-0016), so this is the only record of what was listened to.
       reopenedVoice = opened.project.listenTo;
@@ -261,16 +286,30 @@ function registerHandlers(window: BrowserWindow): void {
     "project:readAudio",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no project whose audio could be read.");
-      if (lastCut.decoded.length > 0) return waveformsOf(lastCut.decoded);
+      if (lastCut.decoded.length > 0) return waveformsKept(lastCut.decoded.map(({ position }) => position));
       if (reopenedSourceTracks.length === 0) throw new Error("This project names no SourceTrack to listen to.");
 
-      const { recording } = lastCut;
-      const audio = await decodeSourceTracks(recording, reopenedSourceTracks, (await analysisTools(window)).ffmpeg);
-      const decoded = reopenedSourceTracks.map((position, index) => ({ position, pcm: audio[index] as MonoPcm }));
+      const readingFor = lastCut;
+      const positions = reopenedSourceTracks;
+      const audio = await decodeSourceTracks(
+        readingFor.recording,
+        positions,
+        (await analysisTools(window)).ffmpeg,
+        (done, total) => {
+          if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
+        },
+      );
+      // Another project or Recording may have been opened while this ran; that audio belongs to the old one.
+      if (lastCut !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
+
+      const decoded = positions.map((position, index) => ({ position, pcm: audio[index] as MonoPcm }));
       // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
-      const listened = reopenedVoice.map((position) => audio[reopenedSourceTracks.indexOf(position)] as MonoPcm);
-      lastCut = { ...lastCut, decoded, listened };
-      return waveformsOf(lastCut.decoded);
+      const listened = reopenedVoice.map((position) => audio[positions.indexOf(position)] as MonoPcm);
+      lastCut = { ...readingFor, decoded, listened };
+      // Into the same store the cut reads from, or pressing Schneiden would read the whole Recording again and
+      // break ADR-0004's promise that it is read once.
+      for (const { position, pcm } of decoded) keepAudio(position, pcm);
+      return waveformsKept(positions);
     }),
   );
 

@@ -68,6 +68,29 @@ The cost is a race nobody has hit yet: pressing Schneiden while a waveform read 
 one SourceTrack twice, because the first read has not reached the Map yet. It wastes time, nothing else — the file
 is only ever read, never written (ADR-0006), and both reads produce the same samples.
 
+## What a review found, and what it says about this design
+
+Four real faults, all in the glue rather than in the rules — which is where they would be, since the glue is the
+untested part (ADR-0012). They are worth recording because three of them are the *same* mistake: the reopened
+project path was written before the read-ahead store existed and never joined it.
+
+- **Opening a project read the Recording twice.** `project:readAudio` filed its audio only into `lastCut`, while
+  `cut:run` reuses the `readAudio` store. Press Schneiden after opening and every SourceTrack was decoded again —
+  breaking ADR-0004 on exactly the path this ADR added. It now files into the store, and `project:open` empties the
+  store first, since audio from whatever was open before belongs to that Recording.
+- **No Recording-change guard on that path**, though `sourceTrack:read` has one. Audio decoded for the old project
+  could be grafted onto the new one — "quietly cut on the wrong sound", which this ADR names as the thing to
+  prevent, and which its own reopen path did not prevent.
+- **A refused read retried for ever.** `readWaveforms` recursed with an unchanged list, so a refusal — the very
+  refusal the guard above raises — spawned one ffmpeg on a 23 GB file per turn, unbounded. A refusal now stops.
+- **`cutFinished` after the background read swallowed a replan.** It also stamps the current slider values as the
+  ones the cut was planned with, so a slider moved while the read ran was forgotten. `audioBackInMemory` says only
+  what happened — the audio is back — and is tested for exactly that.
+
+Two smaller ones: the read-ahead list was not replaced when another Recording was chosen mid-read, so the new
+Recording asked for the old one's positions; and `loadWaveforms` *replaced* the waveform list after a cut instead
+of merging, throwing away the read-ahead for every SourceTrack without a role and undoing this ADR's whole point.
+
 ## Not tested, on purpose
 
 The drawing, the progress line and the role dropdown, as with everything visible (ADR-0012). Tested are the two

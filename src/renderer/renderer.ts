@@ -14,6 +14,7 @@ import {
   planSettingsFrom,
   presetChoice,
   sourceTracksToRead,
+  audioBackInMemory,
   projectOpened,
   redoNeeded,
   roleOf,
@@ -34,7 +35,7 @@ import {
   type TrackRole,
 } from "../app/cutSession.ts";
 import { allPresets, presetFromSliders } from "../app/presets.ts";
-import { bandsIn, keptShareByColumn } from "../waveform/cutShape.ts";
+import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
 import type { Answer, SmartTrimApi } from "../preload/api.ts";
@@ -548,8 +549,13 @@ const REMOVED_WAVE = "#7a4046";
 function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: CanvasRenderingContext2D; width: number } {
   const width = Math.max(Math.round(canvas.clientWidth), 1);
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(cssHeight * ratio);
+  const pixels = { width: Math.round(width * ratio), height: Math.round(cssHeight * ratio) };
+  // Assigning width or height throws the bitmap away and makes a new one — about 3.7 MB across the canvases, on
+  // every redraw, and a redraw happens on every slider move. Only do it when the size really changed.
+  if (canvas.width !== pixels.width || canvas.height !== pixels.height) {
+    canvas.width = pixels.width;
+    canvas.height = pixels.height;
+  }
   const paint = canvas.getContext("2d") as CanvasRenderingContext2D;
   paint.setTransform(ratio, 0, 0, ratio, 0, 0);
   paint.clearRect(0, 0, width, cssHeight);
@@ -562,9 +568,19 @@ function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: Can
  * so one column is minutes wide; taking the loudest across the SourceTracks answers "is there any sound here at
  * all", which is what the strip is for.
  */
+/**
+ * The last answer of `overviewPeaks`. It depends only on which waveforms are shown and how wide the strip is —
+ * neither changes when a slider moves — so without this it rescanned 1.08 million peaks on every redraw.
+ */
+let overviewPeaksCache: { key: string; peaks: number[] } | null = null;
+
 function overviewPeaks(columns: number, recordingSeconds: number): number[] {
+  const shown = shownWaveforms();
+  const key = `${columns}|${shown.map((waveform) => waveform.position).join(",")}`;
+  if (overviewPeaksCache?.key === key) return overviewPeaksCache.peaks;
+
   const loudest = new Array<number>(columns).fill(0);
-  for (const waveform of shownWaveforms()) {
+  for (const waveform of shown) {
     for (let column = 0; column < columns; column += 1) {
       const from = Math.floor((column / columns) * recordingSeconds * waveform.peaksPerSecond);
       const to = Math.max(Math.floor(((column + 1) / columns) * recordingSeconds * waveform.peaksPerSecond), from + 1);
@@ -574,6 +590,7 @@ function overviewPeaks(columns: number, recordingSeconds: number): number[] {
       }
     }
   }
+  overviewPeaksCache = { key, peaks: loudest };
   return loudest;
 }
 
@@ -628,19 +645,23 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
   const xOf = (second: number) => ((second - zoom.fromSeconds) / span) * width;
 
   // Without a cut there is nothing to colour: the waveform is a preview of the sound, not of a plan (ADR-0020).
+  const bands = finished ? bandsIn(finished.keptRanges, zoom.fromSeconds, zoom.toSeconds) : [];
   if (!finished) {
     paint.fillStyle = PLAIN_BAND;
     paint.fillRect(0, 0, width, height);
   } else {
-    for (const band of bandsIn(finished.keptRanges, zoom.fromSeconds, zoom.toSeconds)) {
+    for (const band of bands) {
       paint.fillStyle = band.kept ? KEPT_BAND : REMOVED_BAND;
       const from = xOf(band.startSeconds);
       paint.fillRect(from, 0, Math.max(xOf(band.endSeconds) - from, 0.5), height);
     }
   }
 
-  // The waveform itself, one vertical line per pixel column, mirrored around the middle.
+  // The waveform itself, one vertical line per pixel column, mirrored around the middle. The bands are already in
+  // order and cover the window, so one cursor walks them alongside the columns — searching the whole cut for every
+  // column cost millions of comparisons per redraw, and a redraw happens on every slider move.
   const middle = height / 2;
+  let band = 0;
   for (let column = 0; column < width; column += 1) {
     const at = zoom.fromSeconds + (column / width) * span;
     const from = Math.floor(at * waveform.peaksPerSecond);
@@ -650,16 +671,11 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
       const peakHeight = waveform.peaks[peak] as number;
       if (peakHeight > loudest) loudest = peakHeight;
     }
+    while (band + 1 < bands.length && (bands[band] as CutBand).endSeconds <= at) band += 1;
     const half = Math.max(loudest * (height / 2 - 2), 0.5);
-    paint.fillStyle = !finished ? PLAIN_WAVE : keptAt(at) ? KEPT_WAVE : REMOVED_WAVE;
+    paint.fillStyle = !finished ? PLAIN_WAVE : (bands[band] as CutBand).kept ? KEPT_WAVE : REMOVED_WAVE;
     paint.fillRect(column, middle - half, 1, half * 2);
   }
-}
-
-/** Whether the plan keeps this second — what decides the colour of one column of the waveform. */
-function keptAt(second: number): boolean {
-  const ranges = finished?.keptRanges ?? [];
-  return ranges.some((range) => second >= range.startSeconds && second < range.endSeconds);
 }
 
 /** Rebuilds one row per SourceTrack the analysis read, and draws them all. */
@@ -720,6 +736,8 @@ function showWindow(next: ZoomWindow): void {
 
 /** True while a SourceTrack is being read, so two role changes in a row do not start two reads at once. */
 let reading = false;
+/** The SourceTracks being read ahead of anyone asking for them. Belongs to the Recording that is open now. */
+let readAhead: readonly number[] = [];
 /** How far that read has got, for the line the window shows while it runs. */
 let readingCount = { done: 0, total: 0 };
 
@@ -738,11 +756,13 @@ function drawReading(): void {
  * cut needs, only earlier: what it brings in is kept in the main process and the cut reuses it.
  */
 async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
+  // Positions belong to one Recording. Read ahead for a Recording that is no longer open would ask for the old
+  // one's SourceTracks against the new one's file, so the list is replaced rather than added to.
+  if (ahead.length > 0) readAhead = ahead;
   const seconds = recordingSeconds();
   if (reading || !seconds) return;
   const have = waveforms.map((waveform) => waveform.position);
-  // What a role asks for, plus whatever is being read ahead of being asked for.
-  const missing = [...new Set([...sourceTracksToRead(session, have), ...ahead.filter((one) => !have.includes(one))])];
+  const missing = [...new Set([...sourceTracksToRead(session, have), ...readAhead.filter((one) => !have.includes(one))])];
   if (missing.length === 0) return;
 
   reading = true;
@@ -750,18 +770,27 @@ async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
   drawReading();
   const drawn = show(await window.smarttrim.readSourceTracks(missing), "Die Tonspur ließ sich nicht lesen");
   reading = false;
-  if (drawn) {
+  if (!drawn) {
+    // A refusal leaves `missing` exactly as it was, so trying again would ask for the same thing for ever — one
+    // ffmpeg on a 23 GB file per turn. The user retries by giving a role again or choosing the Recording again.
+    readAhead = [];
+    draw();
+    return;
+  }
+  {
     // Everything read is kept, whether or not its role survived the read: that is what makes putting a role back
     // instant. Which of them is drawn is decided by the role, in `drawSourceTracks`.
     waveforms = [...waveforms, ...drawn].filter(
       (waveform, at, all) => all.findIndex((each) => each.position === waveform.position) === at,
     );
     if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: seconds };
-    if (!working) clearStatus();
+    // Only the reading line is cleared. A warning such as "noch einmal schneiden" belongs to the settings, not to
+    // this read, and wiping it would leave stale numbers on screen with nothing saying so.
+    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
   }
   draw();
-  // A role changed while this was running leaves more to read.
-  await readWaveforms(ahead);
+  // A role changed, or another Recording was chosen, while this was running: both leave more to read.
+  await readWaveforms();
 }
 
 /**
@@ -771,8 +800,14 @@ async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
 async function loadWaveforms(recordingSeconds: number): Promise<void> {
   const drawn = show(await window.smarttrim.waveforms(), "Die Wellenform ließ sich nicht zeichnen");
   if (!drawn) return;
-  waveforms = drawn;
-  zoom = { fromSeconds: 0, toSeconds: recordingSeconds };
+  // Merged, not replaced: the analysis only decoded the SourceTracks with a role, while the read-ahead brought in
+  // every one that carries sound. Replacing would throw those away and make switching roles slow again (ADR-0020).
+  waveforms = [...drawn, ...waveforms].filter(
+    (waveform, at, all) => all.findIndex((each) => each.position === waveform.position) === at,
+  );
+  // The zoom is only set up when there was nothing to look at yet. Since the waveform now exists before the cut
+  // (ADR-0020), a user who zoomed to a suspect spot and pressed Schneiden must stay there.
+  if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: recordingSeconds };
   // A full redraw, not just the picture: the SourceTrack rows are what put each waveform's canvas on screen, and
   // they were built while there was still nothing to draw.
   draw();
@@ -970,8 +1005,9 @@ view.chooseRecording.addEventListener("click", async () => {
   if (!recording) return;
   session = chooseRecording(session, recording);
   finished = null;
-  // The waveforms belong to the Recording that was open before this one.
+  // The waveforms and the read-ahead list belong to the Recording that was open before this one.
   waveforms = [];
+  readAhead = [];
   zoom = { fromSeconds: 0, toSeconds: 1 };
   draw();
 
@@ -987,7 +1023,7 @@ view.chooseRecording.addEventListener("click", async () => {
 
   // Every SourceTrack that carries sound is read now, while the user is still deciding what to do with them: it is
   // the same read the cut needs, and choosing a role afterwards then costs nothing (ADR-0020). SourceTracks the
-  // scan found nothing on are left out — reading them would spend time and memory on silence.
+  // scan found nothing on are left out — reading them would spend time and memory on a SourceTrack with no sound.
   await readWaveforms(
     scan.flatMap((sourceTrack, position) => (sourceTrack.carriesSound ? [position] : [])),
   );
@@ -1010,10 +1046,12 @@ view.openProject.addEventListener("click", async () => {
   const drawn = show(await window.smarttrim.readProjectAudio(), "Der Ton ließ sich nicht nachlesen");
   if (drawn) {
     waveforms = drawn;
-    zoom = { fromSeconds: 0, toSeconds: opened.summary.recordingSeconds };
+    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: opened.summary.recordingSeconds };
     // The audio is back in memory, so moving the threshold decides again instead of asking for a whole new cut.
-    session = cutFinished(session);
-    clearStatus();
+    // Not `cutFinished`: that would also claim the sliders as they stand now are what this cut was planned with,
+    // swallowing a replan the user asked for by moving one while the read ran.
+    session = audioBackInMemory(session);
+    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
   }
   draw();
 });

@@ -383,6 +383,15 @@ export function applyPreset(session: CutSession, preset: Preset): CutSession {
 }
 
 /**
+ * Says that the decoded audio is back in memory — after a reopened project's SourceTracks were read again
+ * (ADR-0020). It says nothing about the sliders: a slider moved while that read was running still needs the plan
+ * redone, which `cutFinished` would have swallowed by marking those settings as the ones the cut was made with.
+ */
+export function audioBackInMemory(session: CutSession): CutSession {
+  return { ...session, audioInMemory: true };
+}
+
+/**
  * The SourceTracks whose audio still has to be read, so their waveform can be shown. Every SourceTrack with a
  * role — Voice or Content — needs one, and the read is the same one the cut needs later, only earlier (ADR-0020).
  */

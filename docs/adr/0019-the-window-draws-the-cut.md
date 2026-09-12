@@ -83,6 +83,26 @@ check yesterday's cut by eye and ear.
 `project:readAudio` decodes the SourceTracks the project names while the window is already usable. When it lands,
 the audio is back in memory, so moving the threshold decides again instead of demanding a whole new cut.
 
+## What drawing is allowed to cost
+
+A redraw happens on every slider `input` event, so it has to fit in a frame — 16.7 ms at 60 fps. A review found
+four ways it did not, all measured on the owner's real scale (2.5 hours, 2000 KeepSegments, three waveforms, 803
+columns):
+
+- **Searching the whole cut for every pixel column.** `keptAt` scanned all 2000 kept ranges to colour one column:
+  **34.5 ms per redraw for that scan alone**, before anything was painted. The bands were already computed for the
+  background twenty lines above, in order and covering the window, so one cursor now walks them alongside the
+  columns. `keptAt` is gone.
+- **`overviewPeaks` rescanned 1.08 million peaks per redraw**, though its answer depends only on which waveforms
+  are shown and how wide the strip is — neither changes when a slider moves. Cached on exactly those two.
+- **`canvasBrush` reassigned `canvas.width`/`height` every time**, which throws the bitmap away and allocates a new
+  one — about 3.7 MB per redraw. It only does so now when the size really changed.
+- **The waveform numbers were rebuilt from the PCM on every request** (`waveformsOf` in `cut:waveforms`), walking
+  144 million samples per SourceTrack. The main process now files a SourceTrack's waveform beside its audio when it
+  is read, and hands out the kept one.
+
+Measured after: **8.12 ms per redraw zoomed out, 3.77 ms zoomed in** — the whole redraw, drawing included.
+
 ## Two mistakes worth remembering
 
 `draw()` did not call `drawWaveforms()` for a while: the edit that was supposed to add it silently matched nothing,
