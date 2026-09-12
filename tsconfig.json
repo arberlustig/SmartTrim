@@ -8,6 +8,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    // Relative imports that Node resolves at runtime carry ".ts", so bench/ scripts can run src/ modules directly.
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["src"]
