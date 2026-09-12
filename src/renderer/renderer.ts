@@ -80,11 +80,10 @@ const view = {
   eventTail: element<HTMLInputElement>("eventTail"),
   eventTailValue: element("eventTailValue"),
   cut: element<HTMLButtonElement>("cut"),
-  waveforms: element("waveforms"),
+  cutPicture: element("cutPicture"),
   overview: element<HTMLCanvasElement>("overview"),
   zoom: element<HTMLInputElement>("zoom"),
   zoomValue: element("zoomValue"),
-  waveformRows: element("waveformRows"),
   status: element("status"),
   result: element("result"),
 };
@@ -251,6 +250,16 @@ function drawSourceTracks(): void {
       detail,
     );
     view.sourceTracks.append(row);
+
+    // The waveform of this SourceTrack, right under the dropdown that gave it a role. The canvas element is reused
+    // across redraws rather than made anew: the rows are rebuilt on every draw, and a fresh canvas mid-drag would
+    // lose both the picture and the pointer.
+    const waveform = waveforms.find((each) => each.position === index);
+    if (!waveform) return;
+    const holder = document.createElement("div");
+    holder.className = "waveform";
+    holder.append(waveformCanvas(index));
+    row.append(holder);
   });
   view.sourceTracksHint.replaceChildren();
   const hint = document.createElement("span");
@@ -600,10 +609,26 @@ function keptAt(second: number): boolean {
 }
 
 /** Rebuilds one row per SourceTrack the analysis read, and draws them all. */
+/**
+ * The canvas of one SourceTrack's waveform, made once and kept. The SourceTrack rows are rebuilt on every draw, so
+ * a canvas made fresh each time would be cleared constantly and would drop the pointer in the middle of a drag.
+ */
+const waveformCanvases = new Map<number, HTMLCanvasElement>();
+
+function waveformCanvas(position: number): HTMLCanvasElement {
+  const made = waveformCanvases.get(position);
+  if (made) return made;
+  const canvas = document.createElement("canvas");
+  canvas.dataset["position"] = String(position);
+  canvas.title = `Tonspur ${position + 1} · ziehen zum Verschieben, Mausrad zum Zoomen`;
+  waveformCanvases.set(position, canvas);
+  return canvas;
+}
+
 function drawWaveforms(): void {
   const seconds = finished?.recordingSeconds;
-  view.waveforms.hidden = waveforms.length === 0 || !seconds;
-  if (view.waveforms.hidden) return;
+  view.cutPicture.hidden = waveforms.length === 0 || !seconds;
+  if (view.cutPicture.hidden) return;
 
   view.zoom.min = "0";
   view.zoom.max = "1000";
@@ -616,26 +641,11 @@ function drawWaveforms(): void {
   view.zoom.value = String(Math.round((Math.log(widest / span) / Math.log(widest / closest)) * 1000));
   view.zoomValue.textContent = duration(span);
 
-  if (view.waveformRows.childElementCount !== waveforms.length) {
-    view.waveformRows.replaceChildren();
-    for (const waveform of waveforms) {
-      const row = document.createElement("div");
-      row.className = "waveformRow";
-      const name = document.createElement("span");
-      const role = roleOf(session, waveform.position);
-      name.textContent = `Tonspur ${waveform.position + 1} · ${role === "voice" ? "danach geschnitten" : "Momente behalten"}`;
-      const canvas = document.createElement("canvas");
-      canvas.dataset["position"] = String(waveform.position);
-      row.append(name, canvas);
-      view.waveformRows.append(row);
-    }
+  for (const waveform of waveforms) {
+    const canvas = waveformCanvases.get(waveform.position);
+    // A canvas the row has not put on screen yet has no width to draw into.
+    if (canvas?.isConnected) drawWaveform(canvas, waveform);
   }
-
-  const canvases = [...view.waveformRows.querySelectorAll("canvas")];
-  waveforms.forEach((waveform, index) => {
-    const canvas = canvases[index];
-    if (canvas) drawWaveform(canvas, waveform);
-  });
   drawOverview();
 }
 
@@ -654,7 +664,9 @@ async function loadWaveforms(recordingSeconds: number): Promise<void> {
   if (!drawn) return;
   waveforms = drawn;
   zoom = { fromSeconds: 0, toSeconds: recordingSeconds };
-  drawWaveforms();
+  // A full redraw, not just the picture: the SourceTrack rows are what put each waveform's canvas on screen, and
+  // they were built while there was still nothing to draw.
+  draw();
 }
 
 /** Closes whatever row was open and gives the keyboard back to the dropdown, which would otherwise hold nothing. */
@@ -764,18 +776,42 @@ view.zoom.addEventListener("input", () => {
   showWindow(zoomedTo(zoom, seconds, seconds * (closest / seconds) ** along));
 });
 
-/** Puts the middle of the zoom window where the user clicked in the overview strip. */
-view.overview.addEventListener("click", (event) => {
+/**
+ * The white frame in the overview strip is dragged, not only clicked. Grabbing inside it keeps the spot you took
+ * hold of; grabbing outside it jumps there first and then drags on. Either way the frame follows the pointer while
+ * it moves, rather than appearing somewhere else once the button is let go.
+ */
+view.overview.addEventListener("pointerdown", (event) => {
   const seconds = finished?.recordingSeconds;
   if (!seconds) return;
   const box = view.overview.getBoundingClientRect();
-  const at = ((event.clientX - box.left) / box.width) * seconds;
+  const secondAt = (clientX: number) => ((clientX - box.left) / box.width) * seconds;
+
   const span = zoom.toSeconds - zoom.fromSeconds;
-  showWindow(pannedBy(zoom, seconds, at - (zoom.fromSeconds + span / 2)));
+  const grabbed = secondAt(event.clientX);
+  const insideFrame = grabbed >= zoom.fromSeconds && grabbed < zoom.toSeconds;
+  // Outside the frame the window centres on the pointer; inside it, the pointer keeps its place within the frame.
+  const holdOffset = insideFrame ? grabbed - zoom.fromSeconds : span / 2;
+  view.overview.classList.add("dragging");
+
+  const move = (moved: PointerEvent) => {
+    showWindow(pannedBy(zoom, seconds, secondAt(moved.clientX) - holdOffset - zoom.fromSeconds));
+  };
+  const stop = () => {
+    view.overview.classList.remove("dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  // A press outside the frame should move there at once, not wait for the first movement.
+  move(event);
 });
 
 /** Dragging a waveform sideways slides the window; the wheel zooms around where the pointer is. */
-view.waveformRows.addEventListener("pointerdown", (event) => {
+view.sourceTracks.addEventListener("pointerdown", (event) => {
   const canvas = (event.target as HTMLElement).closest("canvas");
   const seconds = finished?.recordingSeconds;
   if (!canvas || !seconds) return;
@@ -802,7 +838,7 @@ view.waveformRows.addEventListener("pointerdown", (event) => {
   window.addEventListener("pointercancel", stop);
 });
 
-view.waveformRows.addEventListener(
+view.sourceTracks.addEventListener(
   "wheel",
   (event) => {
     const canvas = (event.target as HTMLElement).closest("canvas");

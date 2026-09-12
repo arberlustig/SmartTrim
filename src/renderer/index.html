@@ -155,23 +155,29 @@
       .zoomRow[hidden] {
         display: none;
       }
-      .waveformRow {
-        padding: 6px 0;
+      .overview.dragging {
+        cursor: grabbing;
       }
-      .waveformRow > span {
-        display: block;
-        padding-bottom: 3px;
-        color: var(--muted);
-        font-size: 12px;
+      #cutPicture[hidden] {
+        display: none;
       }
-      .waveformRow canvas {
+      #cutPicture {
+        padding-bottom: 18px;
+      }
+      /* The waveform belongs to the SourceTrack above it, so it sits inside that row rather than in a list of its
+         own. A row with no role has none: SmartTrim never read that SourceTrack. */
+      #sourceTracks .waveform {
+        grid-column: 1 / -1;
+        padding: 4px 0 2px;
+      }
+      #sourceTracks .waveform canvas {
         display: block;
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 6px;
         cursor: grab;
       }
-      .waveformRow canvas.dragging {
+      #sourceTracks .waveform canvas.dragging {
         cursor: grabbing;
       }
       /* `display: grid` below would otherwise beat the browser's own rule for [hidden], leaving the name field and
@@ -297,6 +303,18 @@
 
     <section>
       <h2>Tonspuren</h2>
+      <div id="cutPicture" hidden>
+        <canvas id="overview" class="overview" height="34"></canvas>
+        <div class="zoomRow">
+          <label for="zoom">Ausschnitt</label>
+          <input id="zoom" type="range" />
+          <output id="zoomValue"></output>
+        </div>
+        <p class="hint">
+          Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
+          um woanders hinzuschauen.
+        </p>
+      </div>
       <div id="sourceTracks"></div>
       <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
     </section>
@@ -363,20 +381,6 @@
     </div>
 
     <div id="result" hidden></div>
-
-    <section id="waveforms" hidden>
-      <h2>Der Schnitt</h2>
-      <canvas id="overview" class="overview" height="34"></canvas>
-      <div class="zoomRow">
-        <label for="zoom">Ausschnitt</label>
-        <input id="zoom" type="range" />
-        <output id="zoomValue"></output>
-      </div>
-      <div id="waveformRows"></div>
-      <p class="hint">
-        Grün bleibt stehen, dunkelrot wird herausgeschnitten. Ziehen zum Verschieben, Mausrad zum Zoomen.
-      </p>
-    </section>
 
     <script type="module" src="./renderer.ts"></script>
   </body>

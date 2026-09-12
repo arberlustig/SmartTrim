@@ -1,8 +1,19 @@
 # The window draws the cut: a strip over the whole Recording and a waveform per SourceTrack
 
 The window shows what the cut looks like instead of only saying how many minutes it removes: a thin strip over the
-whole Recording — brightness is how much of that column survives — and under it one zoomable waveform per
-SourceTrack that has a role, with the kept stretches green and the removed ones dark red.
+whole Recording — brightness is how much of that column survives — and **inside each SourceTrack's own row**, right
+under the dropdown that gave it a role, that SourceTrack's zoomable waveform, kept stretches green and removed ones
+dark red.
+
+The waveforms first sat in a section of their own at the bottom. The owner asked for them in the rows instead
+("direkt unter der jeweiligen Spur wenn man das Dropdown auf danach schneiden oder Momente behalten switcht"), and
+that is plainly right: the waveform answers a question about *that* SourceTrack, so it belongs next to it. A row on
+*wird ignoriert* gets none.
+
+Because `drawSourceTracks` rebuilds every row on every draw, the canvases are **kept in a Map and reused** rather
+than made anew. A fresh canvas each draw would blank the picture constantly and would drop the pointer mid-drag.
+The rows are also what put a canvas on screen at all, so loading the waveforms ends in a full `draw()`, not just a
+repaint — otherwise the rows stay as they were built, back when there was nothing to draw.
 
 The owner asked for a "Cut Heatmap" and pointed at QuietCut, whose picture is a waveform with green and red bands
 over it, not a heat strip. Both are here: the strip answers "where is much removed" at a glance, the zoom answers
@@ -71,3 +82,8 @@ that lives elsewhere too.**
 Dragging the waveform used `setPointerCapture`, and when that throws the drag died without a sound. The move and
 release listeners now sit on the window, so a drag survives both a refused capture and a pointer that wanders off
 the canvas.
+
+The frame in the overview strip only answered to `click`, so it stayed put under the pointer and then appeared
+somewhere else on release — the owner called it buggy, and it was. It is dragged now: pressing inside the frame
+keeps the spot you took hold of, pressing outside centres it there at once, and it follows the pointer the whole
+way instead of teleporting at the end.
