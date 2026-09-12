@@ -1,6 +1,8 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { CutSummary, PlanSettings } from "../app/runCut.ts";
+import type { SavedChoices } from "../project/openTrimProject.ts";
+import type { TrimProject } from "../project/trimProject.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
@@ -38,6 +40,10 @@ export interface SmartTrimApi {
    * Returns where it landed.
    */
   save(exportSourceTracks: readonly number[]): Promise<Answer<string | null>>;
+  /** Opens the save dialog and writes the session as a `.smarttrim` project. Returns where it landed. */
+  saveProject(choices: SavedChoices): Promise<Answer<string | null>>;
+  /** Opens a `.smarttrim` project, checking that the Recording it names is still the one it was cut from. */
+  openProject(): Promise<Answer<{ project: TrimProject; summary: CutSummary } | null>>;
   /** Shows a saved file in Explorer. */
   reveal(path: string): Promise<Answer<null>>;
 }

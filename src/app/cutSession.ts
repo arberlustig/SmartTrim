@@ -1,4 +1,6 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
+import type { SavedChoices } from "../project/openTrimProject.ts";
+import type { TrimProject } from "../project/trimProject.ts";
 import type { PlanSettings } from "./runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
@@ -46,6 +48,11 @@ export interface CutSession {
   exportSourceTracks: readonly number[];
   /** The settings the cut on screen was made with, or null while there is none. */
   plannedWith: PlannedWith | null;
+  /**
+   * Whether the audio behind the cut on screen is still decoded and in memory. It is after an analysis, and it is
+   * not after a saved project was reopened: a project holds what the analysis found, not the audio (ADR-0004).
+   */
+  audioInMemory: boolean;
   thresholdDbfs: number;
   marginSeconds: number;
   minimumDeadZoneSeconds: number;
@@ -71,6 +78,7 @@ export function newCutSession(): CutSession {
     listenTo: [],
     exportSourceTracks: [],
     plannedWith: null,
+    audioInMemory: false,
     thresholdDbfs: -40,
     marginSeconds: 0.05,
     minimumDeadZoneSeconds: 0.25,
@@ -94,6 +102,7 @@ export function chooseRecording(
     listenTo: [],
     // Another Recording means the cut on screen belongs to nothing that is still chosen.
     plannedWith: null,
+    audioInMemory: false,
     // What the window shows is what it exports: a SourceTrack hidden as an EmptyTrack would otherwise arrive in
     // Premiere with a tick nobody can see (ADR-0014). Where no scan looked, nothing is dropped.
     exportSourceTracks: recording.sourceTracks
@@ -190,17 +199,51 @@ export function canExport(session: CutSession): boolean {
   return session.exportSourceTracks.length > 0;
 }
 
-/** Remembers that the cut on screen was planned with the settings as they are now. */
-export function cutFinished(session: CutSession): CutSession {
+/** The settings as they are now, as the thing a finished plan belongs to. */
+function settingsNow(session: CutSession): PlannedWith {
   return {
-    ...session,
-    plannedWith: {
-      listenTo: [...session.listenTo],
-      thresholdDbfs: session.thresholdDbfs,
-      marginSeconds: session.marginSeconds,
-      minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
-    },
+    listenTo: [...session.listenTo],
+    thresholdDbfs: session.thresholdDbfs,
+    marginSeconds: session.marginSeconds,
+    minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
   };
+}
+
+/** After an analysis: the cut on screen matches the settings, and the audio it decoded is in memory. */
+export function cutFinished(session: CutSession): CutSession {
+  return { ...session, plannedWith: settingsNow(session), audioInMemory: true };
+}
+
+/**
+ * After a replan or a new decision from the audio already in memory: the plan caught up with the settings. Neither
+ * decodes anything, so whether the audio is in memory is left exactly as it was.
+ */
+export function planFinished(session: CutSession): CutSession {
+  return { ...session, plannedWith: settingsNow(session) };
+}
+
+/**
+ * Puts a saved session back on screen: the Recording it was cut from, what was ticked, the settings it was cut
+ * with. The plan matches those settings, but nothing was decoded — so a new threshold means reading the Recording.
+ */
+export function projectOpened(session: CutSession, project: TrimProject): CutSession {
+  const opened: CutSession = {
+    ...session,
+    recording: project.recording,
+    scan: project.scan ?? null,
+    emptySourceTracksShown: false,
+    listenTo: [...project.listenTo],
+    exportSourceTracks: [...project.exportSourceTracks],
+    // The window only offers the loudness decision (ADR-0003); a project saved with the voice decision keeps the
+    // threshold slider where it was.
+    thresholdDbfs:
+      project.decideBy.kind === "loudness" ? project.decideBy.thresholdDbfs : session.thresholdDbfs,
+    marginSeconds: project.marginSeconds,
+    minimumDeadZoneSeconds: project.minimumDeadZoneSeconds,
+    plannedWith: null,
+    audioInMemory: false,
+  };
+  return { ...opened, plannedWith: settingsNow(opened) };
 }
 
 /** The two settings a replan needs; the rest of a request decides what was found, not how it is planned. */
@@ -223,8 +266,9 @@ export function redoNeeded(session: CutSession): Redo {
     planned.listenTo.length === session.listenTo.length &&
     planned.listenTo.every((position, index) => position === session.listenTo[index]);
   if (!sameSourceTracks) return "analyse";
-  // Deciding again plans as well, so a threshold that moved together with a Margin is still one job.
-  if (planned.thresholdDbfs !== session.thresholdDbfs) return "redecide";
+  // Deciding again plans as well, so a threshold that moved together with a Margin is still one job — but only
+  // while the audio it would be decided from is still in memory.
+  if (planned.thresholdDbfs !== session.thresholdDbfs) return session.audioInMemory ? "redecide" : "analyse";
   if (
     planned.marginSeconds !== session.marginSeconds ||
     planned.minimumDeadZoneSeconds !== session.minimumDeadZoneSeconds
@@ -232,4 +276,16 @@ export function redoNeeded(session: CutSession): Redo {
     return "replan";
   }
   return "nothing";
+}
+
+/** What a saved project records about the session: the choices behind the cut, and the export ticks. */
+export function savedChoicesFrom(session: CutSession): SavedChoices {
+  const choices: SavedChoices = {
+    voiceSourceTracks: [...session.listenTo],
+    exportSourceTracks: [...session.exportSourceTracks],
+    decideBy: { kind: "loudness", thresholdDbfs: session.thresholdDbfs },
+    marginSeconds: session.marginSeconds,
+    minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
+  };
+  return session.scan ? { ...choices, scan: session.scan } : choices;
 }

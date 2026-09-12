@@ -1,0 +1,29 @@
+{
+ "smarttrim": 1,
+ "savedAt": "2026-09-12T10:15:00.000Z",
+ "recording": {
+  "path": "C:/Aufnahmen/obs.mp4",
+  "frameRate": { "numerator": 60, "denominator": 1 },
+  "width": 1920,
+  "height": 1080,
+  "durationFrames": 90838,
+  "sourceTracks": [
+   { "channelCount": 2, "sampleRate": 48000, "bitDepth": 16, "durationFrames": 90838 },
+   { "channelCount": 2, "sampleRate": 48000, "bitDepth": 16, "durationFrames": 90836 }
+  ]
+ },
+ "listenTo": [1],
+ "exportSourceTracks": [0, 1],
+ "scan": [
+  { "carriesSound": true, "peakDbfs": -1.2, "slicesWithSound": 5, "sliceCount": 5 },
+  { "carriesSound": false, "peakDbfs": null, "slicesWithSound": 0, "sliceCount": 5 }
+ ],
+ "decideBy": { "kind": "loudness", "thresholdDbfs": -40 },
+ "marginSeconds": 0.05,
+ "minimumDeadZoneSeconds": 0.25,
+ "worthKeeping": [
+  { "startSeconds": 12.5, "endSeconds": 48.25 },
+  { "startSeconds": 51, "endSeconds": 300.125 },
+  { "startSeconds": 1400, "endSeconds": 1509.5 }
+ ]
+}

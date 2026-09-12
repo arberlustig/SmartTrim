@@ -6,8 +6,11 @@ import {
   canCut,
   canExport,
   cutFinished,
+  planFinished,
   planSettingsFrom,
+  projectOpened,
   redoNeeded,
+  savedChoicesFrom,
   chooseRecording,
   newCutSession,
   setMarginSeconds,
@@ -36,6 +39,7 @@ function element<Kind extends HTMLElement>(id: string): Kind {
 
 const view = {
   chooseRecording: element<HTMLButtonElement>("chooseRecording"),
+  openProject: element<HTMLButtonElement>("openProject"),
   recordingInfo: element("recordingInfo"),
   sourceTracks: element("sourceTracks"),
   sourceTracksHint: element("sourceTracksHint"),
@@ -233,6 +237,8 @@ function drawResult(): void {
   numbers.textContent =
     `${cut.keepSegments.toLocaleString("de-DE")} Teile, ${duration(cut.removedSeconds)} entfernt.`;
 
+  const buttons = document.createElement("div");
+  buttons.className = "buttons";
   const save = document.createElement("button");
   save.className = "primary";
   save.textContent = "Premiere-Datei speichern …";
@@ -254,7 +260,22 @@ function drawResult(): void {
     view.result.append(done, reveal);
   });
 
-  view.result.append(sentence, numbers, save);
+  // The project is what makes tomorrow cheap: it holds what the analysis found, so the Recording is not read again.
+  const saveProject = document.createElement("button");
+  saveProject.textContent = "Projekt speichern …";
+  // While a redo is still pending the numbers on screen and the plan behind them are one step apart.
+  saveProject.disabled = redoNeeded(session) !== "nothing";
+  saveProject.addEventListener("click", async () => {
+    saveProject.disabled = true;
+    clearStatus();
+    const saved = show(await window.smarttrim.saveProject(savedChoicesFrom(session)), "Speichern ging nicht");
+    saveProject.disabled = redoNeeded(session) !== "nothing";
+    if (saved === undefined || saved === null) return;
+    view.status.textContent = `Projekt gespeichert: ${saved}`;
+  });
+
+  buttons.append(save, saveProject);
+  view.result.append(sentence, numbers, buttons);
 }
 
 function draw(): void {
@@ -263,6 +284,7 @@ function draw(): void {
   drawSettings();
   drawResult();
   view.chooseRecording.disabled = working || preparing;
+  view.openProject.disabled = working || preparing;
   view.threshold.disabled = working;
   view.margin.disabled = working;
   view.deadZone.disabled = working;
@@ -320,7 +342,7 @@ async function redoNow(): Promise<void> {
       now.marginSeconds === used.marginSeconds &&
       now.minimumDeadZoneSeconds === used.minimumDeadZoneSeconds
     ) {
-      session = cutFinished(session);
+      session = planFinished(session);
       clearStatus();
     }
   }
@@ -364,6 +386,17 @@ view.chooseRecording.addEventListener("click", async () => {
     session = chooseRecording(session, recording, scan);
     clearStatus();
   }
+  draw();
+});
+
+view.openProject.addEventListener("click", async () => {
+  clearStatus();
+  const opened = show(await window.smarttrim.openProject(), "Das Projekt ließ sich nicht öffnen");
+  // undefined is a refusal, null means the user closed the dialog.
+  if (!opened) return;
+  session = projectOpened(session, opened.project);
+  finished = opened.summary;
+  clearStatus();
   draw();
 });
 

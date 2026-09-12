@@ -13,6 +13,8 @@ const api: SmartTrimApi = {
   replan: (settings) => ipcRenderer.invoke("cut:replan", settings),
   redecide: (settings) => ipcRenderer.invoke("cut:redecide", settings),
   save: (exportSourceTracks) => ipcRenderer.invoke("cut:save", exportSourceTracks),
+  saveProject: (choices) => ipcRenderer.invoke("project:save", choices),
+  openProject: () => ipcRenderer.invoke("project:open"),
   reveal: (path) => ipcRenderer.invoke("file:reveal", path),
 };
 

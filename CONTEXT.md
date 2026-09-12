@@ -95,7 +95,7 @@ One audio track in the exported Premiere sequence. Premiere explodes every stere
 _Avoid_: track, output track
 
 **TrimProject**:
-SmartTrim's own saved file, holding the Recording reference, TrackRoles, settings and CutPlan, so that a session can be reopened and re-exported without analysing the Recording again.
+SmartTrim's own saved file (`.smarttrim`), holding the Recording as probed, what was ticked, the settings and the stretches the analysis found worth keeping — so that a session can be reopened and re-exported without analysing the Recording again. Neither the CutPlan nor the decoded audio is in it: the plan is recomputed, and a new threshold needs a fresh read (ADR-0016).
 _Avoid_: project file, session, save file
 
 **Cut** (verb):

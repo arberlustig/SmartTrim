@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
+import type { TrimProject } from "../project/trimProject";
 import type { SourceTrackScan } from "../scan/scanSourceTracks";
 import {
   analysisRequestFrom,
@@ -8,6 +9,9 @@ import {
   newCutSession,
   canExport,
   cutFinished,
+  planFinished,
+  projectOpened,
+  savedChoicesFrom,
   planSettingsFrom,
   redoNeeded,
   revealEmptySourceTracks,
@@ -248,5 +252,69 @@ describe("cutSession", () => {
     const switched = toggleSourceTrack(chooseRecording(planned, probed(String.raw`C:\Aufnahmen\other.mp4`, 2)), 0);
 
     expect(redoNeeded(switched)).toBe("analyse");
+  });
+
+  // A saved project holds what the analysis found, not the audio it found it in (ADR-0004). So Luft and Pause still
+  // cost nothing after reopening, while another threshold has to read the Recording again.
+  test("a reopened project replans for free, but a new threshold needs the Recording read again", () => {
+    const recording = probed(String.raw`C:\Aufnahmen\obs.mp4`, 6);
+    const saved: TrimProject = {
+      recording,
+      listenTo: [4],
+      exportSourceTracks: [0, 4],
+      scan: scanned([true, false, true, false, true, true]),
+      decideBy: { kind: "loudness", thresholdDbfs: -45 },
+      marginSeconds: 0.2,
+      minimumDeadZoneSeconds: 1.2,
+      worthKeeping: [{ startSeconds: 1, endSeconds: 2 }],
+    };
+
+    const session = projectOpened(newCutSession(), saved);
+
+    // Everything the user had chosen is back on screen.
+    expect(session.recording?.path).toBe(recording.path);
+    expect(session.listenTo).toEqual([4]);
+    expect(session.exportSourceTracks).toEqual([0, 4]);
+    expect(session.thresholdDbfs).toBe(-45);
+    expect(session.marginSeconds).toBe(0.2);
+    expect(session.minimumDeadZoneSeconds).toBe(1.2);
+    expect(visibleSourceTracks(session)).toEqual([0, 2, 4, 5]);
+    expect(redoNeeded(session)).toBe("nothing");
+
+    expect(redoNeeded(setMarginSeconds(session, 0.05))).toBe("replan");
+    // Nothing was decoded, so this one cannot be decided from memory.
+    expect(redoNeeded(setThresholdDbfs(session, -40))).toBe("analyse");
+  });
+
+  // Replanning and deciding again catch the plan up with the settings; neither of them decodes anything, so
+  // whether the audio is in memory is left exactly as it was.
+  test("a replan after reopening does not pretend the audio is back", () => {
+    const cut = cutFinished(toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4));
+    expect(redoNeeded(setThresholdDbfs(cut, -45))).toBe("redecide");
+
+    const replanned = planFinished(setMarginSeconds(cut, 0.3));
+    expect(redoNeeded(replanned)).toBe("nothing");
+    expect(redoNeeded(setThresholdDbfs(replanned, -45))).toBe("redecide");
+  });
+
+  // Saving has to describe the cut that is on screen: the SourceTracks it listened to and the settings it was made
+  // with, plus the export ticks, which the file remembers even though they had no say in the plan (ADR-0014).
+  test("what gets saved is what the cut on screen was made of", () => {
+    let session = chooseRecording(
+      newCutSession(),
+      probed(String.raw`C:\Aufnahmen\obs.mp4`, 6),
+      scanned([true, false, true, false, true, true]),
+    );
+    session = cutFinished(setThresholdDbfs(toggleSourceTrack(session, 4), -45));
+    session = toggleExportSourceTrack(session, 0);
+
+    expect(savedChoicesFrom(session)).toEqual({
+      voiceSourceTracks: [4],
+      exportSourceTracks: [2, 4, 5],
+      decideBy: { kind: "loudness", thresholdDbfs: -45 },
+      marginSeconds: 0.05,
+      minimumDeadZoneSeconds: 0.25,
+      scan: scanned([true, false, true, false, true, true]),
+    });
   });
 });

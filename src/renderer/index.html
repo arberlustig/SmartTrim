@@ -170,6 +170,12 @@
       #result p {
         margin: 0 0 12px;
       }
+      #result .buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
       #result .numbers {
         color: var(--muted);
         font-variant-numeric: tabular-nums;
@@ -184,6 +190,7 @@
       <h2>Aufnahme</h2>
       <div class="recording">
         <button id="chooseRecording">Aufnahme wählen …</button>
+        <button id="openProject">Projekt öffnen …</button>
         <div id="recordingInfo">Noch keine Aufnahme gewählt.</div>
       </div>
     </section>

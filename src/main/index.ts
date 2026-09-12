@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
@@ -14,6 +15,13 @@ import {
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Answer } from "../preload/api.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
+import {
+  openTrimProject,
+  saveTrimProject,
+  trimProjectOf,
+  type SavedChoices,
+} from "../project/openTrimProject.ts";
+import type { TrimProject } from "../project/trimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
 import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
@@ -131,6 +139,42 @@ function registerHandlers(window: BrowserWindow): void {
       if (!lastCut) throw new Error("There is no cut to decide again. Press Schneiden first.");
       lastCut = redecideCut(lastCut, settings.thresholdDbfs, settings);
       return lastCut.summary;
+    }),
+  );
+
+  // The saved project holds what the analysis found, so tomorrow's session starts from it instead of from the file.
+  ipcMain.handle(
+    "project:save",
+    answering(async (choices: SavedChoices): Promise<string | null> => {
+      if (!lastCut) throw new Error("There is no finished cut to save. Press Schneiden first.");
+      const { recording } = lastCut;
+      const { canceled, filePath } = await dialog.showSaveDialog(window, {
+        title: "SmartTrim-Projekt speichern",
+        defaultPath: join(dirname(recording.path), `${basename(recording.path, extname(recording.path))}.smarttrim`),
+        filters: [{ name: "SmartTrim-Projekt", extensions: ["smarttrim"] }],
+      });
+      if (canceled || !filePath) return null;
+      await saveTrimProject(filePath, trimProjectOf(lastCut, choices));
+      return filePath;
+    }),
+  );
+
+  ipcMain.handle(
+    "project:open",
+    answering(async (): Promise<{ project: TrimProject; summary: CutSummary } | null> => {
+      const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+        title: "SmartTrim-Projekt öffnen",
+        properties: ["openFile"],
+        filters: [{ name: "SmartTrim-Projekt", extensions: ["smarttrim"] }],
+      });
+      const chosenPath = filePaths[0];
+      if (canceled || !chosenPath) return null;
+      const text = await readFile(chosenPath, "utf8");
+      // Only the stream descriptions are read, to make sure it is still the Recording the project was cut from.
+      const opened = await openTrimProject(text, (await analysisTools(window)).ffprobe);
+      lastCut = opened.cut;
+      chosen = opened.cut.recording;
+      return { project: opened.project, summary: opened.cut.summary };
     }),
   );
 
