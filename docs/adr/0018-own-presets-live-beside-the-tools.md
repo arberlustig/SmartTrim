@@ -79,6 +79,19 @@ application and back. Two causes, both removed:
   the window unfocused. Questions are now a row inside the window. **No renderer code calls `confirm` or `alert`
   any more**, and nothing should: the same bug comes back with the next one.
 
+## Hiding a row needs its own CSS rule
+
+`.preset { display: grid }` beats the browser's own `[hidden] { display: none }`, because an author rule outranks
+the user-agent one. Setting `.hidden = true` on those rows therefore changed the property and nothing else: the
+name field and the question row stood on screen permanently, 126 and 85 pixels of them. The owner found it — the
+question "„Abend" löschen?" stayed put after they had answered it.
+
+`.preset[hidden] { display: none }` fixes it. Any element given a `display` of its own needs the same rule.
+
+The harness check missed this because it read `element.hidden`, the property it had just set — a test that agrees
+with the code by construction. Checking the window now means reading `getComputedStyle(...).display` and the
+painted height instead.
+
 ## The three buttons
 
 **+** makes a new Preset from the sliders and asks for a name. **sichern** appears only while a Preset of the

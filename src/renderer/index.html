@@ -138,6 +138,11 @@
         color: var(--muted);
         font-size: 13px;
       }
+      /* `display: grid` below would otherwise beat the browser's own rule for [hidden], leaving the name field and
+         the question row on screen for good. Every element with a display of its own needs this. */
+      .preset[hidden] {
+        display: none;
+      }
       .preset {
         display: grid;
         grid-template-columns: 200px 1fr;
