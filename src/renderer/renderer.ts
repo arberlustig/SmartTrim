@@ -13,6 +13,7 @@ import {
   planFinished,
   planSettingsFrom,
   presetChoice,
+  sourceTracksToRead,
   projectOpened,
   redoNeeded,
   roleOf,
@@ -152,6 +153,16 @@ function say(message: string): void {
   view.status.classList.add("bad");
 }
 
+/**
+ * How long the Recording is, in seconds. Taken from the Recording itself rather than from the cut, because the
+ * waveform is drawn as soon as a SourceTrack gets a role — long before there is a cut (ADR-0020).
+ */
+function recordingSeconds(): number | null {
+  const { recording } = session;
+  if (!recording) return null;
+  return (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
+}
+
 function fileName(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
@@ -238,6 +249,8 @@ function drawSourceTracks(): void {
       session = setSourceTrackRole(session, index, role.value as TrackRole);
       afterSettingChange();
       draw();
+      // A SourceTrack that just got a role shows its waveform straight away, before anything is cut (ADR-0020).
+      void readWaveforms();
     });
 
     row.append(
@@ -254,7 +267,9 @@ function drawSourceTracks(): void {
     // The waveform of this SourceTrack, right under the dropdown that gave it a role. The canvas element is reused
     // across redraws rather than made anew: the rows are rebuilt on every draw, and a fresh canvas mid-drag would
     // lose both the picture and the pointer.
-    const waveform = waveforms.find((each) => each.position === index);
+    // Only a SourceTrack that has a role shows one. What was read for it stays in memory either way, so taking the
+    // role away and putting it back costs no second read (ADR-0020).
+    const waveform = roleOf(session, index) === "ignored" ? undefined : waveforms.find((each) => each.position === index);
     if (!waveform) return;
     const holder = document.createElement("div");
     holder.className = "waveform";
@@ -524,6 +539,9 @@ view.preset.addEventListener("change", () => {
 const KEPT_BAND = "#1f3a2e";
 const REMOVED_BAND = "#2a1416";
 const KEPT_WAVE = "#7fd6b4";
+/** Before anything is cut there is nothing to colour, so the waveform is drawn plain (ADR-0020). */
+const PLAIN_BAND = "#1c1f25";
+const PLAIN_WAVE = "#8b96a3";
 const REMOVED_WAVE = "#7a4046";
 
 /** Draws one canvas at the screen's own pixel density, and hands back its context and size in CSS pixels. */
@@ -540,18 +558,19 @@ function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: Can
 
 /** The strip over the whole Recording: brightness is how much of that column survives, plus the zoom window. */
 function drawOverview(): void {
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   if (!seconds) return;
   const height = 34;
   const { paint, width } = canvasBrush(view.overview, height);
 
-  paint.fillStyle = REMOVED_BAND;
+  // Without a cut the strip is only a ruler for the zoom below: an empty one would claim everything is removed.
+  paint.fillStyle = finished ? REMOVED_BAND : PLAIN_BAND;
   paint.fillRect(0, 0, width, height);
 
-  const share = keptShareByColumn(finished?.keptRanges ?? [], seconds, width);
+  const share = finished ? keptShareByColumn(finished.keptRanges, seconds, width) : [];
   for (let column = 0; column < width; column += 1) {
     const kept = share[column] as number;
-    if (kept <= 0) continue;
+    if (!(kept > 0)) continue;
     // Full columns reach the top; a column half removed is drawn half as tall and dimmer.
     paint.fillStyle = KEPT_BAND;
     paint.fillRect(column, 0, 1, height);
@@ -571,18 +590,23 @@ function drawOverview(): void {
 
 /** One SourceTrack's waveform across the zoom window, with the cut painted behind it. */
 function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform): void {
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   if (!seconds) return;
   const height = 66;
   const { paint, width } = canvasBrush(canvas, height);
   const span = zoom.toSeconds - zoom.fromSeconds;
   const xOf = (second: number) => ((second - zoom.fromSeconds) / span) * width;
 
-  const bands = bandsIn(finished?.keptRanges ?? [], zoom.fromSeconds, zoom.toSeconds);
-  for (const band of bands) {
-    paint.fillStyle = band.kept ? KEPT_BAND : REMOVED_BAND;
-    const from = xOf(band.startSeconds);
-    paint.fillRect(from, 0, Math.max(xOf(band.endSeconds) - from, 0.5), height);
+  // Without a cut there is nothing to colour: the waveform is a preview of the sound, not of a plan (ADR-0020).
+  if (!finished) {
+    paint.fillStyle = PLAIN_BAND;
+    paint.fillRect(0, 0, width, height);
+  } else {
+    for (const band of bandsIn(finished.keptRanges, zoom.fromSeconds, zoom.toSeconds)) {
+      paint.fillStyle = band.kept ? KEPT_BAND : REMOVED_BAND;
+      const from = xOf(band.startSeconds);
+      paint.fillRect(from, 0, Math.max(xOf(band.endSeconds) - from, 0.5), height);
+    }
   }
 
   // The waveform itself, one vertical line per pixel column, mirrored around the middle.
@@ -597,7 +621,7 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
       if (peakHeight > loudest) loudest = peakHeight;
     }
     const half = Math.max(loudest * (height / 2 - 2), 0.5);
-    paint.fillStyle = keptAt(at) ? KEPT_WAVE : REMOVED_WAVE;
+    paint.fillStyle = !finished ? PLAIN_WAVE : keptAt(at) ? KEPT_WAVE : REMOVED_WAVE;
     paint.fillRect(column, middle - half, 1, half * 2);
   }
 }
@@ -626,7 +650,7 @@ function waveformCanvas(position: number): HTMLCanvasElement {
 }
 
 function drawWaveforms(): void {
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   view.cutPicture.hidden = waveforms.length === 0 || !seconds;
   if (view.cutPicture.hidden) return;
 
@@ -653,6 +677,42 @@ function drawWaveforms(): void {
 function showWindow(next: ZoomWindow): void {
   zoom = next;
   drawWaveforms();
+}
+
+/** True while a SourceTrack is being read, so two role changes in a row do not start two reads at once. */
+let reading = false;
+
+/**
+ * Reads whatever SourceTrack has a role and no waveform yet, and draws it (ADR-0020). This is the same read the
+ * cut needs, only earlier: what it brings in is kept in the main process and the cut reuses it.
+ */
+async function readWaveforms(): Promise<void> {
+  const seconds = recordingSeconds();
+  if (reading || !seconds) return;
+  const missing = sourceTracksToRead(
+    session,
+    waveforms.map((waveform) => waveform.position),
+  );
+  if (missing.length === 0) return;
+
+  reading = true;
+  const names = missing.map((position) => `Tonspur ${position + 1}`).join(" und ");
+  view.status.textContent = `Liest ${names} für die Wellenform …`;
+  view.status.classList.remove("bad");
+  const drawn = show(await window.smarttrim.readSourceTracks(missing), "Die Tonspur ließ sich nicht lesen");
+  reading = false;
+  if (drawn) {
+    // Everything read is kept, whether or not its role survived the read: that is what makes putting a role back
+    // instant. Which of them is drawn is decided by the role, in `drawSourceTracks`.
+    waveforms = [...waveforms, ...drawn].filter(
+      (waveform, at, all) => all.findIndex((each) => each.position === waveform.position) === at,
+    );
+    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: seconds };
+    if (!working) clearStatus();
+  }
+  draw();
+  // A role changed while this was running leaves more to read.
+  await readWaveforms();
 }
 
 /**
@@ -768,7 +828,7 @@ view.deletePreset.addEventListener("click", () => {
 /* ── Zooming, dragging and the strip ───────────────────────────────────────────────────────────────────────── */
 
 view.zoom.addEventListener("input", () => {
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   if (!seconds) return;
   const closest = Math.min(CLOSEST_WINDOW_SECONDS, seconds);
   // The slider is a ratio, not a number of seconds: 0 is the whole Recording, 1000 is the closest zoom.
@@ -782,7 +842,7 @@ view.zoom.addEventListener("input", () => {
  * it moves, rather than appearing somewhere else once the button is let go.
  */
 view.overview.addEventListener("pointerdown", (event) => {
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   if (!seconds) return;
   const box = view.overview.getBoundingClientRect();
   const secondAt = (clientX: number) => ((clientX - box.left) / box.width) * seconds;
@@ -813,7 +873,7 @@ view.overview.addEventListener("pointerdown", (event) => {
 /** Dragging a waveform sideways slides the window; the wheel zooms around where the pointer is. */
 view.sourceTracks.addEventListener("pointerdown", (event) => {
   const canvas = (event.target as HTMLElement).closest("canvas");
-  const seconds = finished?.recordingSeconds;
+  const seconds = recordingSeconds();
   if (!canvas || !seconds) return;
   const box = canvas.getBoundingClientRect();
   let lastX = event.clientX;
@@ -842,7 +902,7 @@ view.sourceTracks.addEventListener(
   "wheel",
   (event) => {
     const canvas = (event.target as HTMLElement).closest("canvas");
-    const seconds = finished?.recordingSeconds;
+    const seconds = recordingSeconds();
     if (!canvas || !seconds) return;
     event.preventDefault();
     const span = zoom.toSeconds - zoom.fromSeconds;
@@ -861,6 +921,9 @@ view.chooseRecording.addEventListener("click", async () => {
   if (!recording) return;
   session = chooseRecording(session, recording);
   finished = null;
+  // The waveforms belong to the Recording that was open before this one.
+  waveforms = [];
+  zoom = { fromSeconds: 0, toSeconds: 1 };
   draw();
 
   // The slices take a few seconds on a long Recording, so the Recording is on screen before they are measured.
@@ -902,9 +965,8 @@ view.cut.addEventListener("click", async () => {
   clearStatus();
   working = true;
   finished = null;
-  // The old waveforms belong to the old analysis. Left on screen they would draw one Recording's sound under
-  // another Recording's cut.
-  waveforms = [];
+  // The waveforms are kept: they belong to this Recording and this analysis reuses the very audio they were drawn
+  // from (ADR-0020). They simply lose their colours until the new plan arrives.
   draw();
   view.status.textContent = "Liest die Aufnahme …";
   const summary = show(await window.smarttrim.cut(analysisRequestFrom(session)), "Der Schnitt ging nicht");

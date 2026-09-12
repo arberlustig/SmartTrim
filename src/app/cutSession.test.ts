@@ -22,6 +22,7 @@ import {
   PRESETS,
   applyPreset,
   presetChoice,
+  sourceTracksToRead,
   type Preset,
   roleOf,
   setEventLeadSeconds,
@@ -407,6 +408,35 @@ describe("cutSession", () => {
     // Which SourceTrack carries what is a property of the Recording, not of the kind of video.
     expect(podcast.listenTo).toEqual([4]);
     expect(podcast.contentSourceTracks).toEqual([2]);
+  });
+
+  test("a SourceTrack given a role has to be read, so its waveform can be shown before any cut", () => {
+    const chosen = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+
+    expect(sourceTracksToRead(chosen, [])).toEqual([]);
+    expect(sourceTracksToRead(setSourceTrackRole(chosen, 4, "voice"), [])).toEqual([4]);
+  });
+
+  // Reading a SourceTrack of a 2.5-hour Recording takes about a minute. Doing it twice for the same one, or
+  // throwing it away because the user tried another role for a moment, would cost that minute for nothing.
+  test("a SourceTrack that was already read is never read again", () => {
+    const chosen = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    const listening = setSourceTrackRole(setSourceTrackRole(chosen, 4, "voice"), 2, "content");
+
+    expect(sourceTracksToRead(listening, [])).toEqual([2, 4]);
+    expect(sourceTracksToRead(listening, [4])).toEqual([2]);
+    expect(sourceTracksToRead(listening, [2, 4])).toEqual([]);
+
+    // Taking the role away again asks for nothing, and putting it back asks for nothing either: it is still read.
+    const ignored = setSourceTrackRole(listening, 4, "ignored");
+    expect(sourceTracksToRead(ignored, [2, 4])).toEqual([]);
+    expect(sourceTracksToRead(setSourceTrackRole(ignored, 4, "voice"), [2, 4])).toEqual([]);
+  });
+
+  test("SourceTracks nobody gave a role are never read", () => {
+    const chosen = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+
+    expect(sourceTracksToRead(setSourceTrackRole(chosen, 4, "ignored"), [])).toEqual([]);
   });
 
   test("a fresh session has the Gaming Preset chosen, with nothing changed on it yet", () => {

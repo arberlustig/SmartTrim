@@ -120,8 +120,17 @@ export function replanCut(cut: CutResult, settings: PlanSettings): CutResult {
  * The whole job behind the Schneiden button: analyse the Recording and measure the plan it produced. The Recording
  * is only read (ADR-0006), and nothing is written until the user picks a place to save.
  */
-export async function runCut(request: AnalysisRequest, tools: AnalysisTools): Promise<CutResult> {
-  const { recording, listened, decoded, worthKeeping, contentEvents, cutPlan } = await analyseRecording(request, tools);
+export async function runCut(
+  request: AnalysisRequest,
+  tools: AnalysisTools,
+  /** What the window already read to draw the waveforms; those SourceTracks are not read again (ADR-0020). */
+  alreadyRead: readonly DecodedSourceTrack[] = [],
+): Promise<CutResult> {
+  const { recording, listened, decoded, worthKeeping, contentEvents, cutPlan } = await analyseRecording(
+    request,
+    tools,
+    alreadyRead,
+  );
   return {
     recording,
     listened,
@@ -148,11 +157,11 @@ export interface SourceTrackWaveform {
 export const PEAKS_PER_SECOND = 20;
 
 /**
- * The waveforms for every SourceTrack the analysis decoded. Computed on demand rather than kept in the CutResult:
- * a replan changes the colours, never the shape of the sound, so the window asks for these once.
+ * The waveforms of decoded SourceTracks. Computed on demand rather than kept anywhere: a replan changes the
+ * colours drawn over a waveform, never its shape, so the window asks for these once per SourceTrack.
  */
-export function waveformsOf(cut: CutResult): SourceTrackWaveform[] {
-  return cut.decoded.map(({ position, pcm }) => ({
+export function waveformsOf(decoded: readonly DecodedSourceTrack[]): SourceTrackWaveform[] {
+  return decoded.map(({ position, pcm }) => ({
     position,
     peaksPerSecond: PEAKS_PER_SECOND,
     peaks: peakEnvelope(pcm, PEAKS_PER_SECOND),

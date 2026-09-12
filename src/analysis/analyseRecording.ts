@@ -50,6 +50,11 @@ export interface AnalysisTools {
 export async function analyseRecording(
   request: AnalysisRequest,
   tools: AnalysisTools,
+  /**
+   * SourceTracks whose audio the window already read to draw their waveform (ADR-0020). Only the ones missing from
+   * here are read from the Recording, which is what keeps ADR-0004's promise that it is read once, not twice.
+   */
+  alreadyRead: readonly DecodedSourceTrack[] = [],
 ): Promise<{
   recording: RecordingInfo;
   /** The decoded Voice SourceTracks, kept so another threshold can be tried without a new read (ADR-0004). */
@@ -74,8 +79,13 @@ export async function analyseRecording(
   // for (ADR-0004). A SourceTrack named twice is decoded once.
   const content = request.contentSourceTracks ?? [];
   const decoded = [...new Set([...request.voiceSourceTracks, ...content])];
-  const audio = await decodeSourceTracks(recording, decoded, tools.ffmpeg);
-  const audioOf = (position: number) => audio[decoded.indexOf(position)] as MonoPcm;
+  // Only what nobody has read yet. A SourceTrack the waveform already needed is taken as it is, so the Recording
+  // is still read once for it and not twice (ADR-0004, ADR-0020).
+  const known = new Map(alreadyRead.map(({ position, pcm }) => [position, pcm]));
+  const toRead = decoded.filter((position) => !known.has(position));
+  const fresh = toRead.length === 0 ? [] : await decodeSourceTracks(recording, toRead, tools.ffmpeg);
+  toRead.forEach((position, index) => known.set(position, fresh[index] as MonoPcm));
+  const audioOf = (position: number) => known.get(position) as MonoPcm;
 
   const listened = request.voiceSourceTracks.map(audioOf);
   const decodedByPosition = decoded.map((position) => ({ position, pcm: audioOf(position) }));

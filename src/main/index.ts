@@ -69,6 +69,12 @@ async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
 
 /** The finished cut waits here for the user to choose where to save it, so the plan never crosses into the window. */
 let lastCut: CutResult | null = null;
+/**
+ * The audio read for the waveforms, by SourceTrack position. It belongs to the Recording in `chosen` and is
+ * emptied with it; the cut reuses it rather than reading the Recording a second time (ADR-0020).
+ */
+const readAudio = new Map<number, MonoPcm>();
+
 /** The Recording on screen, so the scan and the save work on the one the user actually chose. */
 let chosen: RecordingInfo | null = null;
 /**
@@ -119,6 +125,8 @@ function registerHandlers(window: BrowserWindow): void {
       const recording = await probeRecording(chosenPath, (await analysisTools(window)).ffprobe);
       lastCut = null;
       chosen = recording;
+      // The audio read for the old Recording says nothing about this one.
+      readAudio.clear();
       return recording;
     }),
   );
@@ -132,12 +140,34 @@ function registerHandlers(window: BrowserWindow): void {
     }),
   );
 
+  /**
+   * Reads the SourceTracks the window names, so their waveform can be drawn before anything is cut (ADR-0020).
+   * What is read stays here for the rest of the Recording: the cut below reuses it instead of reading again, and a
+   * role the user took away and put back costs nothing.
+   */
+  ipcMain.handle(
+    "sourceTrack:read",
+    answering(async (positions: readonly number[]): Promise<SourceTrackWaveform[]> => {
+      if (!chosen) throw new Error("No Recording is chosen, so there is no SourceTrack to read.");
+      const missing = positions.filter((position) => !readAudio.has(position));
+      if (missing.length > 0) {
+        const audio = await decodeSourceTracks(chosen, missing, (await analysisTools(window)).ffmpeg);
+        missing.forEach((position, index) => readAudio.set(position, audio[index] as MonoPcm));
+      }
+      return waveformsOf(positions.map((position) => ({ position, pcm: readAudio.get(position) as MonoPcm })));
+    }),
+  );
+
   ipcMain.handle(
     "cut:run",
     answering(async (request: AnalysisRequest): Promise<CutSummary> => {
       lastCut = null;
-      const result = await runCut(request, await analysisTools(window));
+      // Whatever the waveforms already read is handed over, so the Recording is read once and not twice.
+      const alreadyRead = [...readAudio].map(([position, pcm]) => ({ position, pcm }));
+      const result = await runCut(request, await analysisTools(window), alreadyRead);
       lastCut = result;
+      // An analysis may have read more SourceTracks than the waveforms did; keep those too.
+      for (const { position, pcm } of result.decoded) readAudio.set(position, pcm);
       return result.summary;
     }),
   );
@@ -148,7 +178,7 @@ function registerHandlers(window: BrowserWindow): void {
     "cut:waveforms",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no cut to draw a waveform for.");
-      return waveformsOf(lastCut);
+      return waveformsOf(lastCut.decoded);
     }),
   );
 
@@ -221,7 +251,7 @@ function registerHandlers(window: BrowserWindow): void {
     "project:readAudio",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no project whose audio could be read.");
-      if (lastCut.decoded.length > 0) return waveformsOf(lastCut);
+      if (lastCut.decoded.length > 0) return waveformsOf(lastCut.decoded);
       if (reopenedSourceTracks.length === 0) throw new Error("This project names no SourceTrack to listen to.");
 
       const { recording } = lastCut;
@@ -230,7 +260,7 @@ function registerHandlers(window: BrowserWindow): void {
       // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
       const listened = reopenedVoice.map((position) => audio[reopenedSourceTracks.indexOf(position)] as MonoPcm);
       lastCut = { ...lastCut, decoded, listened };
-      return waveformsOf(lastCut);
+      return waveformsOf(lastCut.decoded);
     }),
   );
 

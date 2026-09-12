@@ -9,6 +9,7 @@ const api: SmartTrimApi = {
   },
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
   scan: () => ipcRenderer.invoke("recording:scan"),
+  readSourceTracks: (positions) => ipcRenderer.invoke("sourceTrack:read", positions),
   cut: (request) => ipcRenderer.invoke("cut:run", request),
   waveforms: () => ipcRenderer.invoke("cut:waveforms"),
   replan: (settings) => ipcRenderer.invoke("cut:replan", settings),

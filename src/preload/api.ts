@@ -30,6 +30,11 @@ export interface SmartTrimApi {
   chooseRecording(): Promise<Answer<RecordingInfo | null>>;
   /** Listens to a few slices of every SourceTrack of the chosen Recording, to find the ones carrying nothing. */
   scan(): Promise<Answer<SourceTrackScan[]>>;
+  /**
+   * Reads the named SourceTracks so their waveform can be shown before anything is cut. What is read is kept
+   * for the rest of the Recording, so the cut below does not read it a second time (ADR-0020).
+   */
+  readSourceTracks(positions: readonly number[]): Promise<Answer<SourceTrackWaveform[]>>;
   /** Analyses the Recording and plans the cuts. The plan stays in the main process until it is saved. */
   cut(request: AnalysisRequest): Promise<Answer<CutSummary>>;
   /**

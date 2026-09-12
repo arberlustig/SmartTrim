@@ -118,6 +118,30 @@ describe("runCut", () => {
     expect(summary.keptSeconds + summary.removedSeconds).toBeCloseTo(summary.recordingSeconds, 2);
   }, 60_000);
 
+  // The waveform is shown as soon as a SourceTrack gets a role, which means its audio is read before the cut is
+  // asked for (ADR-0020). The cut then has to use that audio instead of reading again — and it has to be the same
+  // cut. A reused SourceTrack that did not belong to the one being cut would quietly cut on the wrong sound, so
+  // this is compared against a run that reads the file itself.
+  test("a cut built on audio read earlier is the same cut as one that reads the Recording itself", async () => {
+    const request = {
+      recordingPath,
+      voiceSourceTracks: [0],
+      decideBy: { kind: "loudness", thresholdDbfs: -40 } as const,
+      marginSeconds: 0.05,
+      minimumDeadZoneSeconds: 0.25,
+    };
+
+    // What showing the waveform would already have read.
+    const readEarly = await runCut(request, tools);
+    const reused = await runCut(request, tools, readEarly.decoded);
+    const readAgain = await runCut(request, tools);
+
+    expect(reused.cutPlan).toEqual(readAgain.cutPlan);
+    expect(reused.summary).toEqual(readAgain.summary);
+    // The audio really is the one handed in, not a fresh read of it.
+    expect(reused.decoded[0]?.pcm).toBe(readEarly.decoded[0]?.pcm);
+  }, 90_000);
+
   // ADR-0004 promises this one: the decoded audio stays in memory, so moving the threshold decides again from
   // memory instead of touching the file. Compared against the expensive path, like the replan above.
   test("deciding again at another threshold gives exactly what reading the Recording again would give", async () => {

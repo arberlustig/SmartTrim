@@ -382,6 +382,16 @@ export function applyPreset(session: CutSession, preset: Preset): CutSession {
   };
 }
 
+/**
+ * The SourceTracks whose audio still has to be read, so their waveform can be shown. Every SourceTrack with a
+ * role — Voice or Content — needs one, and the read is the same one the cut needs later, only earlier (ADR-0020).
+ */
+export function sourceTracksToRead(session: CutSession, alreadyRead: readonly number[]): readonly number[] {
+  return [...session.listenTo, ...session.contentSourceTracks]
+    .filter((position) => !alreadyRead.includes(position))
+    .sort((one, other) => one - other);
+}
+
 /** What the window says about the chosen Preset: its name, and whether the sliders have been moved off it. */
 export interface PresetChoice {
   name: string;

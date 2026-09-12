@@ -126,5 +126,6 @@ _Avoid_: viewport, view range, selection
 
 **PeakEnvelope**:
 One height per slice of time, 0 to 1 — what a waveform is drawn from. Each slice reports its **loudest** sample
-rather than its average, so a bang far shorter than a slice keeps its full height (ADR-0019).
+rather than its average, so a bang far shorter than a slice keeps its full height (ADR-0019). It is made as soon as
+a SourceTrack is given a TrackRole, before any cut exists, and the cut then reuses that audio (ADR-0020).
 _Avoid_: waveform data, samples, levels
