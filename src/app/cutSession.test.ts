@@ -22,6 +22,7 @@ import {
   PRESETS,
   applyPreset,
   presetNameOf,
+  type Preset,
   roleOf,
   setEventLeadSeconds,
   setEventTailSeconds,
@@ -415,5 +416,22 @@ describe("cutSession", () => {
 
     expect(presetNameOf(setMarginSeconds(session, 0.42))).toBe(null);
     expect(presetNameOf(applyPreset(session, PRESETS[2]!))).toBe(PRESETS[2]!.name);
+  });
+
+  test("the window says the name of an own Preset once the settings match it, instead of calling them eigene", () => {
+    const moved = setMarginSeconds(newCutSession(), 0.42);
+    const abend: Preset = {
+      name: "Abend",
+      thresholdDbfs: moved.thresholdDbfs,
+      marginSeconds: moved.marginSeconds,
+      eventLeadSeconds: moved.eventLeadSeconds,
+      eventTailSeconds: moved.eventTailSeconds,
+      minimumDeadZoneSeconds: moved.minimumDeadZoneSeconds,
+    };
+
+    expect(presetNameOf(moved, [abend])).toBe("Abend");
+    expect(presetNameOf(setMarginSeconds(moved, 0.43), [abend])).toBe(null);
+    // A built-in is still found when own Presets exist beside it.
+    expect(presetNameOf(newCutSession(), [abend])).toBe("Gaming");
   });
 });

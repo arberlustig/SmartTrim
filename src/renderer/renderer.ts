@@ -28,9 +28,11 @@ import {
   setThresholdDbfs,
   toggleExportSourceTrack,
   visibleSourceTracks,
+  type Preset,
   type CutSession,
   type TrackRole,
 } from "../app/cutSession.ts";
+import { allPresets, presetFromSliders } from "../app/presets.ts";
 import type { CutSummary } from "../app/runCut.ts";
 import type { Answer, SmartTrimApi } from "../preload/api.ts";
 
@@ -59,6 +61,12 @@ const view = {
   deadZone: element<HTMLInputElement>("deadZone"),
   deadZoneValue: element("deadZoneValue"),
   preset: element<HTMLSelectElement>("preset"),
+  savePreset: element<HTMLButtonElement>("savePreset"),
+  deletePreset: element<HTMLButtonElement>("deletePreset"),
+  presetNaming: element("presetNaming"),
+  presetName: element<HTMLInputElement>("presetName"),
+  confirmPreset: element<HTMLButtonElement>("confirmPreset"),
+  cancelPreset: element<HTMLButtonElement>("cancelPreset"),
   eventSliders: element("eventSliders"),
   eventLead: element<HTMLInputElement>("eventLead"),
   eventLeadValue: element("eventLeadValue"),
@@ -70,6 +78,16 @@ const view = {
 };
 
 let session: CutSession = newCutSession();
+/** The Presets the user saved themselves, as the main process last reported them. */
+let ownPresets: readonly Preset[] = [];
+/** True while the name field is open, so the dropdown does not fight the user for the same row. */
+let naming = false;
+/**
+ * The last of the user's own Presets they picked, so "Speichern unter …" offers that name again. Tweaking a
+ * Preset and saving it back is the usual way one gets made, and by then the sliders match no Preset any more.
+ * A built-in never lands here: offering "Gaming" would only be refused.
+ */
+let lastOwnPicked: string | null = null;
 /** True while the analysis runs, so nothing can be started twice or changed underneath it. */
 let working = false;
 /** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
@@ -112,6 +130,12 @@ function show<Value>(answer: Answer<Value>, ifRefused: string): Value | undefine
 function clearStatus(): void {
   view.status.textContent = "";
   view.status.classList.remove("bad");
+}
+
+/** Puts a refusal the window worked out itself where the refusals from the main process go. */
+function say(message: string): void {
+  view.status.textContent = message;
+  view.status.classList.add("bad");
 }
 
 function fileName(path: string): string {
@@ -252,16 +276,33 @@ function drawSourceTracks(): void {
 const OWN_SETTINGS = "eigene";
 
 function drawSettings(): void {
-  const matched = presetNameOf(session);
+  const matched = presetNameOf(session, ownPresets);
   view.preset.replaceChildren();
-  for (const name of [...PRESETS.map((preset) => preset.name), ...(matched ? [] : [OWN_SETTINGS])]) {
+  const built = PRESETS.map((preset) => preset.name);
+  for (const name of [...built, ...(matched ? [] : [OWN_SETTINGS])]) {
     const option = document.createElement("option");
     option.value = name;
     option.textContent = name;
     view.preset.append(option);
   }
+  // The user's own sit under a separator, so it is plain which three the app came with.
+  if (ownPresets.length > 0) {
+    const mine = document.createElement("optgroup");
+    mine.label = "Eigene";
+    for (const preset of ownPresets) {
+      const option = document.createElement("option");
+      option.value = preset.name;
+      option.textContent = preset.name;
+      mine.append(option);
+    }
+    view.preset.append(mine);
+  }
   view.preset.value = matched ?? OWN_SETTINGS;
   view.preset.disabled = working;
+  view.savePreset.disabled = working || naming;
+  // Only the user's own can be deleted; the built-in three are the ground to come back to.
+  view.deletePreset.disabled = working || naming || !ownPresets.some((preset) => preset.name === matched);
+  view.presetNaming.hidden = !naming;
   view.threshold.value = String(session.thresholdDbfs);
   view.thresholdValue.textContent = `${decimals(session.thresholdDbfs, 0)} dB`;
   view.margin.value = String(session.marginSeconds);
@@ -429,11 +470,67 @@ slider(view.eventLead, EVENT_LEAD_SECONDS, (value) => (session = setEventLeadSec
 slider(view.eventTail, EVENT_TAIL_SECONDS, (value) => (session = setEventTailSeconds(session, value)));
 
 view.preset.addEventListener("change", () => {
-  const preset = PRESETS.find((each) => each.name === view.preset.value);
+  const preset = allPresets(ownPresets).find((each) => each.name === view.preset.value);
   // "eigene" is not something to pick: it only describes sliders that match no Preset.
   if (!preset) return;
+  if (ownPresets.some((each) => each.name === preset.name)) lastOwnPicked = preset.name;
   session = applyPreset(session, preset);
   afterSettingChange();
+  draw();
+});
+
+view.savePreset.addEventListener("click", () => {
+  clearStatus();
+  naming = true;
+  draw();
+  // The own Preset they were last on is the likeliest one they mean to save over.
+  const matched = presetNameOf(session, ownPresets);
+  view.presetName.value = (matched && ownPresets.some((each) => each.name === matched) ? matched : lastOwnPicked) ?? "";
+  view.presetName.focus();
+  view.presetName.select();
+});
+
+view.cancelPreset.addEventListener("click", () => {
+  naming = false;
+  draw();
+});
+
+view.presetName.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") view.confirmPreset.click();
+  if (event.key === "Escape") view.cancelPreset.click();
+});
+
+view.confirmPreset.addEventListener("click", async () => {
+  clearStatus();
+  const name = view.presetName.value.trim();
+  let preset: Preset;
+  try {
+    // Refuses a built-in name or a blank one here, before the main process is asked to write anything.
+    preset = presetFromSliders(session, name);
+  } catch (reason) {
+    say((reason as Error).message);
+    return;
+  }
+  if (ownPresets.some((each) => each.name === name) && !confirm(`„${name}" gibt es schon. Überschreiben?`)) return;
+
+  const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+  if (!saved) return;
+  ownPresets = saved;
+  lastOwnPicked = name;
+  naming = false;
+  draw();
+});
+
+view.deletePreset.addEventListener("click", async () => {
+  clearStatus();
+  const name = presetNameOf(session, ownPresets);
+  if (!name) return;
+  if (!confirm(`„${name}" löschen?`)) return;
+
+  const left = show(await window.smarttrim.deletePreset(name), "Die Voreinstellung ließ sich nicht löschen");
+  if (!left) return;
+  ownPresets = left;
+  if (lastOwnPicked === name) lastOwnPicked = null;
   draw();
 });
 
@@ -491,6 +588,13 @@ draw();
 window.smarttrim.onToolsProgress(({ name, percent }) => {
   view.status.textContent = `Lädt ${name} … ${percent} % (nur beim ersten Start)`;
 });
+// The user's own Presets are read once at startup; without them the dropdown shows only the built-in three.
+void (async () => {
+  const saved = show(await window.smarttrim.loadPresets(), "Die eigenen Voreinstellungen ließen sich nicht lesen");
+  if (saved) ownPresets = saved;
+  draw();
+})();
+
 void (async () => {
   const ready = show(await window.smarttrim.ensureTools(), "Die Werkzeuge fehlen");
   preparing = false;

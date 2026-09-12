@@ -12,6 +12,9 @@ import {
   type CutSummary,
   type PlanSettings,
 } from "../app/runCut.ts";
+import type { Preset } from "../app/cutSession.ts";
+import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
+import { withPreset, withoutPreset } from "../app/presets.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Answer } from "../preload/api.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
@@ -31,6 +34,14 @@ import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks
  */
 function toolsDirectory(): string {
   return app.isPackaged ? join(app.getPath("userData"), "tools") : join(app.getAppPath(), "vendor");
+}
+
+/**
+ * Where the user's own Presets live. Always the per-user folder, packaged or not: unlike the tools, Presets are
+ * something the user built up and expects to find again, so a checkout and an installed SmartTrim share them.
+ */
+function presetDirectory(): string {
+  return app.getPath("userData");
 }
 
 /** The tools, once they have been found or downloaded. Downloading 172 MB is a first-run affair. */
@@ -192,6 +203,32 @@ function registerHandlers(window: BrowserWindow): void {
       if (canceled || !filePath) return null;
       await saveCutPlan(filePath, recording, cutPlan, exportSourceTracks);
       return filePath;
+    }),
+  );
+
+  // The user's own Presets sit next to the downloaded tools, in the folder that belongs to them rather than to the
+  // installation, so they survive an update and a reinstall (ADR-0018).
+  ipcMain.handle(
+    "presets:load",
+    answering(async (): Promise<readonly Preset[]> => loadOwnPresets(presetDirectory())),
+  );
+
+  ipcMain.handle(
+    "presets:save",
+    answering(async (preset: Preset): Promise<readonly Preset[]> => {
+      // Read before writing, so a Preset saved in another window is not overwritten by this one's stale list.
+      const saved = withPreset(await loadOwnPresets(presetDirectory()), preset);
+      await storeOwnPresets(presetDirectory(), saved);
+      return saved;
+    }),
+  );
+
+  ipcMain.handle(
+    "presets:delete",
+    answering(async (name: string): Promise<readonly Preset[]> => {
+      const left = withoutPreset(await loadOwnPresets(presetDirectory()), name);
+      await storeOwnPresets(presetDirectory(), left);
+      return left;
     }),
   );
 

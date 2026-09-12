@@ -76,7 +76,7 @@ slices. It decides which SourceTracks are EmptyTracks and therefore hidden, and 
 _Avoid_: analysis, level check, probe
 
 **Preset**:
-A named set of thresholds suited to a kind of video, such as Gaming, Reaction or Podcast. TrackRoles are **not** part of it: which SourceTrack carries the microphone belongs to the Recording's OBS setup, not to the kind of video (ADR-0017).
+A named set of thresholds suited to a kind of video, such as Gaming, Reaction or Podcast. TrackRoles are **not** part of it: which SourceTrack carries the microphone belongs to the Recording's OBS setup, not to the kind of video (ADR-0017). SmartTrim ships three; the user can save their own beside them, which live in their own folder and outlast any one Recording (ADR-0018). The three built-in ones cannot be overwritten or deleted.
 
 ## Output
 

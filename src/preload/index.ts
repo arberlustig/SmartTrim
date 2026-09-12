@@ -15,6 +15,9 @@ const api: SmartTrimApi = {
   save: (exportSourceTracks) => ipcRenderer.invoke("cut:save", exportSourceTracks),
   saveProject: (choices) => ipcRenderer.invoke("project:save", choices),
   openProject: () => ipcRenderer.invoke("project:open"),
+  loadPresets: () => ipcRenderer.invoke("presets:load"),
+  savePreset: (preset) => ipcRenderer.invoke("presets:save", preset),
+  deletePreset: (name) => ipcRenderer.invoke("presets:delete", name),
   reveal: (path) => ipcRenderer.invoke("file:reveal", path),
 };
 

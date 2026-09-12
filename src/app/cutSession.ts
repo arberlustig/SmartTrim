@@ -373,9 +373,13 @@ export function applyPreset(session: CutSession, preset: Preset): CutSession {
   };
 }
 
-/** The Preset whose thresholds are on the sliders, or null once the user has moved one of them. */
-export function presetNameOf(session: CutSession): string | null {
-  const match = PRESETS.find(
+/**
+ * The Preset whose thresholds are on the sliders, or null once the user has moved one of them — which is what the
+ * window shows as "eigene". The user's own Presets are searched after the built-in ones, so a name they saved
+ * appears in the dropdown instead of "eigene" (ADR-0018).
+ */
+export function presetNameOf(session: CutSession, own: readonly Preset[] = []): string | null {
+  const match = [...PRESETS, ...own].find(
     (preset) =>
       preset.thresholdDbfs === session.thresholdDbfs &&
       preset.marginSeconds === session.marginSeconds &&

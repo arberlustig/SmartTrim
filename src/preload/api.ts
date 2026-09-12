@@ -1,4 +1,5 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
+import type { Preset } from "../app/cutSession.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { CutSummary, PlanSettings } from "../app/runCut.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
@@ -44,6 +45,12 @@ export interface SmartTrimApi {
   saveProject(choices: SavedChoices): Promise<Answer<string | null>>;
   /** Opens a `.smarttrim` project, checking that the Recording it names is still the one it was cut from. */
   openProject(): Promise<Answer<{ project: TrimProject; summary: CutSummary } | null>>;
+  /** The Presets the user saved themselves, read from their folder. Built-in Presets are not in here. */
+  loadPresets(): Promise<Answer<readonly Preset[]>>;
+  /** Saves a Preset under its name, replacing one of that name. Returns the user's own Presets as they now are. */
+  savePreset(preset: Preset): Promise<Answer<readonly Preset[]>>;
+  /** Deletes one of the user's own Presets by name. Returns the ones left. */
+  deletePreset(name: string): Promise<Answer<readonly Preset[]>>;
   /** Shows a saved file in Explorer. */
   reveal(path: string): Promise<Answer<null>>;
 }
