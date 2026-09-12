@@ -12,7 +12,7 @@ import {
   cutFinished,
   planFinished,
   planSettingsFrom,
-  presetNameOf,
+  presetChoice,
   projectOpened,
   redoNeeded,
   roleOf,
@@ -62,11 +62,16 @@ const view = {
   deadZoneValue: element("deadZoneValue"),
   preset: element<HTMLSelectElement>("preset"),
   savePreset: element<HTMLButtonElement>("savePreset"),
+  newPreset: element<HTMLButtonElement>("newPreset"),
   deletePreset: element<HTMLButtonElement>("deletePreset"),
   presetNaming: element("presetNaming"),
   presetName: element<HTMLInputElement>("presetName"),
   confirmPreset: element<HTMLButtonElement>("confirmPreset"),
   cancelPreset: element<HTMLButtonElement>("cancelPreset"),
+  presetAsking: element("presetAsking"),
+  presetQuestion: element("presetQuestion"),
+  confirmAsk: element<HTMLButtonElement>("confirmAsk"),
+  cancelAsk: element<HTMLButtonElement>("cancelAsk"),
   eventSliders: element("eventSliders"),
   eventLead: element<HTMLInputElement>("eventLead"),
   eventLeadValue: element("eventLeadValue"),
@@ -83,11 +88,10 @@ let ownPresets: readonly Preset[] = [];
 /** True while the name field is open, so the dropdown does not fight the user for the same row. */
 let naming = false;
 /**
- * The last of the user's own Presets they picked, so "Speichern unter …" offers that name again. Tweaking a
- * Preset and saving it back is the usual way one gets made, and by then the sliders match no Preset any more.
- * A built-in never lands here: offering "Gaming" would only be refused.
+ * A question waiting for the user, asked as a row in the window. Electron's own `confirm()` is a Windows popup,
+ * and closing one leaves the window without focus until the user clicks away and back (ADR-0018).
  */
-let lastOwnPicked: string | null = null;
+let asking: { question: string; yes: () => void } | null = null;
 /** True while the analysis runs, so nothing can be started twice or changed underneath it. */
 let working = false;
 /** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
@@ -276,10 +280,12 @@ function drawSourceTracks(): void {
 const OWN_SETTINGS = "eigene";
 
 function drawSettings(): void {
-  const matched = presetNameOf(session, ownPresets);
+  const choice = presetChoice(session, ownPresets);
+  const chosenIsOwn = choice !== null && ownPresets.some((preset) => preset.name === choice.name);
+  const busy = working || naming || asking !== null;
+
   view.preset.replaceChildren();
-  const built = PRESETS.map((preset) => preset.name);
-  for (const name of [...built, ...(matched ? [] : [OWN_SETTINGS])]) {
+  for (const name of [...PRESETS.map((preset) => preset.name), ...(choice ? [] : [OWN_SETTINGS])]) {
     const option = document.createElement("option");
     option.value = name;
     option.textContent = name;
@@ -297,12 +303,23 @@ function drawSettings(): void {
     }
     view.preset.append(mine);
   }
-  view.preset.value = matched ?? OWN_SETTINGS;
-  view.preset.disabled = working;
-  view.savePreset.disabled = working || naming;
-  // Only the user's own can be deleted; the built-in three are the ground to come back to.
-  view.deletePreset.disabled = working || naming || !ownPresets.some((preset) => preset.name === matched);
+  view.preset.value = choice?.name ?? OWN_SETTINGS;
+  // The chosen Preset keeps its place in the list while the sliders sit off it, and says so.
+  if (choice?.changed) {
+    const shown = [...view.preset.options].find((option) => option.value === choice.name);
+    if (shown) shown.textContent = `${choice.name} (geändert)`;
+  }
+
+  view.preset.disabled = busy;
+  view.newPreset.disabled = busy;
+  // Only there when there is something to write back, and only into one of the user's own.
+  view.savePreset.hidden = !(chosenIsOwn && choice.changed);
+  view.savePreset.disabled = busy;
+  // Deleting follows the choice, not the sliders: a nudged Preset is still the one the user is working on.
+  view.deletePreset.disabled = busy || !chosenIsOwn;
   view.presetNaming.hidden = !naming;
+  view.presetAsking.hidden = asking === null;
+  if (asking) view.presetQuestion.textContent = asking.question;
   view.threshold.value = String(session.thresholdDbfs);
   view.thresholdValue.textContent = `${decimals(session.thresholdDbfs, 0)} dB`;
   view.margin.value = String(session.marginSeconds);
@@ -471,36 +488,60 @@ slider(view.eventTail, EVENT_TAIL_SECONDS, (value) => (session = setEventTailSec
 
 view.preset.addEventListener("change", () => {
   const preset = allPresets(ownPresets).find((each) => each.name === view.preset.value);
-  // "eigene" is not something to pick: it only describes sliders that match no Preset.
+  // "eigene" is not something to pick: it only describes sliders that belong to no Preset.
   if (!preset) return;
-  if (ownPresets.some((each) => each.name === preset.name)) lastOwnPicked = preset.name;
   session = applyPreset(session, preset);
   afterSettingChange();
   draw();
 });
 
-view.savePreset.addEventListener("click", () => {
+/** Closes whatever row was open and gives the keyboard back to the dropdown, which would otherwise hold nothing. */
+function closePresetRow(): void {
+  naming = false;
+  asking = null;
+  draw();
+  view.preset.focus();
+}
+
+/** Puts a question in the window instead of in a Windows popup, and runs the action only if the user says yes. */
+function ask(question: string, yes: () => void): void {
+  asking = { question, yes };
+  draw();
+  view.confirmAsk.focus();
+}
+
+view.confirmAsk.addEventListener("click", () => {
+  const act = asking?.yes;
+  closePresetRow();
+  act?.();
+});
+
+view.cancelAsk.addEventListener("click", closePresetRow);
+
+/** Takes the Presets the main process reports back, and puts the saved one on the dropdown. */
+function presetsSaved(saved: readonly Preset[], chosen: Preset): void {
+  ownPresets = saved;
+  // The sliders already carry these values, so this only marks which Preset they now belong to.
+  session = applyPreset(session, chosen);
+  closePresetRow();
+}
+
+view.newPreset.addEventListener("click", () => {
   clearStatus();
   naming = true;
   draw();
-  // The own Preset they were last on is the likeliest one they mean to save over.
-  const matched = presetNameOf(session, ownPresets);
-  view.presetName.value = (matched && ownPresets.some((each) => each.name === matched) ? matched : lastOwnPicked) ?? "";
+  view.presetName.value = "";
   view.presetName.focus();
-  view.presetName.select();
 });
 
-view.cancelPreset.addEventListener("click", () => {
-  naming = false;
-  draw();
-});
+view.cancelPreset.addEventListener("click", closePresetRow);
 
 view.presetName.addEventListener("keydown", (event) => {
   if (event.key === "Enter") view.confirmPreset.click();
   if (event.key === "Escape") view.cancelPreset.click();
 });
 
-view.confirmPreset.addEventListener("click", async () => {
+view.confirmPreset.addEventListener("click", () => {
   clearStatus();
   const name = view.presetName.value.trim();
   let preset: Preset;
@@ -511,27 +552,42 @@ view.confirmPreset.addEventListener("click", async () => {
     say((reason as Error).message);
     return;
   }
-  if (ownPresets.some((each) => each.name === name) && !confirm(`„${name}" gibt es schon. Überschreiben?`)) return;
 
-  const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
-  if (!saved) return;
-  ownPresets = saved;
-  lastOwnPicked = name;
-  naming = false;
-  draw();
+  const write = async () => {
+    const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+    if (saved) presetsSaved(saved, preset);
+  };
+  if (ownPresets.some((each) => each.name === name)) {
+    naming = false;
+    ask(`\u201E${name}\u201C gibt es schon. \u00DCberschreiben?`, () => void write());
+    return;
+  }
+  void write();
 });
 
-view.deletePreset.addEventListener("click", async () => {
+// Writing the sliders back into the Preset they were changed from. No question first: the button only exists while
+// there is something to write back, and pressing it says plainly enough what is meant.
+view.savePreset.addEventListener("click", async () => {
   clearStatus();
-  const name = presetNameOf(session, ownPresets);
-  if (!name) return;
-  if (!confirm(`„${name}" löschen?`)) return;
+  const choice = presetChoice(session, ownPresets);
+  if (!choice) return;
+  const preset = presetFromSliders(session, choice.name);
+  const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+  if (saved) presetsSaved(saved, preset);
+});
 
-  const left = show(await window.smarttrim.deletePreset(name), "Die Voreinstellung ließ sich nicht löschen");
-  if (!left) return;
-  ownPresets = left;
-  if (lastOwnPicked === name) lastOwnPicked = null;
-  draw();
+view.deletePreset.addEventListener("click", () => {
+  clearStatus();
+  const choice = presetChoice(session, ownPresets);
+  if (!choice) return;
+  ask(`\u201E${choice.name}\u201C l\u00F6schen?`, async () => {
+    const left = show(await window.smarttrim.deletePreset(choice.name), "Die Voreinstellung ließ sich nicht l\u00F6schen");
+    if (!left) return;
+    ownPresets = left;
+    // The sliders keep their values; only the name they belonged to is gone.
+    session = { ...session, selectedPreset: null };
+    draw();
+  });
 });
 
 view.chooseRecording.addEventListener("click", async () => {

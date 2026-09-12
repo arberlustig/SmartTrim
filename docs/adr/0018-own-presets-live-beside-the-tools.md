@@ -55,6 +55,39 @@ have; the two tests around it check only what the rename leaves visible — that
 save, and that a leftover one from an earlier crash is ignored. Both were confirmed to fail against a deliberately
 broken implementation, so they have teeth for what they do cover.
 
+## The choice is remembered, not deduced
+
+`CutSession.selectedPreset` holds the name of the Preset the user last picked, and `presetChoice(session, own)`
+reports it together with whether the sliders have since moved off it.
+
+The first version worked the choice out by comparing the sliders against every Preset. The owner found the result
+broken on 2026-09-12, and was right: nudging one slider made the dropdown jump to "eigene", which took away the
+delete button for the Preset they were plainly still working on. Now the dropdown says **"Abend (geändert)"**,
+keeps its place, and both deleting and overwriting stay reachable.
+
+`applyPreset` is what sets the choice, so saving a new Preset marks it chosen by applying it — the sliders already
+carry those values, so nothing else moves.
+
+## No Windows popups in the window
+
+The owner also reported that after saving, the dropdown could not be clicked until they switched to another
+application and back. Two causes, both removed:
+
+- The focused name field was hidden without the focus going anywhere. Every row that closes now hands the keyboard
+  back to the dropdown.
+- The overwrite and delete questions were Electron's `confirm()`, which is a real Windows popup; closing one leaves
+  the window unfocused. Questions are now a row inside the window. **No renderer code calls `confirm` or `alert`
+  any more**, and nothing should: the same bug comes back with the next one.
+
+## The three buttons
+
+**+** makes a new Preset from the sliders and asks for a name. **sichern** appears only while a Preset of the
+user's own is chosen *and* changed, and writes the sliders back into it without a question — the button exists only
+when there is something to write, which is statement enough. **löschen** follows the choice rather than the
+sliders. Built-in Presets never offer either.
+
+"Speichern unter …" was tried first and the owner rejected the wording.
+
 ## Tested at three seams
 
 Confirmed with the owner before any test was written: the rules without a disk (`presets.test.ts`), the real file

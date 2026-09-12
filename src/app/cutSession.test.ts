@@ -21,7 +21,7 @@ import {
   toggleExportSourceTrack,
   PRESETS,
   applyPreset,
-  presetNameOf,
+  presetChoice,
   type Preset,
   roleOf,
   setEventLeadSeconds,
@@ -409,29 +409,50 @@ describe("cutSession", () => {
     expect(podcast.contentSourceTracks).toEqual([2]);
   });
 
-  test("the window can say which Preset the settings match, and that they match none", () => {
-    const session = newCutSession();
-    // The owner's own settings are the Gaming Preset, so a fresh session starts on it.
-    expect(presetNameOf(session)).toBe("Gaming");
-
-    expect(presetNameOf(setMarginSeconds(session, 0.42))).toBe(null);
-    expect(presetNameOf(applyPreset(session, PRESETS[2]!))).toBe(PRESETS[2]!.name);
+  test("a fresh session has the Gaming Preset chosen, with nothing changed on it yet", () => {
+    expect(presetChoice(newCutSession(), [])).toEqual({ name: "Gaming", changed: false });
   });
 
-  test("the window says the name of an own Preset once the settings match it, instead of calling them eigene", () => {
-    const moved = setMarginSeconds(newCutSession(), 0.42);
+  // The choice used to be deduced from the slider values, so one nudge made it jump to "eigene" and the user could
+  // no longer delete or overwrite the Preset they were plainly working on.
+  test("moving a slider marks the chosen Preset as changed instead of unchoosing it", () => {
     const abend: Preset = {
       name: "Abend",
-      thresholdDbfs: moved.thresholdDbfs,
-      marginSeconds: moved.marginSeconds,
-      eventLeadSeconds: moved.eventLeadSeconds,
-      eventTailSeconds: moved.eventTailSeconds,
-      minimumDeadZoneSeconds: moved.minimumDeadZoneSeconds,
+      thresholdDbfs: -38,
+      marginSeconds: 0.08,
+      eventLeadSeconds: 1,
+      eventTailSeconds: 1.5,
+      minimumDeadZoneSeconds: 0.4,
     };
+    const chosen = applyPreset(newCutSession(), abend);
+    expect(presetChoice(chosen, [abend])).toEqual({ name: "Abend", changed: false });
+    expect(chosen.marginSeconds).toBe(0.08);
 
-    expect(presetNameOf(moved, [abend])).toBe("Abend");
-    expect(presetNameOf(setMarginSeconds(moved, 0.43), [abend])).toBe(null);
-    // A built-in is still found when own Presets exist beside it.
-    expect(presetNameOf(newCutSession(), [abend])).toBe("Gaming");
+    const nudged = setMarginSeconds(chosen, 0.42);
+    expect(presetChoice(nudged, [abend])).toEqual({ name: "Abend", changed: true });
+
+    // Choosing it again puts the sliders back and the mark goes away.
+    expect(presetChoice(applyPreset(nudged, abend), [abend])).toEqual({ name: "Abend", changed: false });
+  });
+
+  test("a built-in Preset is marked changed the same way, so Gaming does not silently become something else", () => {
+    expect(presetChoice(setThresholdDbfs(newCutSession(), -52), [])).toEqual({ name: "Gaming", changed: true });
+  });
+
+  // A guard: the sliders keep the deleted Preset's values, but nothing may still claim to be chosen — the window
+  // would otherwise offer to delete a Preset that is already gone.
+  test("deleting the chosen Preset leaves nothing chosen", () => {
+    const abend: Preset = {
+      name: "Abend",
+      thresholdDbfs: -38,
+      marginSeconds: 0.08,
+      eventLeadSeconds: 1,
+      eventTailSeconds: 1.5,
+      minimumDeadZoneSeconds: 0.4,
+    };
+    const chosen = applyPreset(newCutSession(), abend);
+
+    expect(presetChoice(chosen, [])).toBe(null);
+    expect(chosen.marginSeconds).toBe(0.08);
   });
 });

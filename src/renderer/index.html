@@ -155,6 +155,15 @@
         padding: 5px 11px;
         font-size: 13px;
       }
+      .presetRow button.icon {
+        padding: 4px 10px;
+        font-size: 16px;
+        line-height: 1;
+      }
+      .presetRow span {
+        color: var(--text);
+        font-size: 13px;
+      }
       .presetNaming {
         padding-top: 0;
       }
@@ -257,16 +266,25 @@
         <label for="preset">Voreinstellung</label>
         <div class="presetRow">
           <select id="preset"></select>
-          <button id="savePreset" type="button">Speichern unter …</button>
-          <button id="deletePreset" type="button">Löschen</button>
+          <button id="savePreset" type="button" title="Die Änderungen in diese Voreinstellung übernehmen">sichern</button>
+          <button id="newPreset" class="icon" type="button" title="Eigene Voreinstellung aus den jetzigen Reglern anlegen">+</button>
+          <button id="deletePreset" type="button">löschen</button>
         </div>
       </div>
       <div class="preset presetNaming" id="presetNaming" hidden>
         <label for="presetName">Name</label>
         <div class="presetRow">
           <input id="presetName" type="text" maxlength="40" placeholder="z. B. Abend" />
-          <button id="confirmPreset" type="button">Sichern</button>
+          <button id="confirmPreset" type="button">Hinzufügen</button>
           <button id="cancelPreset" type="button">Abbrechen</button>
+        </div>
+      </div>
+      <div class="preset presetNaming" id="presetAsking" hidden>
+        <label></label>
+        <div class="presetRow">
+          <span id="presetQuestion"></span>
+          <button id="confirmAsk" type="button">Ja</button>
+          <button id="cancelAsk" type="button">Abbrechen</button>
         </div>
       </div>
       <div class="slider">

@@ -58,6 +58,12 @@ export interface CutSession {
    * not after a saved project was reopened: a project holds what the analysis found, not the audio (ADR-0004).
    */
   audioInMemory: boolean;
+  /**
+   * The name of the Preset the user last picked, whether or not the sliders still match it. Remembered rather than
+   * worked out from the slider values, so that moving one slider does not take the choice away from under the user
+   * — the window says "Abend (geändert)" and can still offer to delete or overwrite Abend (ADR-0018).
+   */
+  selectedPreset: string | null;
   thresholdDbfs: number;
   marginSeconds: number;
   eventLeadSeconds: number;
@@ -118,6 +124,8 @@ export function newCutSession(): CutSession {
     exportSourceTracks: [],
     plannedWith: null,
     audioInMemory: false,
+    // The owner's settings are the Gaming Preset, so a fresh session is on it rather than on nothing.
+    selectedPreset: "Gaming",
     thresholdDbfs: -40,
     marginSeconds: 0.05,
     // Provisional, like the ContentEvent thresholds themselves: a second and a half of run-up and two seconds
@@ -365,6 +373,7 @@ export function redoNeeded(session: CutSession): Redo {
 export function applyPreset(session: CutSession, preset: Preset): CutSession {
   return {
     ...session,
+    selectedPreset: preset.name,
     thresholdDbfs: preset.thresholdDbfs,
     marginSeconds: preset.marginSeconds,
     eventLeadSeconds: preset.eventLeadSeconds,
@@ -373,21 +382,36 @@ export function applyPreset(session: CutSession, preset: Preset): CutSession {
   };
 }
 
+/** What the window says about the chosen Preset: its name, and whether the sliders have been moved off it. */
+export interface PresetChoice {
+  name: string;
+  /** True once a slider no longer matches the Preset, which the window shows as "(geändert)". */
+  changed: boolean;
+}
+
 /**
- * The Preset whose thresholds are on the sliders, or null once the user has moved one of them — which is what the
- * window shows as "eigene". The user's own Presets are searched after the built-in ones, so a name they saved
- * appears in the dropdown instead of "eigene" (ADR-0018).
+ * The Preset the user picked and what has become of it, or null when none is picked — after the chosen one was
+ * deleted, say. The choice is remembered, not deduced: moving a slider marks it changed rather than clearing it,
+ * so the window can still offer to overwrite or delete it (ADR-0018).
  */
-export function presetNameOf(session: CutSession, own: readonly Preset[] = []): string | null {
-  const match = [...PRESETS, ...own].find(
-    (preset) =>
-      preset.thresholdDbfs === session.thresholdDbfs &&
-      preset.marginSeconds === session.marginSeconds &&
-      preset.eventLeadSeconds === session.eventLeadSeconds &&
-      preset.eventTailSeconds === session.eventTailSeconds &&
-      preset.minimumDeadZoneSeconds === session.minimumDeadZoneSeconds,
+export function presetChoice(session: CutSession, own: readonly Preset[]): PresetChoice | null {
+  const { selectedPreset } = session;
+  if (selectedPreset === null) return null;
+  const preset = [...PRESETS, ...own].find((each) => each.name === selectedPreset);
+  // A Preset that is gone — deleted, or in a preset file that would not read — leaves nothing chosen.
+  if (!preset) return null;
+  return { name: preset.name, changed: !matchesSliders(preset, session) };
+}
+
+/** Whether every one of a Preset's five settings is still what the sliders say. */
+function matchesSliders(preset: Preset, session: CutSession): boolean {
+  return (
+    preset.thresholdDbfs === session.thresholdDbfs &&
+    preset.marginSeconds === session.marginSeconds &&
+    preset.eventLeadSeconds === session.eventLeadSeconds &&
+    preset.eventTailSeconds === session.eventTailSeconds &&
+    preset.minimumDeadZoneSeconds === session.minimumDeadZoneSeconds
   );
-  return match?.name ?? null;
 }
 
 /** What a saved project records about the session: the choices behind the cut, and the export ticks. */
