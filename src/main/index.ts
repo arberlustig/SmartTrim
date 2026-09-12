@@ -2,7 +2,15 @@ import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
-import { runCut, saveCutPlan, type CutResult, type CutSummary } from "../app/runCut.ts";
+import {
+  redecideCut,
+  replanCut,
+  runCut,
+  saveCutPlan,
+  type CutResult,
+  type CutSummary,
+  type PlanSettings,
+} from "../app/runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Answer } from "../preload/api.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
@@ -102,6 +110,27 @@ function registerHandlers(window: BrowserWindow): void {
       const result = await runCut(request, await analysisTools(window));
       lastCut = result;
       return result.summary;
+    }),
+  );
+
+  // ADR-0004: Margin and MinimumDeadZone only decide how the cuts are planned around what the analysis found, so
+  // moving those sliders must not read the Recording again.
+  ipcMain.handle(
+    "cut:replan",
+    answering(async (settings: PlanSettings): Promise<CutSummary> => {
+      if (!lastCut) throw new Error("There is no cut to replan. Press Schneiden first.");
+      lastCut = replanCut(lastCut, settings);
+      return lastCut.summary;
+    }),
+  );
+
+  // ADR-0004 again: the decoded audio stays in the main process, so another threshold is decided from memory.
+  ipcMain.handle(
+    "cut:redecide",
+    answering(async (settings: PlanSettings & { thresholdDbfs: number }): Promise<CutSummary> => {
+      if (!lastCut) throw new Error("There is no cut to decide again. Press Schneiden first.");
+      lastCut = redecideCut(lastCut, settings.thresholdDbfs, settings);
+      return lastCut.summary;
     }),
   );
 

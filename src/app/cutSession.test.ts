@@ -7,6 +7,9 @@ import {
   chooseRecording,
   newCutSession,
   canExport,
+  cutFinished,
+  planSettingsFrom,
+  redoNeeded,
   revealEmptySourceTracks,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
@@ -209,5 +212,41 @@ describe("cutSession", () => {
     const session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
 
     expect(session.exportSourceTracks).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // ADR-0004: the Recording is read once. Luft and Pause only decide how the cuts are planned around what was
+  // found, so moving them may not cost a second read; the threshold and the SourceTracks decide what is found at all.
+  test("Luft and Pause only need replanning, the threshold decides again, another SourceTrack needs a new read", () => {
+    let session = toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4);
+    expect(redoNeeded(session)).toBe("analyse");
+
+    session = cutFinished(session);
+    expect(redoNeeded(session)).toBe("nothing");
+
+    expect(redoNeeded(setMarginSeconds(session, 0.3))).toBe("replan");
+    expect(redoNeeded(setMinimumDeadZoneSeconds(session, 2))).toBe("replan");
+    expect(planSettingsFrom(setMarginSeconds(session, 0.3))).toEqual({
+      marginSeconds: 0.3,
+      minimumDeadZoneSeconds: 0.25,
+    });
+
+    // The decoded audio is still in memory, so another threshold is decided from it rather than read again (ADR-0004).
+    expect(redoNeeded(setThresholdDbfs(session, -45))).toBe("redecide");
+    // Another SourceTrack is audio nobody has decoded yet.
+    expect(redoNeeded(toggleSourceTrack(session, 0))).toBe("analyse");
+    // A threshold and a Margin at once is still one job, and it is the one that decides again.
+    expect(redoNeeded(setMarginSeconds(setThresholdDbfs(session, -45), 0.3))).toBe("redecide");
+    // What is exported has no say in the plan at all (ADR-0014).
+    expect(redoNeeded(toggleExportSourceTrack(session, 0))).toBe("nothing");
+  });
+
+  test("choosing another Recording forgets that a plan was ever made", () => {
+    const planned = cutFinished(
+      toggleSourceTrack(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4),
+    );
+
+    const switched = toggleSourceTrack(chooseRecording(planned, probed(String.raw`C:\Aufnahmen\other.mp4`, 2)), 0);
+
+    expect(redoNeeded(switched)).toBe("analyse");
   });
 });

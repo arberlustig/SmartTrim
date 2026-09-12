@@ -3,7 +3,7 @@ import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { detectLoudness } from "../level/detectLoudness.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
-import { detectSpeech } from "../speech/detectSpeech.ts";
+import { detectSpeech, type MonoPcm } from "../speech/detectSpeech.ts";
 
 /** What decides that a stretch is worth keeping. The owner picked loudness after listening to both (ADR-0003). */
 export type Decision = { kind: "voice" } | { kind: "loudness"; thresholdDbfs: number };
@@ -34,7 +34,13 @@ export interface AnalysisTools {
 export async function analyseRecording(
   request: AnalysisRequest,
   tools: AnalysisTools,
-): Promise<{ recording: RecordingInfo; worthKeeping: readonly TimeRange[]; cutPlan: CutPlan }> {
+): Promise<{
+  recording: RecordingInfo;
+  /** The decoded SourceTracks, kept so another threshold can be tried without reading the Recording (ADR-0004). */
+  listened: readonly MonoPcm[];
+  worthKeeping: readonly TimeRange[];
+  cutPlan: CutPlan;
+}> {
   // Without a SourceTrack to listen to nothing could ever be kept, so the Recording is not even read.
   if (request.voiceSourceTracks.length === 0) throw new Error("Choose at least one SourceTrack to listen to.");
   const decideBy: Decision = request.decideBy ?? { kind: "voice" };
@@ -74,5 +80,5 @@ export async function analyseRecording(
         : `Nothing on ${sourceTracks} reaches ${decideBy.thresholdDbfs} dBFS, so nothing would be kept. Lower the threshold or choose other SourceTracks.`,
     );
   }
-  return { recording, worthKeeping, cutPlan };
+  return { recording, listened, worthKeeping, cutPlan };
 }

@@ -5,6 +5,9 @@ import {
   analysisRequestFrom,
   canCut,
   canExport,
+  cutFinished,
+  planSettingsFrom,
+  redoNeeded,
   chooseRecording,
   newCutSession,
   setMarginSeconds,
@@ -162,7 +165,7 @@ function drawSourceTracks(): void {
     row.append(
       box(session.listenTo.includes(index), `Nach Tonspur ${index + 1} schneiden`, () => {
         session = toggleSourceTrack(session, index);
-        staleNow();
+        afterSettingChange();
       }),
       // Changing this changes the file, not the cut, so a finished cut stays on screen.
       box(session.exportSourceTracks.includes(index), `Tonspur ${index + 1} nach Premiere übernehmen`, () => {
@@ -267,12 +270,63 @@ function draw(): void {
   view.cut.textContent = working ? "Arbeitet …" : "Schneiden";
 }
 
-/** A changed setting makes the plan on screen a plan for something else, so it stops being offered. */
-function staleNow(): void {
+/** Waiting for the sliders to come to rest, so one drag is one job and not fifty. */
+let redoTimer: ReturnType<typeof setTimeout> | undefined;
+let redoing = false;
+
+/**
+ * What a changed setting costs. Luft and Pause are planned again from what the analysis already found, which takes
+ * milliseconds and no reading; the threshold and the SourceTracks decide what is found at all, so the cut on screen
+ * stops being offered until it is made again (ADR-0004).
+ */
+function afterSettingChange(): void {
   if (!finished) return;
-  finished = null;
-  view.status.textContent = "Einstellung geändert – noch einmal schneiden.";
+  const redo = redoNeeded(session);
+  if (redo === "nothing") return;
+  if (redo === "analyse") {
+    finished = null;
+    view.status.textContent = "Einstellung geändert – noch einmal schneiden.";
+    view.status.classList.remove("bad");
+    return;
+  }
+  scheduleRedo(redo);
+}
+
+function scheduleRedo(redo: "replan" | "redecide"): void {
+  view.status.textContent = redo === "replan" ? "Plant neu …" : "Rechnet neu …";
   view.status.classList.remove("bad");
+  clearTimeout(redoTimer);
+  redoTimer = setTimeout(() => void redoNow(), 120);
+}
+
+/** The settings a redo was asked for, so numbers from a slider position the user has left behind are not called current. */
+const settingsNow = () => ({ thresholdDbfs: session.thresholdDbfs, ...planSettingsFrom(session) });
+
+async function redoNow(): Promise<void> {
+  const redo = redoNeeded(session);
+  if (redoing || (redo !== "replan" && redo !== "redecide")) return;
+  redoing = true;
+  const used = settingsNow();
+  const answer =
+    redo === "replan" ? await window.smarttrim.replan(used) : await window.smarttrim.redecide(used);
+  const summary = show(answer, redo === "replan" ? "Das Neuplanen ging nicht" : "Das Neurechnen ging nicht");
+  redoing = false;
+  if (summary) {
+    finished = summary;
+    const now = settingsNow();
+    // The sliders may have moved on while this ran; then these numbers are already one step behind.
+    if (
+      now.thresholdDbfs === used.thresholdDbfs &&
+      now.marginSeconds === used.marginSeconds &&
+      now.minimumDeadZoneSeconds === used.minimumDeadZoneSeconds
+    ) {
+      session = cutFinished(session);
+      clearStatus();
+    }
+  }
+  draw();
+  const next = redoNeeded(session);
+  if (next === "replan" || next === "redecide") scheduleRedo(next);
 }
 
 function slider(
@@ -285,7 +339,7 @@ function slider(
   input.step = String(range.step);
   input.addEventListener("input", () => {
     change(Number(input.value));
-    staleNow();
+    afterSettingChange();
     draw();
   });
 }
@@ -323,6 +377,8 @@ view.cut.addEventListener("click", async () => {
   working = false;
   if (summary) {
     finished = summary;
+    // From here on, moving Luft or Pause only replans (ADR-0004).
+    session = cutFinished(session);
     clearStatus();
   }
   draw();

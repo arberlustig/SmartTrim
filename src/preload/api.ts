@@ -1,6 +1,6 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
-import type { CutSummary } from "../app/runCut.ts";
+import type { CutSummary, PlanSettings } from "../app/runCut.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
@@ -29,6 +29,10 @@ export interface SmartTrimApi {
   scan(): Promise<Answer<SourceTrackScan[]>>;
   /** Analyses the Recording and plans the cuts. The plan stays in the main process until it is saved. */
   cut(request: AnalysisRequest): Promise<Answer<CutSummary>>;
+  /** Plans the cuts again from what the last analysis found, without reading the Recording again. */
+  replan(settings: PlanSettings): Promise<Answer<CutSummary>>;
+  /** Decides again at another loudness threshold, from the audio the last analysis left in memory. */
+  redecide(settings: PlanSettings & { thresholdDbfs: number }): Promise<Answer<CutSummary>>;
   /**
    * Opens the save dialog and writes the Premiere file, with TimelineTracks for the named SourceTracks only.
    * Returns where it landed.

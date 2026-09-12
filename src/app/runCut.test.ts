@@ -7,7 +7,7 @@ import { DOMParser } from "@xmldom/xmldom";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { CutPlan } from "../cutting/planCuts";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
-import { runCut, saveCutPlan, summariseCutPlan } from "./runCut";
+import { redecideCut, replanCut, runCut, saveCutPlan, summariseCutPlan } from "./runCut";
 
 // The real binaries in vendor/, which is git-ignored and must be present.
 const vendor = (name: string) => fileURLToPath(new URL(`../../vendor/${name}`, import.meta.url));
@@ -112,6 +112,44 @@ describe("runCut", () => {
     expect(summary.removedSeconds).toBeGreaterThan(1.9);
     expect(summary.keptSeconds + summary.removedSeconds).toBeCloseTo(summary.recordingSeconds, 2);
   }, 60_000);
+
+  // ADR-0004 promises this one: the decoded audio stays in memory, so moving the threshold decides again from
+  // memory instead of touching the file. Compared against the expensive path, like the replan above.
+  test("deciding again at another threshold gives exactly what reading the Recording again would give", async () => {
+    const settings = { marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 };
+    const listened = { recordingPath, voiceSourceTracks: [0] };
+
+    const cut = await runCut({ ...listened, ...settings, decideBy: { kind: "loudness", thresholdDbfs: -40 } }, tools);
+    const quieter = redecideCut(cut, -50, settings);
+    const readAgain = await runCut(
+      { ...listened, ...settings, decideBy: { kind: "loudness", thresholdDbfs: -50 } },
+      tools,
+    );
+
+    expect(quieter.cutPlan).toEqual(readAgain.cutPlan);
+    expect(quieter.summary).toEqual(readAgain.summary);
+    // A lower threshold counts more as worth keeping, or the comparison would hold for the wrong reason.
+    expect(quieter.summary.keptSeconds).toBeGreaterThan(cut.summary.keptSeconds);
+  }, 60_000);
+
+  // ADR-0004: changing a setting must not mean reading the Recording again. The only way to be sure that replanning
+  // is not a cheaper approximation is to compare it against the expensive path on the same Recording.
+  test("replanning a finished cut gives exactly what reading the Recording again would give", async () => {
+    const decideBy = { kind: "loudness", thresholdDbfs: -40 } as const;
+    const listened = { recordingPath, voiceSourceTracks: [0], decideBy };
+    const stricter = { marginSeconds: 0.3, minimumDeadZoneSeconds: 1.5 };
+
+    const cut = await runCut({ ...listened, marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 }, tools);
+    const replanned = replanCut(cut, stricter);
+    const readAgain = await runCut({ ...listened, ...stricter }, tools);
+
+    expect(replanned.cutPlan).toEqual(readAgain.cutPlan);
+    expect(replanned.summary).toEqual(readAgain.summary);
+    // The settings have to differ in effect, or the comparison above would hold for the wrong reason.
+    expect(replanned.summary.keepSegments).not.toBe(cut.summary.keepSegments);
+    // Replanning hands back a new result instead of changing the one on screen.
+    expect(cut.summary.keepSegments).toBe(2);
+  }, 60_000);
 });
 
 describe("saveCutPlan", () => {
@@ -159,6 +197,7 @@ describe("saveCutPlan", () => {
 
     expect(existsSync(destination)).toBe(false);
   });
+
 
   // The owner cuts by the microphone but does not want the same mixdown three times in the sequence (ADR-0014).
   test("only the chosen SourceTracks reach the Premiere file, keeping their own Channel numbers", async () => {

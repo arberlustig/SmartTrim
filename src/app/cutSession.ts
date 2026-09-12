@@ -1,4 +1,5 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
+import type { PlanSettings } from "./runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
@@ -43,10 +44,23 @@ export interface CutSession {
    * exported are two different choices (ADR-0014).
    */
   exportSourceTracks: readonly number[];
+  /** The settings the cut on screen was made with, or null while there is none. */
+  plannedWith: PlannedWith | null;
   thresholdDbfs: number;
   marginSeconds: number;
   minimumDeadZoneSeconds: number;
 }
+
+/** The settings a finished cut belongs to, so the window can tell what a change costs. */
+interface PlannedWith {
+  listenTo: readonly number[];
+  thresholdDbfs: number;
+  marginSeconds: number;
+  minimumDeadZoneSeconds: number;
+}
+
+/** What has to happen before the cut on screen matches the settings again. */
+export type Redo = "nothing" | "replan" | "redecide" | "analyse";
 
 /** A session on the settings the owner chose after listening to the alternatives (ADR-0003). */
 export function newCutSession(): CutSession {
@@ -56,6 +70,7 @@ export function newCutSession(): CutSession {
     emptySourceTracksShown: false,
     listenTo: [],
     exportSourceTracks: [],
+    plannedWith: null,
     thresholdDbfs: -40,
     marginSeconds: 0.05,
     minimumDeadZoneSeconds: 0.25,
@@ -77,6 +92,8 @@ export function chooseRecording(
     scan,
     emptySourceTracksShown: false,
     listenTo: [],
+    // Another Recording means the cut on screen belongs to nothing that is still chosen.
+    plannedWith: null,
     // What the window shows is what it exports: a SourceTrack hidden as an EmptyTrack would otherwise arrive in
     // Premiere with a tick nobody can see (ADR-0014). Where no scan looked, nothing is dropped.
     exportSourceTracks: recording.sourceTracks
@@ -171,4 +188,48 @@ export function toggleExportSourceTrack(session: CutSession, sourceTrackIndex: n
 /** Whether the Premiere file can be written: a sequence without any audio looks like an edit that lost its sound. */
 export function canExport(session: CutSession): boolean {
   return session.exportSourceTracks.length > 0;
+}
+
+/** Remembers that the cut on screen was planned with the settings as they are now. */
+export function cutFinished(session: CutSession): CutSession {
+  return {
+    ...session,
+    plannedWith: {
+      listenTo: [...session.listenTo],
+      thresholdDbfs: session.thresholdDbfs,
+      marginSeconds: session.marginSeconds,
+      minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
+    },
+  };
+}
+
+/** The two settings a replan needs; the rest of a request decides what was found, not how it is planned. */
+export function planSettingsFrom(session: CutSession): PlanSettings {
+  return { marginSeconds: session.marginSeconds, minimumDeadZoneSeconds: session.minimumDeadZoneSeconds };
+}
+
+/**
+ * What the window has to do before its numbers match the settings, in order of what it costs (ADR-0004):
+ *
+ * - `replan`: Margin or MinimumDeadZone moved. The cuts are planned again around what was already found.
+ * - `redecide`: the threshold moved. The decoded audio is still in memory, so what is worth keeping is decided
+ *   again from it — still without touching the Recording.
+ * - `analyse`: another SourceTrack was ticked. That is audio nobody has decoded yet, so the Recording is read.
+ */
+export function redoNeeded(session: CutSession): Redo {
+  const planned = session.plannedWith;
+  if (!planned) return "analyse";
+  const sameSourceTracks =
+    planned.listenTo.length === session.listenTo.length &&
+    planned.listenTo.every((position, index) => position === session.listenTo[index]);
+  if (!sameSourceTracks) return "analyse";
+  // Deciding again plans as well, so a threshold that moved together with a Margin is still one job.
+  if (planned.thresholdDbfs !== session.thresholdDbfs) return "redecide";
+  if (
+    planned.marginSeconds !== session.marginSeconds ||
+    planned.minimumDeadZoneSeconds !== session.minimumDeadZoneSeconds
+  ) {
+    return "replan";
+  }
+  return "nothing";
 }
