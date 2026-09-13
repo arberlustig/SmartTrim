@@ -5,9 +5,10 @@ in the same place: `openFile(path, ffprobePath)` in `src/app/openFile.ts` opens 
 `openInWindow(path)` in the main process makes it the one on screen.
 
 The owner asked for dropping on 2026-09-13, as the first of four agreed steps: dropping one file, then tabs (several
-files and whole folders), then cutting every tab at once, then a video preview. A dropped folder is refused until
-tabs exist; once they do, each file in it is handed to `openFile` on its own, which is why `openFile` refuses a
-folder itself instead of leaving that to the window.
+files and whole folders), then cutting every tab at once, then a video preview. A dropped folder was refused until
+tabs existed; now each file in it is handed to `openFile` on its own by `openFiles` (ADR-0025), which is why
+`openFile` refuses a folder itself instead of leaving that to the window. `openInWindow` now opens several paths and
+gives each file a Tab.
 
 ## What a file is, is read off its extension
 

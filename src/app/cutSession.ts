@@ -76,6 +76,11 @@ export interface CutSession {
   lockedRanges: readonly TimeRange[];
   /** Where "Anfang festhalten" was pressed, while its "Ende festhalten" has not come yet. */
   lockedRangeStart: number | null;
+  /**
+   * The held stretches as the last saved or opened project holds them, so closing a Tab can tell whether it would
+   * throw work away (ADR-0025). A Premiere file does not count: it cannot be opened again.
+   */
+  lockedRangesSaved: readonly TimeRange[];
 }
 
 /** The settings a finished cut belongs to, so the window can tell what a change costs. */
@@ -143,6 +148,7 @@ export function newCutSession(): CutSession {
     minimumDeadZoneSeconds: 0.25,
     lockedRanges: [],
     lockedRangeStart: null,
+    lockedRangesSaved: [],
   };
 }
 
@@ -168,6 +174,7 @@ export function chooseRecording(
     // A held stretch is a moment in the old Recording; at that moment the new one holds something else entirely.
     lockedRanges: [],
     lockedRangeStart: null,
+    lockedRangesSaved: [],
     // What the window shows is what it exports: a SourceTrack hidden as an EmptyTrack would otherwise arrive in
     // Premiere with a tick nobody can see (ADR-0014). Where no scan looked, nothing is dropped.
     exportSourceTracks: recording.sourceTracks
@@ -406,8 +413,18 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
     // Exactly the project's own held stretches: none from a file older than them, and none from the session before.
     lockedRanges: normalisedLockedRanges(project.lockedRanges ?? []),
     lockedRangeStart: null,
+    // What was just opened is saved by definition.
+    lockedRangesSaved: normalisedLockedRanges(project.lockedRanges ?? []),
   };
   return { ...opened, plannedWith: settingsNow(opened) };
+}
+
+/**
+ * After a project was written: its held stretches are saved. They are taken from what was written, not from the
+ * session now — a stretch held while the save dialog stood open is not in the file.
+ */
+export function projectSaved(session: CutSession, saved: SavedChoices): CutSession {
+  return { ...session, lockedRangesSaved: normalisedLockedRanges(saved.lockedRanges ?? []) };
 }
 
 /** The settings a replan needs; the rest of a request decides what was found, not how it is planned. */

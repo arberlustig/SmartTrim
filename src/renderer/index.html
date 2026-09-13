@@ -69,10 +69,202 @@
         color: #0d1714;
         font-weight: 600;
       }
-      .recording {
+      .opening {
         display: flex;
-        gap: 14px;
+        gap: 10px;
         align-items: center;
+        margin-bottom: 14px;
+      }
+      /* What opening files had to say: one line per file, what went wrong in plain words, the report's core below. */
+      .openNotes {
+        position: relative;
+        margin: 0 0 14px;
+        padding: 10px 40px 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--raised);
+      }
+      .openNotes[hidden] {
+        display: none;
+      }
+      .notesHeading {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .notesHeading:empty {
+        display: none;
+      }
+      #openNotesList {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      #openNotesList li {
+        display: grid;
+        grid-template-columns: 8px 1fr;
+        column-gap: 10px;
+        font-size: 13px;
+      }
+      #openNotesList li::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        margin-top: 6px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      #openNotesList li.refused::before {
+        background: var(--bad);
+      }
+      #openNotesList .noteText {
+        grid-column: 2;
+        overflow-wrap: anywhere;
+      }
+      #openNotesList .noteText strong {
+        font-weight: 600;
+      }
+      #openNotesList .noteDetail {
+        grid-column: 2;
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .notesClose {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        border: none;
+        padding: 2px 9px;
+        background: none;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1;
+      }
+      .notesClose:hover:enabled {
+        color: var(--text);
+      }
+      /* The question before closing a Tab: a dialog over a dimmed window, so it cannot be overlooked or clicked past. */
+      .modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(8, 9, 11, 0.64);
+      }
+      .modal[hidden] {
+        display: none;
+      }
+      .dialog {
+        width: min(520px, 100%);
+        padding: 22px 24px 18px;
+        border: 1px solid #3a414b;
+        border-radius: 12px;
+        background: var(--raised);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+      }
+      .dialog h3 {
+        margin: 0 0 8px;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .dialog p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      .heldPreview {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: var(--ground);
+        list-style: none;
+        font-variant-numeric: tabular-nums;
+      }
+      .heldPreview li {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .heldPreview li::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        background: #5aa9e6;
+      }
+      .heldPreview li.more::before {
+        visibility: hidden;
+      }
+      .dialogButtons {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .dialogButtons button {
+        white-space: nowrap;
+      }
+      .dialogButtons button[hidden] {
+        display: none;
+      }
+      button.danger {
+        border-color: #6b3a36;
+        color: var(--bad);
+      }
+      button.danger:hover:enabled {
+        border-color: var(--bad);
+      }
+      /* One Tab per Recording. A long row of them scrolls sideways rather than wrapping into a second strip. */
+      .tabStrip {
+        display: flex;
+        gap: 2px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+      }
+      .tabStrip[hidden] {
+        display: none;
+      }
+      .tab {
+        display: flex;
+        flex: none;
+        align-items: center;
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: 7px 7px 0 0;
+        color: var(--muted);
+      }
+      .tab.viewed {
+        border-color: var(--line);
+        background: var(--raised);
+        color: var(--text);
+      }
+      .tab button {
+        border: none;
+        border-radius: 0;
+        background: none;
+        color: inherit;
+      }
+      .tab .tabLabel {
+        max-width: 240px;
+        padding: 7px 4px 7px 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tab .tabClose {
+        padding: 4px 10px 4px 6px;
+        font-size: 15px;
+        line-height: 1;
+      }
+      .tab .tabClose:hover {
+        color: var(--bad);
       }
       #recordingInfo {
         color: var(--muted);
@@ -391,13 +583,34 @@
     <h1>SmartTrim</h1>
     <p>Findet die Stellen, an denen nichts passiert, und baut daraus ein Premiere-Projekt.</p>
 
+    <div class="opening">
+      <button id="chooseRecording">Aufnahmen wählen …</button>
+      <button id="openProject">Projekt öffnen …</button>
+    </div>
+    <div class="openNotes" id="openNotes" hidden>
+      <p class="notesHeading" id="openNotesHeading"></p>
+      <ul id="openNotesList"></ul>
+      <button class="notesClose" id="dismissNotes" type="button" title="Ausblenden">×</button>
+    </div>
+    <nav class="tabStrip" id="tabStrip" hidden></nav>
+
+    <!-- Asked inside the window, never with confirm(): a Windows popup leaves the window without focus (ADR-0018). -->
+    <div class="modal" id="tabAsking" hidden>
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="tabQuestionTitle" aria-describedby="tabQuestion">
+        <h3 id="tabQuestionTitle"></h3>
+        <p id="tabQuestion"></p>
+        <ul class="heldPreview" id="tabQuestionHeld"></ul>
+        <div class="dialogButtons">
+          <button id="saveClose" class="primary" type="button">Speichern und schließen</button>
+          <button id="discardClose" class="danger" type="button">Nicht speichern</button>
+          <button id="cancelClose" type="button">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+
     <section>
       <h2>Aufnahme</h2>
-      <div class="recording">
-        <button id="chooseRecording">Aufnahme wählen …</button>
-        <button id="openProject">Projekt öffnen …</button>
-        <div id="recordingInfo">Noch keine Aufnahme gewählt.</div>
-      </div>
+      <div id="recordingInfo">Noch keine Aufnahme offen.</div>
     </section>
 
     <section>

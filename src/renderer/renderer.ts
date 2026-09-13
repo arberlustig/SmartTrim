@@ -16,18 +16,14 @@ import {
   planFinished,
   planSettingsFrom,
   presetChoice,
-  sourceTracksToRead,
-  audioBackInMemory,
-  projectOpened,
+  projectSaved,
   redoNeeded,
   roleOf,
   savedChoicesFrom,
-  chooseRecording,
   newCutSession,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   revealEmptySourceTracks,
-  scanFinished,
   setEventLeadSeconds,
   setEventTailSeconds,
   setSourceTrackRole,
@@ -39,13 +35,27 @@ import {
   type TrackRole,
 } from "../app/cutSession.ts";
 import { allPresets, presetFromSliders } from "../app/presets.ts";
+import {
+  askBeforeClosing,
+  jobRefused,
+  nextBackgroundJob,
+  projectAudioArrived,
+  projectTab,
+  readArrived,
+  recordingTab,
+  roleGiven,
+  scanArrived,
+  unsavedLockedRanges,
+  viewedAfterClosing,
+  type BackgroundJob,
+  type TabWork,
+} from "../app/tabs.ts";
+import type { Refusal } from "../app/openFile.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
-import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Playback } from "../playback/playback.ts";
 import type { Answer, OpenedInWindow, SmartTrimApi } from "../preload/api.ts";
-import type { TrimProject } from "../project/trimProject.ts";
 
 declare global {
   interface Window {
@@ -62,6 +72,18 @@ function element<Kind extends HTMLElement>(id: string): Kind {
 const view = {
   chooseRecording: element<HTMLButtonElement>("chooseRecording"),
   openProject: element<HTMLButtonElement>("openProject"),
+  openNotes: element("openNotes"),
+  openNotesHeading: element("openNotesHeading"),
+  openNotesList: element("openNotesList"),
+  dismissNotes: element<HTMLButtonElement>("dismissNotes"),
+  tabStrip: element("tabStrip"),
+  tabAsking: element("tabAsking"),
+  tabQuestionTitle: element("tabQuestionTitle"),
+  tabQuestion: element("tabQuestion"),
+  tabQuestionHeld: element("tabQuestionHeld"),
+  saveClose: element<HTMLButtonElement>("saveClose"),
+  discardClose: element<HTMLButtonElement>("discardClose"),
+  cancelClose: element<HTMLButtonElement>("cancelClose"),
   recordingInfo: element("recordingInfo"),
   sourceTracks: element("sourceTracks"),
   sourceTracksHint: element("sourceTracksHint"),
@@ -108,7 +130,73 @@ const view = {
 // Said once, from the same number `readExcerpt` refuses by, so the hint cannot promise a length the app refuses.
 view.longestExcerpt.textContent = `${LONGEST_EXCERPT_SECONDS / 60} Minuten`;
 
-let session: CutSession = newCutSession();
+type Mutable<Shape> = { -readonly [Key in keyof Shape]: Shape[Key] };
+
+/** A line under the Schneiden button: what is going on, or what went wrong. */
+interface Status {
+  text: string;
+  bad: boolean;
+}
+
+/**
+ * One open Tab (CONTEXT.md) as the window keeps it. Everything a Recording has on screen lives here, so each Tab is
+ * as independent as a window of its own; the rules deciding what runs in the background for it are `TabWork`'s
+ * (ADR-0025). Answers arriving for a Tab write into its own record, never into whichever Tab is on screen by then.
+ */
+interface OpenTab extends Mutable<TabWork> {
+  /** The finished cut on screen, or null once a setting made it stale. */
+  finished: CutSummary | null;
+  /**
+   * The waveform of every SourceTrack read so far, whether or not it still has a role: putting a role back is instant
+   * (ADR-0020). Which are drawn follows the roles.
+   */
+  waveforms: SourceTrackWaveform[];
+  /** The stretch of the Recording the zoomed waveforms are showing. */
+  zoom: ZoomWindow;
+  /**
+   * The Playhead while nothing plays: where listening starts next, shared by every waveform of the Tab because they
+   * all show the same stretch of the Recording. Set by clicking a waveform, left where the sound stopped.
+   */
+  playheadSeconds: number | null;
+  /** True while this Tab's analysis runs, so nothing in it can be started twice or changed underneath it. */
+  working: boolean;
+  status: Status;
+  /** How far the read running for this Tab has got. */
+  readingCount: { done: number; total: number };
+  /** Waiting for the sliders to come to rest, so one drag is one job and not fifty. */
+  redoTimer: ReturnType<typeof setTimeout> | undefined;
+  redoing: boolean;
+}
+
+/** The open Tabs, in the order of the strip. */
+let tabs: OpenTab[] = [];
+/** The Tab on screen, or null while none is open. */
+let viewedId: number | null = null;
+/** A Tab waiting for the user to say whether it may be closed with held stretches no project holds. */
+let closeAsking: OpenTab | null = null;
+/** True while "Projekt speichern und schließen" waits for its save dialog, so the question cannot be answered twice. */
+let savingForClose = false;
+
+/**
+ * One thing opening files had to say, the way an exception reads: which file, what went wrong in the user's words,
+ * and beneath it the core of what was reported — never the path it was wrapped in.
+ */
+interface OpenNote {
+  /** A file that would not open, or only news — a Recording that is already open. */
+  tone: "refused" | "info";
+  /** The file's name, or empty when the note is about several. */
+  name: string;
+  text: string;
+  detail?: string;
+}
+
+/** What opening the last files had to say. Stays until the next opening or until dismissed. */
+let openNotes: OpenNote[] = [];
+/** The status line while no Tab is open — the first-run download, say. */
+const windowStatus: Status = { text: "", bad: false };
+/** What the sliders show while no Tab is open: the settings a new Tab starts on. */
+const NO_TAB_SESSION: CutSession = newCutSession();
+
 /** The Presets the user saved themselves, as the main process last reported them. */
 let ownPresets: readonly Preset[] = [];
 /** True while the name field is open, so the dropdown does not fight the user for the same row. */
@@ -118,16 +206,21 @@ let naming = false;
  * and closing one leaves the window without focus until the user clicks away and back (ADR-0018).
  */
 let asking: { question: string; yes: () => void } | null = null;
-/** True while the analysis runs, so nothing can be started twice or changed underneath it. */
-let working = false;
 /** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
 let preparing = true;
-/** The waveform of every SourceTrack the last analysis read. Empty until one has run. */
-let waveforms: SourceTrackWaveform[] = [];
-/** The stretch of the Recording the zoomed waveforms are showing. */
-let zoom: ZoomWindow = { fromSeconds: 0, toSeconds: 1 };
-/** The finished cut on screen, or null once a setting made it stale. */
-let finished: CutSummary | null = null;
+
+function viewed(): OpenTab | null {
+  return tabs.find((tab) => tab.id === viewedId) ?? null;
+}
+
+function tabById(tabId: number): OpenTab | undefined {
+  return tabs.find((tab) => tab.id === tabId);
+}
+
+/** Whether a Tab is still open. An answer for a closed one is dropped without a word: closing it was the user's call. */
+function isOpen(tab: OpenTab): boolean {
+  return tabs.includes(tab);
+}
 
 const decimals = (value: number, digits: number) =>
   value.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -153,31 +246,48 @@ function channels(count: number): string {
   return `${count} Kanäle`;
 }
 
-/** Says what went wrong instead of leaving the window silent, and never calls a refusal a success. */
-function show<Value>(answer: Answer<Value>, ifRefused: string): Value | undefined {
-  if (answer.ok) return answer.value;
-  view.status.textContent = `${ifRefused}: ${answer.message}`;
-  view.status.classList.add("bad");
-  return undefined;
+/* ── The status line ───────────────────────────────────────────────────────────────────────────────────────── */
+
+/** Where a Tab's status goes — or the window's, while no Tab is open. */
+function statusOf(tab: OpenTab | null): Status {
+  return tab ? tab.status : windowStatus;
 }
 
-function clearStatus(): void {
-  view.status.textContent = "";
-  view.status.classList.remove("bad");
+function setStatus(tab: OpenTab | null, text: string, bad = false): void {
+  const status = statusOf(tab);
+  status.text = text;
+  status.bad = bad;
+  drawStatus();
+}
+
+function clearStatus(tab: OpenTab | null): void {
+  setStatus(tab, "");
 }
 
 /** Puts a refusal the window worked out itself where the refusals from the main process go. */
-function say(message: string): void {
-  view.status.textContent = message;
-  view.status.classList.add("bad");
+function say(tab: OpenTab | null, message: string): void {
+  setStatus(tab, message, true);
+}
+
+/** Says what went wrong instead of leaving the window silent, and never calls a refusal a success. */
+function show<Value>(tab: OpenTab | null, answer: Answer<Value>, ifRefused: string): Value | undefined {
+  if (answer.ok) return answer.value;
+  say(tab, `${ifRefused}: ${answer.message}`);
+  return undefined;
+}
+
+function drawStatus(): void {
+  const status = statusOf(viewed());
+  view.status.textContent = status.text;
+  view.status.classList.toggle("bad", status.bad);
 }
 
 /**
- * How long the Recording is, in seconds. Taken from the Recording itself rather than from the cut, because the
+ * How long a Tab's Recording is, in seconds. Taken from the Recording itself rather than from the cut, because the
  * waveform is drawn as soon as a SourceTrack gets a role — long before there is a cut (ADR-0020).
  */
-function recordingSeconds(): number | null {
-  const { recording } = session;
+function recordingSeconds(tab: OpenTab | null): number | null {
+  const recording = tab?.session.recording;
   if (!recording) return null;
   return (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
 }
@@ -186,10 +296,105 @@ function fileName(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
 
-function drawRecording(): void {
-  const { recording } = session;
+/* ── Drawing the Tab on screen ─────────────────────────────────────────────────────────────────────────────── */
+
+/** The strip of Tabs, the question before closing one, and what opening the last files had to say. */
+function drawTabs(): void {
+  view.tabStrip.hidden = tabs.length === 0;
+  view.tabStrip.replaceChildren(
+    ...tabs.map((tab) => {
+      const name = fileName(tab.session.recording?.path ?? "");
+      const item = document.createElement("div");
+      item.className = tab.id === viewedId ? "tab viewed" : "tab";
+      const label = document.createElement("button");
+      label.type = "button";
+      label.className = "tabLabel";
+      // A Tab busy in the background says so, since its status line is only on screen while it is.
+      const busy = tab.working || job?.tabId === tab.id;
+      label.textContent = busy ? `${name} …` : name;
+      label.title = tab.session.recording?.path ?? name;
+      label.addEventListener("click", () => viewTab(tab.id));
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "tabClose";
+      close.textContent = "×";
+      close.title = `${name} schließen`;
+      close.addEventListener("click", () => requestClose(tab));
+      item.append(label, close);
+      return item;
+    }),
+  );
+
+  drawCloseQuestion();
+
+  view.openNotes.hidden = openNotes.length === 0;
+  const refusedCount = openNotes.filter((note) => note.tone === "refused" && note.name).length;
+  view.openNotesHeading.textContent =
+    refusedCount === 0 ? "" : refusedCount === 1 ? "Eine Datei ließ sich nicht öffnen" : `${refusedCount} Dateien ließen sich nicht öffnen`;
+  view.openNotesList.replaceChildren(
+    ...openNotes.map((note) => {
+      const line = document.createElement("li");
+      line.className = note.tone;
+      const text = document.createElement("span");
+      text.className = "noteText";
+      if (note.name) {
+        const name = document.createElement("strong");
+        name.textContent = note.name;
+        text.append(name, ": ");
+      }
+      text.append(note.text);
+      line.append(text);
+      if (note.detail) {
+        const detail = document.createElement("span");
+        detail.className = "noteDetail";
+        detail.textContent = note.detail;
+        line.append(detail);
+      }
+      return line;
+    }),
+  );
+}
+
+/** Shows at most this many held stretches in the question; the rest are counted. */
+const HELD_SHOWN_IN_QUESTION = 5;
+
+/** The dialog before closing a Tab that holds stretches no saved project holds (ADR-0025). */
+function drawCloseQuestion(): void {
+  const tab = closeAsking;
+  view.tabAsking.hidden = tab === null;
+  if (!tab) return;
+  const unsaved = unsavedLockedRanges(tab.session);
+  const count = unsaved.length;
+  // A project can only be saved from a cut: it holds what the analysis found (ADR-0016).
+  const canSave = tab.finished !== null;
+  view.tabQuestionTitle.textContent = `„${fileName(tab.session.recording?.path ?? "")}“ schließen?`;
+  view.tabQuestion.textContent =
+    (count === 1
+      ? "Du hast hier eine Stelle festgehalten, die in keinem gespeicherten Projekt steht. Ohne Speichern ist sie weg."
+      : `Du hast hier ${count} Stellen festgehalten, die in keinem gespeicherten Projekt stehen. Ohne Speichern sind sie weg.`) +
+    (canSave ? "" : " Als Projekt speichern lässt sich erst nach dem Schneiden.");
+  view.tabQuestionHeld.replaceChildren(
+    ...unsaved.slice(0, HELD_SHOWN_IN_QUESTION).map((range) => {
+      const item = document.createElement("li");
+      item.textContent = `${clock(range.startSeconds)} – ${clock(range.endSeconds)}`;
+      return item;
+    }),
+    ...(count > HELD_SHOWN_IN_QUESTION
+      ? [Object.assign(document.createElement("li"), { className: "more", textContent: `und ${count - HELD_SHOWN_IN_QUESTION} weitere` })]
+      : []),
+  );
+  view.saveClose.hidden = !canSave;
+  // While a replan is pending the plan behind the file would lack the stretch just held.
+  view.saveClose.disabled = savingForClose || redoNeeded(tab.session) !== "nothing";
+  view.discardClose.disabled = savingForClose;
+  view.cancelClose.disabled = savingForClose;
+}
+
+function drawRecording(tab: OpenTab | null): void {
+  const recording = tab?.session.recording;
   if (!recording) {
-    view.recordingInfo.textContent = "Noch keine Aufnahme gewählt.";
+    view.recordingInfo.textContent =
+      "Noch keine Aufnahme offen. Wähle Aufnahmen oder zieh Dateien oder einen ganzen Ordner ins Fenster – jede Datei bekommt einen Tab.";
     return;
   }
   const seconds = (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
@@ -203,13 +408,14 @@ function drawRecording(): void {
   view.recordingInfo.replaceChildren(name, detail);
 }
 
-function drawSourceTracks(): void {
+function drawSourceTracks(tab: OpenTab | null): void {
   view.sourceTracks.replaceChildren();
-  const { recording } = session;
-  if (!recording) {
-    view.sourceTracksHint.textContent = "Wähle zuerst eine Aufnahme.";
+  const recording = tab?.session.recording;
+  if (!tab || !recording) {
+    view.sourceTracksHint.textContent = "Öffne zuerst eine Aufnahme.";
     return;
   }
+  const { session } = tab;
   const visible = visibleSourceTracks(session);
 
   const head = document.createElement("div");
@@ -232,7 +438,7 @@ function drawSourceTracks(): void {
       const tick = document.createElement("input");
       tick.type = "checkbox";
       tick.checked = checked;
-      tick.disabled = working;
+      tick.disabled = tab.working;
       tick.title = title;
       tick.addEventListener("change", () => {
         change();
@@ -251,7 +457,7 @@ function drawSourceTracks(): void {
 
     // One TrackRole per SourceTrack (CONTEXT.md): it drives the cut, it keeps its moments, or it is ignored.
     const role = document.createElement("select");
-    role.disabled = working;
+    role.disabled = tab.working;
     role.title = `Was Tonspur ${index + 1} zum Schnitt beiträgt`;
     for (const [value, label] of [
       ["ignored", "wird ignoriert"],
@@ -268,18 +474,19 @@ function drawSourceTracks(): void {
       // An ignored SourceTrack loses its row's waveform and with it the only button that could stop its sound —
       // a sound still on its way included.
       if (role.value === "ignored" && (playing?.position ?? fetchingFor) === index) stopPlaying();
-      session = setSourceTrackRole(session, index, role.value as TrackRole);
-      afterSettingChange();
+      // A role asks for the SourceTrack's waveform, so a Tab whose read was refused tries again (ADR-0025).
+      Object.assign(tab, roleGiven(tab, setSourceTrackRole(tab.session, index, role.value as TrackRole)));
+      afterSettingChange(tab);
       draw();
       // A SourceTrack that just got a role shows its waveform straight away, before anything is cut (ADR-0020).
-      void readWaveforms();
+      void pump();
     });
 
     row.append(
       role,
       // Changing this changes the file, not the cut, so a finished cut stays on screen.
       box(session.exportSourceTracks.includes(index), `Tonspur ${index + 1} nach Premiere übernehmen`, () => {
-        session = toggleExportSourceTrack(session, index);
+        tab.session = toggleExportSourceTrack(tab.session, index);
       }),
       text,
       detail,
@@ -291,7 +498,8 @@ function drawSourceTracks(): void {
     // lose both the picture and the pointer.
     // Only a SourceTrack that has a role shows one. What was read for it stays in memory either way, so taking the
     // role away and putting it back costs no second read (ADR-0020).
-    const waveform = roleOf(session, index) === "ignored" ? undefined : waveforms.find((each) => each.position === index);
+    const waveform =
+      roleOf(session, index) === "ignored" ? undefined : tab.waveforms.find((each) => each.position === index);
     if (!waveform) return;
     const holder = document.createElement("div");
     holder.className = "waveform";
@@ -335,9 +543,9 @@ function drawSourceTracks(): void {
       (hiddenExported === 0
         ? `(${hidden === 1 ? "kommt" : "kommen"} nicht nach Premiere)`
         : `(${hiddenExported} davon ${hiddenExported === 1 ? "kommt" : "kommen"} nach Premiere)`);
-  reveal.disabled = working;
+  reveal.disabled = tab.working;
   reveal.addEventListener("click", () => {
-    session = revealEmptySourceTracks(session, !session.emptySourceTracksShown);
+    tab.session = revealEmptySourceTracks(tab.session, !tab.session.emptySourceTracksShown);
     draw();
   });
   view.sourceTracksHint.append(document.createElement("br"), reveal);
@@ -346,10 +554,12 @@ function drawSourceTracks(): void {
 /** The Preset dropdown. "eigene" is what the sliders are once one of them has been moved off a Preset. */
 const OWN_SETTINGS = "eigene";
 
-function drawSettings(): void {
+function drawSettings(tab: OpenTab | null): void {
+  const session = tab?.session ?? NO_TAB_SESSION;
   const choice = presetChoice(session, ownPresets);
   const chosenIsOwn = choice !== null && ownPresets.some((preset) => preset.name === choice.name);
-  const busy = working || naming || asking !== null;
+  // Without a Tab there is nothing for a setting to belong to.
+  const busy = !tab || tab.working || naming || asking !== null;
 
   view.preset.replaceChildren();
   for (const name of [...PRESETS.map((preset) => preset.name), ...(choice ? [] : [OWN_SETTINGS])]) {
@@ -401,11 +611,11 @@ function drawSettings(): void {
   view.eventTailValue.textContent = `${decimals(session.eventTailSeconds, 1)} s`;
 }
 
-function drawResult(): void {
+function drawResult(tab: OpenTab | null): void {
   view.result.replaceChildren();
-  view.result.hidden = finished === null;
-  if (!finished) return;
-  const cut = finished;
+  const cut = tab?.finished ?? null;
+  view.result.hidden = cut === null;
+  if (!tab || !cut) return;
 
   const sentence = document.createElement("p");
   sentence.textContent =
@@ -424,14 +634,20 @@ function drawResult(): void {
   // Without a SourceTrack to export the file would hold a sequence with no audio at all.
   // While a replan is still pending the plan in the main process is the one before the last change: saved now, the
   // file would lack a stretch just held and still say "Gespeichert".
-  save.disabled = !canExport(session) || redoNeeded(session) !== "nothing";
+  const mayNotSave = () => !canExport(tab.session) || redoNeeded(tab.session) !== "nothing";
+  save.disabled = mayNotSave();
   save.addEventListener("click", async () => {
     save.disabled = true;
-    clearStatus();
-    const saved = show(await window.smarttrim.save(session.exportSourceTracks), "Speichern ging nicht");
-    save.disabled = !canExport(session) || redoNeeded(session) !== "nothing";
+    clearStatus(tab);
+    const saved = show(tab, await window.smarttrim.save(tab.id, tab.session.exportSourceTracks), "Speichern ging nicht");
+    save.disabled = mayNotSave();
     // undefined is a refusal, already on screen; null means the user closed the dialog.
-    if (saved === undefined || saved === null) return;
+    if (saved === undefined || saved === null || !isOpen(tab)) return;
+    // The result box belongs to the Tab on screen; another Tab's box gets the news in its status line instead.
+    if (viewed() !== tab) {
+      setStatus(tab, `Gespeichert: ${saved}`);
+      return;
+    }
     const done = document.createElement("p");
     done.className = "numbers";
     done.textContent = `Gespeichert: ${saved}`;
@@ -443,140 +659,160 @@ function drawResult(): void {
 
   // The project is what makes tomorrow cheap: it holds what the analysis found, so the Recording is not read again.
   const saveProject = document.createElement("button");
-  saveProject.textContent = "Projekt speichern …";
+  saveProject.textContent = "Projekt speichern";
+  saveProject.title = "Speichert neben der Aufnahme – oder in das Projekt, aus dem dieser Tab kommt";
   // While a redo is still pending the numbers on screen and the plan behind them are one step apart.
-  saveProject.disabled = redoNeeded(session) !== "nothing";
+  saveProject.disabled = redoNeeded(tab.session) !== "nothing";
   saveProject.addEventListener("click", async () => {
     saveProject.disabled = true;
-    clearStatus();
-    const saved = show(await window.smarttrim.saveProject(savedChoicesFrom(session)), "Speichern ging nicht");
-    saveProject.disabled = redoNeeded(session) !== "nothing";
-    if (saved === undefined || saved === null) return;
-    view.status.textContent = `Projekt gespeichert: ${saved}`;
+    await saveProjectOf(tab);
+    saveProject.disabled = redoNeeded(tab.session) !== "nothing";
   });
 
   buttons.append(save, saveProject);
   view.result.append(sentence, numbers, buttons);
 }
 
+/**
+ * Saves a Tab as a project without asking where — into its own project, else beside its Recording (ADR-0025) — and
+ * says where it landed. The path, or undefined when writing failed and the reason is in the Tab's status line.
+ */
+async function saveProjectOf(tab: OpenTab): Promise<string | undefined> {
+  clearStatus(tab);
+  // Taken now: a stretch held while the file is being written is not in it, and must not count as saved.
+  const choices = savedChoicesFrom(tab.session);
+  const saved = show(tab, await window.smarttrim.saveProjectBeside(tab.id, choices), "Speichern ging nicht");
+  if (saved === undefined || !isOpen(tab)) return undefined;
+  // What the file holds no longer needs asking about when the Tab is closed (ADR-0025).
+  tab.session = projectSaved(tab.session, choices);
+  setStatus(tab, `Projekt gespeichert: ${saved}`);
+  return saved;
+}
+
 function draw(): void {
-  drawRecording();
-  drawSourceTracks();
-  drawSettings();
-  drawResult();
+  const tab = viewed();
+  drawTabs();
+  drawRecording(tab);
+  drawSourceTracks(tab);
+  drawSettings(tab);
+  drawResult(tab);
   // The colours over the waveform come from the plan, so every redraw of the numbers redraws them too.
   drawWaveforms();
   // After the waveforms: whether there is anything to hold on follows whether they are shown.
-  drawHeld();
-  view.chooseRecording.disabled = working || preparing;
-  view.openProject.disabled = working || preparing;
-  view.threshold.disabled = working;
-  view.margin.disabled = working;
-  view.deadZone.disabled = working;
-  view.eventLead.disabled = working;
-  view.eventTail.disabled = working;
-  view.cut.disabled = working || preparing || !canCut(session);
-  view.cut.textContent = working ? "Arbeitet …" : "Schneiden";
+  drawHeld(tab);
+  drawStatus();
+  const settingsLocked = !tab || tab.working;
+  view.chooseRecording.disabled = preparing;
+  view.openProject.disabled = preparing;
+  view.threshold.disabled = settingsLocked;
+  view.margin.disabled = settingsLocked;
+  view.deadZone.disabled = settingsLocked;
+  view.eventLead.disabled = settingsLocked;
+  view.eventTail.disabled = settingsLocked;
+  view.cut.disabled = !tab || tab.working || preparing || !canCut(tab.session);
+  view.cut.textContent = tab?.working ? "Arbeitet …" : "Schneiden";
 }
-
-/** Waiting for the sliders to come to rest, so one drag is one job and not fifty. */
-let redoTimer: ReturnType<typeof setTimeout> | undefined;
-let redoing = false;
 
 /**
  * What a changed setting costs. Luft and Pause are planned again from what the analysis already found, which takes
  * milliseconds and no reading; the threshold and the SourceTracks decide what is found at all, so the cut on screen
  * stops being offered until it is made again (ADR-0004).
  */
-function afterSettingChange(): void {
-  if (!finished) return;
-  const redo = redoNeeded(session);
+function afterSettingChange(tab: OpenTab): void {
+  if (!tab.finished) return;
+  const redo = redoNeeded(tab.session);
   if (redo === "nothing") return;
   if (redo === "analyse") {
-    finished = null;
-    view.status.textContent = "Einstellung geändert – noch einmal schneiden.";
-    view.status.classList.remove("bad");
+    tab.finished = null;
+    setStatus(tab, "Einstellung geändert – noch einmal schneiden.");
     return;
   }
-  scheduleRedo(redo);
+  scheduleRedo(tab, redo);
 }
 
-function scheduleRedo(redo: "replan" | "redecide"): void {
-  view.status.textContent = redo === "replan" ? "Plant neu …" : "Rechnet neu …";
-  view.status.classList.remove("bad");
-  clearTimeout(redoTimer);
-  redoTimer = setTimeout(() => void redoNow(), 120);
+function scheduleRedo(tab: OpenTab, redo: "replan" | "redecide"): void {
+  setStatus(tab, redo === "replan" ? "Plant neu …" : "Rechnet neu …");
+  clearTimeout(tab.redoTimer);
+  tab.redoTimer = setTimeout(() => void redoNow(tab), 120);
 }
 
 /** The settings a redo was asked for, so numbers from a slider position the user has left behind are not called current. */
-const settingsNow = () => ({ thresholdDbfs: session.thresholdDbfs, ...planSettingsFrom(session) });
+const settingsNow = (tab: OpenTab) => ({ thresholdDbfs: tab.session.thresholdDbfs, ...planSettingsFrom(tab.session) });
 
-async function redoNow(): Promise<void> {
-  const redo = redoNeeded(session);
-  if (redoing || (redo !== "replan" && redo !== "redecide")) return;
-  redoing = true;
-  const used = settingsNow();
+async function redoNow(tab: OpenTab): Promise<void> {
+  const redo = redoNeeded(tab.session);
+  if (tab.redoing || !isOpen(tab) || (redo !== "replan" && redo !== "redecide")) return;
+  tab.redoing = true;
+  const used = settingsNow(tab);
   const answer =
-    redo === "replan" ? await window.smarttrim.replan(used) : await window.smarttrim.redecide(used);
-  const summary = show(answer, redo === "replan" ? "Das Neuplanen ging nicht" : "Das Neurechnen ging nicht");
-  redoing = false;
+    redo === "replan" ? await window.smarttrim.replan(tab.id, used) : await window.smarttrim.redecide(tab.id, used);
+  tab.redoing = false;
+  if (!isOpen(tab)) return;
+  const summary = show(tab, answer, redo === "replan" ? "Das Neuplanen ging nicht" : "Das Neurechnen ging nicht");
   if (summary) {
-    finished = summary;
+    tab.finished = summary;
     // A sound that skips what the cut removes was built from the cut before this one: heard on, it would jump over a
     // stretch just held, under a band that now says kept. It starts again from where it is, on the new cut. So does
-    // one still on its way, which was asked for with the old cut.
-    const stale = playing
-      ? playing.skipping
-        ? playing.position
-        : null
-      : fetchingFor !== null && view.skipRemoved.checked
-        ? fetchingFor
-        : null;
+    // one still on its way, which was asked for with the old cut. Only the Tab on screen can have a sound.
+    const stale =
+      viewed() !== tab
+        ? null
+        : playing
+          ? playing.skipping
+            ? playing.position
+            : null
+          : fetchingFor !== null && view.skipRemoved.checked
+            ? fetchingFor
+            : null;
     if (stale !== null) {
       stopPlaying();
       void play(stale);
     }
-    const now = settingsNow();
+    const now = settingsNow(tab);
     // The sliders may have moved on while this ran; then these numbers are already one step behind.
     // Every setting a plan is made with counts, held stretches and the event sliders included; comparing only some
     // would call a plan current that was made before a stretch was held.
     if (JSON.stringify(now) === JSON.stringify(used)) {
-      session = planFinished(session);
-      clearStatus();
+      tab.session = planFinished(tab.session);
+      clearStatus(tab);
     }
   }
   draw();
-  const next = redoNeeded(session);
-  if (next === "replan" || next === "redecide") scheduleRedo(next);
+  // A refusal stays on screen rather than being asked again every 120 ms.
+  const next = redoNeeded(tab.session);
+  if (summary && (next === "replan" || next === "redecide")) scheduleRedo(tab, next);
 }
 
 function slider(
   input: HTMLInputElement,
   range: { min: number; max: number; step: number },
-  change: (value: number) => void,
+  change: (session: CutSession, value: number) => CutSession,
 ): void {
   input.min = String(range.min);
   input.max = String(range.max);
   input.step = String(range.step);
   input.addEventListener("input", () => {
-    change(Number(input.value));
-    afterSettingChange();
+    const tab = viewed();
+    if (!tab) return;
+    tab.session = change(tab.session, Number(input.value));
+    afterSettingChange(tab);
     draw();
   });
 }
 
-slider(view.threshold, THRESHOLD_DBFS, (value) => (session = setThresholdDbfs(session, value)));
-slider(view.margin, MARGIN_SECONDS, (value) => (session = setMarginSeconds(session, value)));
-slider(view.deadZone, MINIMUM_DEAD_ZONE_SECONDS, (value) => (session = setMinimumDeadZoneSeconds(session, value)));
-slider(view.eventLead, EVENT_LEAD_SECONDS, (value) => (session = setEventLeadSeconds(session, value)));
-slider(view.eventTail, EVENT_TAIL_SECONDS, (value) => (session = setEventTailSeconds(session, value)));
+slider(view.threshold, THRESHOLD_DBFS, setThresholdDbfs);
+slider(view.margin, MARGIN_SECONDS, setMarginSeconds);
+slider(view.deadZone, MINIMUM_DEAD_ZONE_SECONDS, setMinimumDeadZoneSeconds);
+slider(view.eventLead, EVENT_LEAD_SECONDS, setEventLeadSeconds);
+slider(view.eventTail, EVENT_TAIL_SECONDS, setEventTailSeconds);
 
 view.preset.addEventListener("change", () => {
+  const tab = viewed();
   const preset = allPresets(ownPresets).find((each) => each.name === view.preset.value);
   // "eigene" is not something to pick: it only describes sliders that belong to no Preset.
-  if (!preset) return;
-  session = applyPreset(session, preset);
-  afterSettingChange();
+  if (!tab || !preset) return;
+  tab.session = applyPreset(tab.session, preset);
+  afterSettingChange(tab);
   draw();
 });
 
@@ -603,6 +839,7 @@ const HELD = "#5aa9e6";
  */
 function drawHeldOver(
   paint: CanvasRenderingContext2D,
+  session: CutSession,
   width: number,
   height: number,
   xOf: (second: number) => number,
@@ -641,21 +878,21 @@ function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: Can
   return { paint, width };
 }
 
-/** The strip over the whole Recording: brightness is how much of that column survives, plus the zoom window. */
+/**
+ * The last answer of `overviewPeaks`. It depends only on which Tab and which waveforms are shown and how wide the
+ * strip is — none of which changes when a slider moves — so without this it rescanned 1.08 million peaks on every
+ * redraw.
+ */
+let overviewPeaksCache: { key: string; peaks: number[] } | null = null;
+
 /**
  * The loudest thing any shown SourceTrack does in each column of the strip. The strip spans the whole Recording,
  * so one column is minutes wide; taking the loudest across the SourceTracks answers "is there any sound here at
  * all", which is what the strip is for.
  */
-/**
- * The last answer of `overviewPeaks`. It depends only on which waveforms are shown and how wide the strip is —
- * neither changes when a slider moves — so without this it rescanned 1.08 million peaks on every redraw.
- */
-let overviewPeaksCache: { key: string; peaks: number[] } | null = null;
-
-function overviewPeaks(columns: number, recordingSeconds: number): number[] {
-  const shown = shownWaveforms();
-  const key = `${columns}|${shown.map((waveform) => waveform.position).join(",")}`;
+function overviewPeaks(tab: OpenTab, columns: number, recordingSeconds: number): number[] {
+  const shown = shownWaveforms(tab);
+  const key = `${tab.id}|${columns}|${shown.map((waveform) => waveform.position).join(",")}`;
   if (overviewPeaksCache?.key === key) return overviewPeaksCache.peaks;
 
   const loudest = new Array<number>(columns).fill(0);
@@ -673,9 +910,11 @@ function overviewPeaks(columns: number, recordingSeconds: number): number[] {
   return loudest;
 }
 
-function drawOverview(): void {
-  const seconds = recordingSeconds();
+/** The strip over the whole Recording: brightness is how much of that column survives, plus the zoom window. */
+function drawOverview(tab: OpenTab): void {
+  const seconds = recordingSeconds(tab);
   if (!seconds) return;
+  const { finished, zoom } = tab;
   const height = 34;
   const { paint, width } = canvasBrush(view.overview, height);
 
@@ -696,7 +935,7 @@ function drawOverview(): void {
   }
 
   // The sound itself, over the cut: one line per column, mirrored around the middle, as in the waveforms below.
-  const peaks = overviewPeaks(width, seconds);
+  const peaks = overviewPeaks(tab, width, seconds);
   const middle = height / 2;
   for (let column = 0; column < width; column += 1) {
     const loudest = peaks[column] as number;
@@ -707,7 +946,7 @@ function drawOverview(): void {
   }
 
   // Held stretches over the whole Recording, so a held moment far outside the zoom can still be found.
-  drawHeldOver(paint, width, height, (second) => (second / seconds) * width, 3);
+  drawHeldOver(paint, tab.session, width, height, (second) => (second / seconds) * width, 3);
 
   // Where the zoom below is looking.
   const left = (zoom.fromSeconds / seconds) * width;
@@ -718,9 +957,10 @@ function drawOverview(): void {
 }
 
 /** One SourceTrack's waveform across the zoom window, with the cut painted behind it. */
-function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform): void {
-  const seconds = recordingSeconds();
+function drawWaveform(tab: OpenTab, canvas: HTMLCanvasElement, waveform: SourceTrackWaveform): void {
+  const seconds = recordingSeconds(tab);
   if (!seconds) return;
+  const { finished, zoom } = tab;
   const height = 66;
   const { paint, width } = canvasBrush(canvas, height);
   const span = zoom.toSeconds - zoom.fromSeconds;
@@ -759,12 +999,12 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     paint.fillRect(column, middle - half, 1, half * 2);
   }
 
-  drawHeldOver(paint, width, height, xOf);
+  drawHeldOver(paint, tab.session, width, height, xOf);
 
   // The Playhead. While this SourceTrack plays: a bar over every stretch the sound jumps across, and the line at the
   // moment being heard, read off the clock the sound itself runs on (ADR-0022). While nothing plays: the line on
   // every waveform, where listening starts next. While another SourceTrack plays, this one shows none.
-  const now = playing;
+  const now = playing?.tab === tab ? playing : null;
   let lineAt: number | null = null;
   if (now && now.position === waveform.position) {
     paint.fillStyle = JOIN_MARK;
@@ -777,7 +1017,7 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     }
     lineAt = heardIn(now);
   } else if (!now) {
-    lineAt = playheadSeconds;
+    lineAt = tab.playheadSeconds;
   }
   if (lineAt === null) return;
   const x = xOf(lineAt);
@@ -787,10 +1027,10 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
   }
 }
 
-/** Rebuilds one row per SourceTrack the analysis read, and draws them all. */
 /**
  * The canvas of one SourceTrack's waveform, made once and kept. The SourceTrack rows are rebuilt on every draw, so
- * a canvas made fresh each time would be cleared constantly and would drop the pointer in the middle of a drag.
+ * a canvas made fresh each time would be cleared constantly and would drop the pointer in the middle of a drag. Only
+ * the Tab on screen is drawn, so one canvas per position serves every Tab.
  */
 const waveformCanvases = new Map<number, HTMLCanvasElement>();
 
@@ -808,130 +1048,177 @@ function waveformCanvas(position: number): HTMLCanvasElement {
  * The waveforms belonging to SourceTracks that still have a role. Audio read for a role the user took away stays
  * in `waveforms` so putting the role back is instant (ADR-0020), but none of it is drawn.
  */
-function shownWaveforms(): SourceTrackWaveform[] {
-  return waveforms.filter((waveform) => roleOf(session, waveform.position) !== "ignored");
+function shownWaveforms(tab: OpenTab): SourceTrackWaveform[] {
+  return tab.waveforms.filter((waveform) => roleOf(tab.session, waveform.position) !== "ignored");
 }
 
 function drawWaveforms(): void {
-  const seconds = recordingSeconds();
+  const tab = viewed();
+  const seconds = recordingSeconds(tab);
   // No SourceTrack with a role means nothing to picture — an empty strip would sit there claiming to show a cut.
-  view.cutPicture.hidden = shownWaveforms().length === 0 || !seconds;
-  if (view.cutPicture.hidden) return;
+  view.cutPicture.hidden = !tab || !seconds || shownWaveforms(tab).length === 0;
+  if (!tab || !seconds || view.cutPicture.hidden) return;
 
   view.zoom.min = "0";
   view.zoom.max = "1000";
   view.zoom.step = "1";
   // The slider runs from the whole Recording at the left to the closest zoom at the right, and the ends are far
   // apart, so it moves in steps of a fixed ratio rather than of a fixed number of seconds.
-  const widest = seconds as number;
+  const widest = seconds;
   const closest = Math.min(CLOSEST_WINDOW_SECONDS, widest);
-  const span = zoom.toSeconds - zoom.fromSeconds;
+  const span = tab.zoom.toSeconds - tab.zoom.fromSeconds;
   view.zoom.value = String(Math.round((Math.log(widest / span) / Math.log(widest / closest)) * 1000));
   view.zoomValue.textContent = duration(span);
   // Before a cut there is nothing removed to skip, so the switch would promise something it cannot do.
-  view.skipRow.hidden = finished === null;
+  view.skipRow.hidden = tab.finished === null;
 
-  for (const waveform of waveforms) {
+  for (const waveform of tab.waveforms) {
     const canvas = waveformCanvases.get(waveform.position);
     // A canvas the row has not put on screen yet has no width to draw into.
-    if (canvas?.isConnected) drawWaveform(canvas, waveform);
+    if (canvas?.isConnected) drawWaveform(tab, canvas, waveform);
   }
-  drawOverview();
+  drawOverview(tab);
 }
 
-/** Moves the zoom window and redraws, without touching anything else on screen. */
-function showWindow(next: ZoomWindow): void {
-  zoom = next;
-  drawWaveforms();
+/** Moves the zoom window of the Tab on screen and redraws, without touching anything else on screen. */
+function showWindow(tab: OpenTab, next: ZoomWindow): void {
+  tab.zoom = next;
+  if (viewed() === tab) drawWaveforms();
 }
 
-/** True while a SourceTrack is being read, so two role changes in a row do not start two reads at once. */
-let reading = false;
-/** The SourceTracks being read ahead of anyone asking for them. Belongs to the Recording that is open now. */
-let readAhead: readonly number[] = [];
-/** How far that read has got, for the line the window shows while it runs. */
-let readingCount = { done: 0, total: 0 };
-
-/** Says how far reading the SourceTracks has got, without taking the status line away from a refusal. */
-function drawReading(): void {
-  if (!reading || view.status.classList.contains("bad")) return;
-  const { done, total } = readingCount;
-  view.status.textContent =
-    total === 1
-      ? "Liest den Ton der Tonspur …"
-      : `Liest den Ton der Tonspuren … ${done} von ${total} fertig`;
-}
-
-/**
- * Reads whatever SourceTrack has a role and no waveform yet, and draws it (ADR-0020). This is the same read the
- * cut needs, only earlier: what it brings in is kept in the main process and the cut reuses it.
- */
-async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
-  // Positions belong to one Recording. Read ahead for a Recording that is no longer open would ask for the old
-  // one's SourceTracks against the new one's file, so the list is replaced rather than added to.
-  if (ahead.length > 0) readAhead = ahead;
-  const seconds = recordingSeconds();
-  if (reading || !seconds) return;
-  const have = waveforms.map((waveform) => waveform.position);
-  const missing = [...new Set([...sourceTracksToRead(session, have), ...readAhead.filter((one) => !have.includes(one))])];
-  if (missing.length === 0) return;
-
-  reading = true;
-  readingCount = { done: 0, total: missing.length };
-  drawReading();
-  const shownThen = filesShown;
-  const answer = await window.smarttrim.readSourceTracks(missing);
-  reading = false;
-  if (shownThen !== filesShown) {
-    // This read belonged to the file open before, so its refusal is no error. `readAhead` already lists what the file
-    // now on screen needs; its read, held back while this one ran, starts here instead of being lost.
-    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
-    await readWaveforms();
-    return;
-  }
-  const drawn = show(answer, "Die Tonspur ließ sich nicht lesen");
-  if (!drawn) {
-    // A refusal leaves `missing` exactly as it was, so trying again would ask for the same thing for ever — one
-    // ffmpeg on a 23 GB file per turn. The user retries by giving a role again or choosing the Recording again.
-    readAhead = [];
-    draw();
-    return;
-  }
-  {
-    // Everything read is kept, whether or not its role survived the read: that is what makes putting a role back
-    // instant. Which of them is drawn is decided by the role, in `drawSourceTracks`.
-    waveforms = [...waveforms, ...drawn].filter(
-      (waveform, at, all) => all.findIndex((each) => each.position === waveform.position) === at,
-    );
-    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: seconds };
-    // Only the reading line is cleared. A warning such as "noch einmal schneiden" belongs to the settings, not to
-    // this read, and wiping it would leave stale numbers on screen with nothing saying so.
-    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
-  }
-  draw();
-  // A role changed, or another Recording was chosen, while this was running: both leave more to read.
-  await readWaveforms();
-}
-
-/**
- * Fetches the waveforms of the analysis that just finished and starts the zoom showing the whole Recording. The
- * shape of the sound does not change with a slider, so this is asked for once per analysis (ADR-0019).
- */
-async function loadWaveforms(recordingSeconds: number): Promise<void> {
-  const drawn = show(await window.smarttrim.waveforms(), "Die Wellenform ließ sich nicht zeichnen");
-  if (!drawn) return;
-  // Merged, not replaced: the analysis only decoded the SourceTracks with a role, while the read-ahead brought in
+/** Takes in waveforms that arrived for a Tab, keeping every one read before, and starts its zoom on the whole Recording. */
+function mergeWaveforms(tab: OpenTab, drawn: readonly SourceTrackWaveform[]): void {
+  // Merged, not replaced: an analysis only decodes the SourceTracks with a role, while the read-ahead brought in
   // every one that carries sound. Replacing would throw those away and make switching roles slow again (ADR-0020).
-  waveforms = [...drawn, ...waveforms].filter(
+  tab.waveforms = [...drawn, ...tab.waveforms].filter(
     (waveform, at, all) => all.findIndex((each) => each.position === waveform.position) === at,
   );
-  // The zoom is only set up when there was nothing to look at yet. Since the waveform now exists before the cut
-  // (ADR-0020), a user who zoomed to a suspect spot and pressed Schneiden must stay there.
-  if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: recordingSeconds };
+  // The zoom is only set up when there was nothing to look at yet: a user who zoomed to a suspect spot stays there.
+  const seconds = recordingSeconds(tab);
+  if (seconds && tab.zoom.toSeconds <= 1) tab.zoom = { fromSeconds: 0, toSeconds: seconds };
+  Object.assign(tab, readArrived(tab, drawn.map((waveform) => waveform.position)));
+}
+
+/* ── Work in the background ────────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The one job running in the background, across every Tab: scanning a Recording, reading its SourceTracks, or reading
+ * a reopened project's audio. The owner chose one Recording after another over all at once (ADR-0025).
+ */
+let job: BackgroundJob | null = null;
+
+/** Starts the next background job, if there is one and none is running. Called whenever something may have left work. */
+async function pump(): Promise<void> {
+  if (job || preparing) return;
+  const next = nextBackgroundJob(tabs, viewedId);
+  const tab = next ? tabById(next.tabId) : undefined;
+  if (!next || !tab) return;
+  job = next;
+  drawTabs();
+  try {
+    if (next.kind === "scan") await scanTab(tab);
+    else if (next.kind === "read") await readTab(tab, next.positions);
+    else await readProjectAudioOf(tab);
+  } catch (error) {
+    // An answer is a value, never an exception (ADR-0012); this is a fault in the window. Stall the Tab rather than
+    // retrying it for ever.
+    if (isOpen(tab)) {
+      Object.assign(tab, jobRefused(tab));
+      say(tab, `Das ging nicht: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } finally {
+    job = null;
+  }
+  draw();
+  void pump();
+}
+
+/** Says how far reading a Tab's SourceTracks has got, without taking its status line away from a refusal. */
+function drawReading(tab: OpenTab): void {
+  if (tab.status.bad) return;
+  const { done, total } = tab.readingCount;
+  setStatus(
+    tab,
+    total === 1 ? "Liest den Ton der Tonspur …" : `Liest den Ton der Tonspuren … ${done} von ${total} fertig`,
+  );
+}
+
+/** A status line a background job put up, which it takes down again once done — and no other. */
+const isJobLine = (tab: OpenTab) =>
+  !tab.status.bad && (tab.status.text.startsWith("Liest den Ton") || tab.status.text === "Prüft die Tonspuren …");
+
+/** Listens to slices of a Tab's SourceTracks, so its EmptyTracks are hidden and the rest read ahead (ADR-0013). */
+async function scanTab(tab: OpenTab): Promise<void> {
+  setStatus(tab, "Prüft die Tonspuren …");
+  const answer = await window.smarttrim.scan(tab.id);
+  if (!isOpen(tab)) return;
+  const scan = show(tab, answer, "Die Tonspuren ließen sich nicht prüfen");
+  if (!scan) {
+    Object.assign(tab, jobRefused(tab));
+    return;
+  }
+  // Not the whole Tab anew: its rows were on screen during the scan, and a role given meanwhile is the user's.
+  Object.assign(tab, scanArrived(tab, scan));
+  if (isJobLine(tab)) clearStatus(tab);
+}
+
+/**
+ * Reads SourceTracks of a Tab — those with a role, and every one the scan found sound on — and draws them (ADR-0020).
+ * This is the same read the cut needs, only earlier: what it brings in is kept in the main process and the cut reuses
+ * it.
+ */
+async function readTab(tab: OpenTab, positions: readonly number[]): Promise<void> {
+  tab.readingCount = { done: 0, total: positions.length };
+  drawReading(tab);
+  const answer = await window.smarttrim.readSourceTracks(tab.id, positions);
+  if (!isOpen(tab)) return;
+  const drawn = show(tab, answer, "Die Tonspur ließ sich nicht lesen");
+  if (!drawn) {
+    // Asked again, the same read would be refused again — one ffmpeg on a 23 GB file per turn. The user retries by
+    // giving a role again.
+    Object.assign(tab, jobRefused(tab));
+    return;
+  }
+  mergeWaveforms(tab, drawn);
+  // Only the reading line is cleared. A warning such as "noch einmal schneiden" belongs to the settings, not to
+  // this read, and wiping it would leave stale numbers on screen with nothing saying so.
+  if (isJobLine(tab)) clearStatus(tab);
+}
+
+/**
+ * Reads the audio of a reopened project, so its waveform appears. It runs in the background: the sliders and the
+ * numbers are already usable, and the waveform appears when it arrives.
+ */
+async function readProjectAudioOf(tab: OpenTab): Promise<void> {
+  setStatus(tab, "Liest den Ton für die Wellenform …");
+  const answer = await window.smarttrim.readProjectAudio(tab.id);
+  if (!isOpen(tab)) return;
+  const drawn = show(tab, answer, "Der Ton ließ sich nicht nachlesen");
+  if (!drawn) {
+    Object.assign(tab, jobRefused(tab));
+    return;
+  }
+  mergeWaveforms(tab, drawn);
+  // What a threshold is decided from is back in memory, so moving it decides again instead of asking for a whole new
+  // cut — without claiming the sliders as they stand now are what the cut was planned with.
+  Object.assign(tab, projectAudioArrived(tab, drawn.map((waveform) => waveform.position)));
+  if (isJobLine(tab)) clearStatus(tab);
+}
+
+/**
+ * Fetches the waveforms of the analysis that just finished. The shape of the sound does not change with a slider, so
+ * this is asked for once per analysis (ADR-0019).
+ */
+async function loadWaveforms(tab: OpenTab): Promise<void> {
+  const drawn = show(tab, await window.smarttrim.waveforms(tab.id), "Die Wellenform ließ sich nicht zeichnen");
+  if (!drawn || !isOpen(tab)) return;
+  mergeWaveforms(tab, drawn);
   // A full redraw, not just the picture: the SourceTrack rows are what put each waveform's canvas on screen, and
   // they were built while there was still nothing to draw.
   draw();
 }
+
+/* ── Presets ───────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /** Closes whatever row was open and gives the keyboard back to the dropdown, which would otherwise hold nothing. */
 function closePresetRow(): void {
@@ -956,16 +1243,17 @@ view.confirmAsk.addEventListener("click", () => {
 
 view.cancelAsk.addEventListener("click", closePresetRow);
 
-/** Takes the Presets the main process reports back, and puts the saved one on the dropdown. */
+/** Takes the Presets the main process reports back, and puts the saved one on the dropdown of the Tab on screen. */
 function presetsSaved(saved: readonly Preset[], chosen: Preset): void {
   ownPresets = saved;
+  const tab = viewed();
   // The sliders already carry these values, so this only marks which Preset they now belong to.
-  session = applyPreset(session, chosen);
+  if (tab) tab.session = applyPreset(tab.session, chosen);
   closePresetRow();
 }
 
 view.newPreset.addEventListener("click", () => {
-  clearStatus();
+  clearStatus(viewed());
   naming = true;
   draw();
   view.presetName.value = "";
@@ -980,24 +1268,26 @@ view.presetName.addEventListener("keydown", (event) => {
 });
 
 view.confirmPreset.addEventListener("click", () => {
-  clearStatus();
+  const tab = viewed();
+  if (!tab) return;
+  clearStatus(tab);
   const name = view.presetName.value.trim();
   let preset: Preset;
   try {
     // Refuses a built-in name or a blank one here, before the main process is asked to write anything.
-    preset = presetFromSliders(session, name);
+    preset = presetFromSliders(tab.session, name);
   } catch (reason) {
-    say((reason as Error).message);
+    say(tab, (reason as Error).message);
     return;
   }
 
   const write = async () => {
-    const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+    const saved = show(tab, await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
     if (saved) presetsSaved(saved, preset);
   };
   if (ownPresets.some((each) => each.name === name)) {
     naming = false;
-    ask(`\u201E${name}\u201C gibt es schon. \u00DCberschreiben?`, () => void write());
+    ask(`„${name}“ gibt es schon. Überschreiben?`, () => void write());
     return;
   }
   void write();
@@ -1006,24 +1296,30 @@ view.confirmPreset.addEventListener("click", () => {
 // Writing the sliders back into the Preset they were changed from. No question first: the button only exists while
 // there is something to write back, and pressing it says plainly enough what is meant.
 view.savePreset.addEventListener("click", async () => {
-  clearStatus();
-  const choice = presetChoice(session, ownPresets);
+  const tab = viewed();
+  if (!tab) return;
+  clearStatus(tab);
+  const choice = presetChoice(tab.session, ownPresets);
   if (!choice) return;
-  const preset = presetFromSliders(session, choice.name);
-  const saved = show(await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+  const preset = presetFromSliders(tab.session, choice.name);
+  const saved = show(tab, await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
   if (saved) presetsSaved(saved, preset);
 });
 
 view.deletePreset.addEventListener("click", () => {
-  clearStatus();
-  const choice = presetChoice(session, ownPresets);
+  const tab = viewed();
+  if (!tab) return;
+  clearStatus(tab);
+  const choice = presetChoice(tab.session, ownPresets);
   if (!choice) return;
-  ask(`\u201E${choice.name}\u201C l\u00F6schen?`, async () => {
-    const left = show(await window.smarttrim.deletePreset(choice.name), "Die Voreinstellung ließ sich nicht l\u00F6schen");
+  ask(`„${choice.name}“ löschen?`, async () => {
+    const left = show(tab, await window.smarttrim.deletePreset(choice.name), "Die Voreinstellung ließ sich nicht löschen");
     if (!left) return;
     ownPresets = left;
-    // The sliders keep their values; only the name they belonged to is gone.
-    session = { ...session, selectedPreset: null };
+    // The sliders keep their values; only the name they belonged to is gone — in every Tab that had it chosen.
+    for (const each of tabs) {
+      if (each.session.selectedPreset === choice.name) each.session = { ...each.session, selectedPreset: null };
+    }
     draw();
   });
 });
@@ -1032,21 +1328,24 @@ view.deletePreset.addEventListener("click", () => {
 /* ── Zooming, dragging and the strip ───────────────────────────────────────────────────────────────────────── */
 
 view.zoom.addEventListener("input", () => {
-  const seconds = recordingSeconds();
-  if (!seconds) return;
+  const tab = viewed();
+  const seconds = recordingSeconds(tab);
+  if (!tab || !seconds) return;
   const closest = Math.min(CLOSEST_WINDOW_SECONDS, seconds);
   // The slider is a ratio, not a number of seconds: 0 is the whole Recording, 1000 is the closest zoom.
   const along = Number(view.zoom.value) / 1000;
-  showWindow(zoomedTo(zoom, seconds, seconds * (closest / seconds) ** along));
+  showWindow(tab, zoomedTo(tab.zoom, seconds, seconds * (closest / seconds) ** along));
 });
 
 /* ── Playback ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /**
- * The SourceTrack that is playing, if any — one at a time (ADR-0022). `startedAt` is the audio clock's time of the
- * first sample, so the Playhead is read off the clock the sound runs on rather than off a timer that drifts from it.
+ * The SourceTrack that is playing, if any — one at a time in the whole window (ADR-0022), and always in the Tab on
+ * screen, since showing another Tab stops it. `startedAt` is the audio clock's time of the first sample, so the
+ * Playhead is read off the clock the sound runs on rather than off a timer that drifts from it.
  */
 let playing: {
+  tab: OpenTab;
   position: number;
   playback: Playback;
   /** Whether this sound skips what the cut removes, and so goes stale the moment the cut changes. */
@@ -1068,16 +1367,14 @@ function sharedAudio(): AudioContext {
   return audio;
 }
 
-/** The SourceTrack whose Excerpt is on its way, so its button says so and a second press cancels instead. */
+/**
+ * The SourceTrack of the Tab on screen whose Excerpt is on its way, so its button says so and a second press cancels
+ * instead.
+ */
 let fetchingFor: number | null = null;
 /** Counts presses, so an Excerpt arriving after the user pressed something else is dropped instead of played. */
 let playRequest = 0;
 let playheadFrame = 0;
-/**
- * The Playhead while nothing plays: where listening starts next, shared by every waveform because they all show the
- * same stretch of the Recording. Set by clicking a waveform, left where the sound stopped. Null until either happens.
- */
-let playheadSeconds: number | null = null;
 /** Where the Playhead was on the frame before, so the view pages along only when the Playhead runs out of it. */
 let lastHeard: number | null = null;
 
@@ -1090,7 +1387,7 @@ function stopPlaying(): void {
   playing = null;
   if (!was) return;
   // The Playhead stays where the sound stopped, so the next press goes on from there.
-  playheadSeconds = heardIn(was);
+  was.tab.playheadSeconds = heardIn(was);
   was.source.onended = null;
   was.source.stop();
   // The context stays for the next press; only this sound's node goes.
@@ -1110,16 +1407,17 @@ function heardIn(sound: NonNullable<typeof playing>): number {
 function followPlayhead(): void {
   const now = playing;
   if (!now) return;
+  const { tab } = now;
   const heard = heardIn(now);
-  const seconds = recordingSeconds();
-  const wasInView = lastHeard !== null && lastHeard >= zoom.fromSeconds && lastHeard <= zoom.toSeconds;
+  const seconds = recordingSeconds(tab);
+  const wasInView = lastHeard !== null && lastHeard >= tab.zoom.fromSeconds && lastHeard <= tab.zoom.toSeconds;
   lastHeard = heard;
-  if (seconds && wasInView && heard > zoom.toSeconds) {
-    showWindow(pannedBy(zoom, seconds, heard - zoom.fromSeconds));
+  if (seconds && wasInView && heard > tab.zoom.toSeconds) {
+    showWindow(tab, pannedBy(tab.zoom, seconds, heard - tab.zoom.fromSeconds));
   } else {
-    const waveform = waveforms.find((each) => each.position === now.position);
+    const waveform = tab.waveforms.find((each) => each.position === now.position);
     const canvas = waveformCanvases.get(now.position);
-    if (waveform && canvas?.isConnected) drawWaveform(canvas, waveform);
+    if (waveform && canvas?.isConnected) drawWaveform(tab, canvas, waveform);
   }
   playheadFrame = requestAnimationFrame(followPlayhead);
 }
@@ -1128,31 +1426,33 @@ function followPlayhead(): void {
  * Puts the Playhead where the user clicked a waveform. While a SourceTrack plays it jumps there and plays on, the
  * way a click on Premiere's timeline does.
  */
-function placePlayhead(canvas: HTMLCanvasElement, clientX: number): void {
-  const seconds = recordingSeconds();
+function placePlayhead(tab: OpenTab, canvas: HTMLCanvasElement, clientX: number): void {
+  const seconds = recordingSeconds(tab);
   if (!seconds) return;
   const box = canvas.getBoundingClientRect();
-  const span = zoom.toSeconds - zoom.fromSeconds;
-  const clicked = Math.min(Math.max(zoom.fromSeconds + ((clientX - box.left) / box.width) * span, 0), seconds);
+  const span = tab.zoom.toSeconds - tab.zoom.fromSeconds;
+  const clicked = Math.min(Math.max(tab.zoom.fromSeconds + ((clientX - box.left) / box.width) * span, 0), seconds);
   // A SourceTrack that plays, or whose Excerpt is still on its way, jumps there; with nothing playing the click only
   // moves the Playhead. Counting the one on its way is what keeps a second quick click from stopping the sound.
   const position = playing?.position ?? fetchingFor;
   // Stopping leaves the Playhead where the sound was, so the click is put back after it.
   stopPlaying();
-  playheadSeconds = clicked;
+  tab.playheadSeconds = clicked;
   if (position === null) drawWaveforms();
   else void play(position);
 }
 
 /**
- * Plays one SourceTrack over what the waveforms show — or the first three minutes of it, zoomed out further than
- * that — skipping what the cut removes when the switch says so. Pressing the row that plays, or waits, stops it.
+ * Plays one SourceTrack of the Tab on screen over what the waveforms show — or the first three minutes of it, zoomed
+ * out further than that — skipping what the cut removes when the switch says so. Pressing the row that plays, or
+ * waits, stops it.
  */
 async function play(position: number): Promise<void> {
   const busyWith = playing?.position ?? fetchingFor;
   stopPlaying();
-  const seconds = recordingSeconds();
-  if (busyWith === position || !seconds) {
+  const tab = viewed();
+  const seconds = recordingSeconds(tab);
+  if (busyWith === position || !tab || !seconds) {
     draw();
     return;
   }
@@ -1160,6 +1460,7 @@ async function play(position: number): Promise<void> {
   const request = playRequest;
   // From the Playhead — unless it is not in view, or at the very end: then from the start of what the user sees.
   // Up to three minutes, past the edge of the view if need be; the view pages along (followPlayhead).
+  const { zoom, playheadSeconds } = tab;
   const playheadUsable =
     playheadSeconds !== null &&
     playheadSeconds >= zoom.fromSeconds &&
@@ -1170,17 +1471,17 @@ async function play(position: number): Promise<void> {
   // The Playhead starts in view, so a start that skipping carries past the right edge still turns the page.
   lastHeard = fromSeconds;
   // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
-  const kept = finished?.keptRanges ?? null;
+  const kept = tab.finished?.keptRanges ?? null;
   const skipping = view.skipRemoved.checked && kept !== null;
   fetchingFor = position;
-  clearStatus();
+  clearStatus(tab);
   draw();
 
-  const answer = await window.smarttrim.readExcerpt({ position, fromSeconds, toSeconds });
-  // Something else was pressed, or the Recording changed, while the Excerpt was on its way.
-  if (request !== playRequest) return;
+  const answer = await window.smarttrim.readExcerpt({ tabId: tab.id, position, fromSeconds, toSeconds });
+  // Something else was pressed, another Tab was shown, or this one closed, while the Excerpt was on its way.
+  if (request !== playRequest || !isOpen(tab)) return;
   fetchingFor = null;
-  const excerpt = show(answer, "Der Ton ließ sich nicht abspielen");
+  const excerpt = show(tab, answer, "Der Ton ließ sich nicht abspielen");
   if (!excerpt) {
     draw();
     return;
@@ -1192,6 +1493,7 @@ async function play(position: number): Promise<void> {
   } catch (error) {
     // Skipping is the one case in which nothing may be left to play; anything else is reported as what it is.
     say(
+      tab,
       skipping
         ? "Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten."
         : `Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`,
@@ -1205,11 +1507,11 @@ async function play(position: number): Promise<void> {
   try {
     sound = startSound(playback);
   } catch (error) {
-    say(`Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`);
+    say(tab, `Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`);
     draw();
     return;
   }
-  playing = { position, playback, skipping, ...sound };
+  playing = { tab, position, playback, skipping, ...sound };
   draw();
   followPlayhead();
 }
@@ -1253,20 +1555,21 @@ view.skipRemoved.addEventListener("change", () => {
  * it moves, rather than appearing somewhere else once the button is let go.
  */
 view.overview.addEventListener("pointerdown", (event) => {
-  const seconds = recordingSeconds();
-  if (!seconds) return;
+  const tab = viewed();
+  const seconds = recordingSeconds(tab);
+  if (!tab || !seconds) return;
   const box = view.overview.getBoundingClientRect();
   const secondAt = (clientX: number) => ((clientX - box.left) / box.width) * seconds;
 
-  const span = zoom.toSeconds - zoom.fromSeconds;
+  const span = tab.zoom.toSeconds - tab.zoom.fromSeconds;
   const grabbed = secondAt(event.clientX);
-  const insideFrame = grabbed >= zoom.fromSeconds && grabbed < zoom.toSeconds;
+  const insideFrame = grabbed >= tab.zoom.fromSeconds && grabbed < tab.zoom.toSeconds;
   // Outside the frame the window centres on the pointer; inside it, the pointer keeps its place within the frame.
-  const holdOffset = insideFrame ? grabbed - zoom.fromSeconds : span / 2;
+  const holdOffset = insideFrame ? grabbed - tab.zoom.fromSeconds : span / 2;
   view.overview.classList.add("dragging");
 
   const move = (moved: PointerEvent) => {
-    showWindow(pannedBy(zoom, seconds, secondAt(moved.clientX) - holdOffset - zoom.fromSeconds));
+    showWindow(tab, pannedBy(tab.zoom, seconds, secondAt(moved.clientX) - holdOffset - tab.zoom.fromSeconds));
   };
   const stop = () => {
     view.overview.classList.remove("dragging");
@@ -1284,8 +1587,8 @@ view.overview.addEventListener("pointerdown", (event) => {
 /* ── Held stretches ────────────────────────────────────────────────────────────────────────────────────────── */
 
 /** The moment "Anfang/Ende festhalten" mark: where the sound is while it plays, else where the Playhead waits. */
-function playheadNow(): number | null {
-  return playing ? heardIn(playing) : playheadSeconds;
+function playheadNow(tab: OpenTab): number | null {
+  return playing?.tab === tab ? heardIn(playing) : tab.playheadSeconds;
 }
 
 /** A moment as the list shows it: minutes and seconds to a tenth, with hours in front when there are any. */
@@ -1298,20 +1601,22 @@ function clock(seconds: number): string {
 }
 
 /** The two buttons and the list of held stretches under the waveforms (ADR-0023). */
-function drawHeld(): void {
+function drawHeld(tab: OpenTab | null): void {
   // Offered wherever there are waveforms to mark on — and wherever something is held, so a reopened project shows its
   // held stretches before its audio has been read again, and still shows them if that read fails.
-  view.held.hidden = !session.recording || (view.cutPicture.hidden && session.lockedRanges.length === 0);
-  if (view.held.hidden) return;
-  const anfang = session.lockedRangeStart;
+  view.held.hidden = !tab?.session.recording || (view.cutPicture.hidden && tab.session.lockedRanges.length === 0);
+  // Emptied even while hidden: the list left standing would be another Tab's the moment this row shows again.
+  view.heldList.replaceChildren();
+  if (!tab || view.held.hidden) return;
+  const anfang = tab.session.lockedRangeStart;
   // Enabled only on what cannot change without a redraw. The Playhead moves with the sound, and a state read from it
   // here went stale while listening: "Ende festhalten" stayed disabled for a whole playback. A click without a
   // Playhead, or an Ende on the Anfang, is answered with a sentence instead.
-  view.holdStart.disabled = working;
-  view.holdEnd.disabled = working || anfang === null;
+  view.holdStart.disabled = tab.working;
+  view.holdEnd.disabled = tab.working || anfang === null;
   view.holdEnd.textContent = anfang === null ? "Ende festhalten" : `Ende festhalten (Anfang ${clock(anfang)})`;
   view.heldList.replaceChildren(
-    ...session.lockedRanges.map((range, index) => {
+    ...tab.session.lockedRanges.map((range, index) => {
       const item = document.createElement("li");
       const text = document.createElement("span");
       text.textContent = `Festgehalten: ${clock(range.startSeconds)} – ${clock(range.endSeconds)}`;
@@ -1319,10 +1624,10 @@ function drawHeld(): void {
       remove.type = "button";
       remove.className = "link";
       remove.textContent = "entfernen";
-      remove.disabled = working;
+      remove.disabled = tab.working;
       remove.addEventListener("click", () => {
-        session = removeLockedRange(session, index);
-        afterSettingChange();
+        tab.session = removeLockedRange(tab.session, index);
+        afterSettingChange(tab);
         draw();
       });
       item.append(text, remove);
@@ -1332,29 +1637,33 @@ function drawHeld(): void {
 }
 
 view.holdStart.addEventListener("click", () => {
-  const at = playheadNow();
+  const tab = viewed();
+  if (!tab) return;
+  const at = playheadNow(tab);
   if (at === null) {
-    say("Setz zuerst den weißen Strich: ein Klick in die Wellenform, dann „Anfang festhalten“.");
+    say(tab, "Setz zuerst den weißen Strich: ein Klick in die Wellenform, dann „Anfang festhalten“.");
     return;
   }
-  session = markLockedRangeStart(session, at);
+  tab.session = markLockedRangeStart(tab.session, at);
   draw();
 });
 
 view.holdEnd.addEventListener("click", () => {
-  const at = playheadNow();
+  const tab = viewed();
+  if (!tab) return;
+  const at = playheadNow(tab);
   if (at === null) {
-    say("Setz zuerst den weißen Strich an das Ende: ein Klick in die Wellenform, dann „Ende festhalten“.");
+    say(tab, "Setz zuerst den weißen Strich an das Ende: ein Klick in die Wellenform, dann „Ende festhalten“.");
     return;
   }
   try {
-    session = markLockedRangeEnd(session, at);
+    tab.session = markLockedRangeEnd(tab.session, at);
   } catch (error) {
-    say(`Das ließ sich nicht festhalten: ${error instanceof Error ? error.message : String(error)}`);
+    say(tab, `Das ließ sich nicht festhalten: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
   // Holding a stretch only replans (ADR-0023), which a finished cut does at once and a pending one picks up.
-  afterSettingChange();
+  afterSettingChange(tab);
   draw();
 });
 
@@ -1370,8 +1679,9 @@ const CLICK_SLOP_PX = 4;
  */
 view.sourceTracks.addEventListener("pointerdown", (event) => {
   const canvas = (event.target as HTMLElement).closest("canvas");
-  const seconds = recordingSeconds();
-  if (!canvas || !seconds) return;
+  const tab = viewed();
+  const seconds = recordingSeconds(tab);
+  if (!canvas || !tab || !seconds) return;
   const box = canvas.getBoundingClientRect();
   const startX = event.clientX;
   let lastX = event.clientX;
@@ -1384,9 +1694,9 @@ view.sourceTracks.addEventListener("pointerdown", (event) => {
     // Until the press is plainly a drag the view stays put, or a click would nudge it and the Playhead would land
     // beside the spot clicked. `lastX` stays at the press, so the drag catches up on the pixels held back.
     if (travelled < CLICK_SLOP_PX) return;
-    const span = zoom.toSeconds - zoom.fromSeconds;
+    const span = tab.zoom.toSeconds - tab.zoom.fromSeconds;
     // Dragging right pulls the Recording along with the pointer, so the window moves the other way.
-    showWindow(pannedBy(zoom, seconds, -((moved.clientX - lastX) / box.width) * span));
+    showWindow(tab, pannedBy(tab.zoom, seconds, -((moved.clientX - lastX) / box.width) * span));
     lastX = moved.clientX;
   };
   const stop = (ended: PointerEvent) => {
@@ -1394,7 +1704,9 @@ view.sourceTracks.addEventListener("pointerdown", (event) => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
-    if (ended.type === "pointerup" && travelled < CLICK_SLOP_PX) placePlayhead(canvas, ended.clientX);
+    if (ended.type === "pointerup" && travelled < CLICK_SLOP_PX && viewed() === tab) {
+      placePlayhead(tab, canvas, ended.clientX);
+    }
   };
   // On the window, not the canvas: a drag that wanders off the waveform keeps working, and it keeps working even
   // where capturing the pointer is refused — a silent stop mid-drag is worse than a drag that leaves the canvas.
@@ -1407,11 +1719,12 @@ view.sourceTracks.addEventListener(
   "wheel",
   (event) => {
     const canvas = (event.target as HTMLElement).closest("canvas");
-    const seconds = recordingSeconds();
-    if (!canvas || !seconds) return;
+    const tab = viewed();
+    const seconds = recordingSeconds(tab);
+    if (!canvas || !tab || !seconds) return;
     event.preventDefault();
-    const span = zoom.toSeconds - zoom.fromSeconds;
-    showWindow(zoomedTo(zoom, seconds, event.deltaY > 0 ? span * 1.25 : span / 1.25));
+    const span = tab.zoom.toSeconds - tab.zoom.fromSeconds;
+    showWindow(tab, zoomedTo(tab.zoom, seconds, event.deltaY > 0 ? span * 1.25 : span / 1.25));
   },
   { passive: false },
 );
@@ -1419,101 +1732,220 @@ view.sourceTracks.addEventListener(
 // The canvases are sized in percent, so their pixel width changes with the window and they have to be redrawn.
 window.addEventListener("resize", () => drawWaveforms());
 
-/**
- * How many files have been put on screen. Opening one takes seconds of scanning and reading after it appears, and
- * another can be opened meanwhile; an answer asked for under an older count belongs to a file no longer shown and is
- * dropped without a word, since the user switched on purpose.
- */
-let filesShown = 0;
+/* ── Tabs ──────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-/** Puts whatever a button or a drop opened on screen. */
-async function showOpened(opened: OpenedInWindow): Promise<void> {
-  filesShown += 1;
-  if (opened.kind === "recording") await showRecording(opened.recording);
-  else await showProject(opened.project, opened.summary);
+/** A Tab's window-side record, fresh: nothing read, nothing drawn, nothing playing. */
+function openTabFrom(work: TabWork, finished: CutSummary | null): OpenTab {
+  return {
+    ...work,
+    finished,
+    waveforms: [],
+    zoom: { fromSeconds: 0, toSeconds: 1 },
+    playheadSeconds: null,
+    working: false,
+    status: { text: "", bad: false },
+    readingCount: { done: 0, total: 0 },
+    redoTimer: undefined,
+    redoing: false,
+  };
 }
 
-async function showRecording(recording: RecordingInfo): Promise<void> {
-  session = chooseRecording(session, recording);
-  finished = null;
-  // The waveforms and the read-ahead list belong to the Recording that was open before this one.
-  waveforms = [];
-  readAhead = [];
-  // A moment in the Recording that was open before means nothing in this one.
-  playheadSeconds = null;
-  zoom = { fromSeconds: 0, toSeconds: 1 };
-  draw();
-
-  // The slices take a few seconds on a long Recording, so the Recording is on screen before they are measured.
-  view.status.textContent = "Prüft die Tonspuren …";
-  const shownThen = filesShown;
-  const answer = await window.smarttrim.scan();
-  // Another file was opened while the slices were measured: this scan describes the one before it.
-  if (shownThen !== filesShown) return;
-  const scan = show(answer, "Die Tonspuren ließen sich nicht prüfen");
-  if (scan) {
-    // Not `chooseRecording` again: the rows were on screen during the scan, and a role given meanwhile is the user's.
-    session = scanFinished(session, scan);
-    clearStatus();
+/** Puts a Tab on screen. Only one sound plays in the window, and it belongs to the Tab that was on screen (ADR-0025). */
+function viewTab(tabId: number): void {
+  if (viewedId !== tabId) {
+    stopPlaying();
+    // The preset rows were opened for the Tab that was on screen.
+    naming = false;
+    asking = null;
   }
+  viewedId = tabId;
   draw();
-  if (!scan) return;
+  // The Tab on screen goes first, so its read may be the next job.
+  void pump();
+}
 
-  // Every SourceTrack that carries sound is read now, while the user is still deciding what to do with them: it is
-  // the same read the cut needs, and choosing a role afterwards then costs nothing (ADR-0020). SourceTracks the
-  // scan found nothing on are left out — reading them would spend time and memory on a SourceTrack with no sound.
-  await readWaveforms(
-    scan.flatMap((sourceTrack, position) => (sourceTrack.carriesSound ? [position] : [])),
+/** × on a Tab: closes it, after asking when that would throw away held stretches no project holds. */
+function requestClose(tab: OpenTab): void {
+  if (askBeforeClosing(tab.session)) {
+    // The Tab asked about is put on screen, so what the dialog talks about is what lies behind it.
+    viewTab(tab.id);
+    closeAsking = tab;
+    draw();
+    // Enter cancels, whatever the dialog offers: a stray Enter neither throws the held stretches away nor opens a
+    // save dialog. Focusing "speichern" instead would land on "Abbrechen" whenever a replan is still pending.
+    view.cancelClose.focus();
+    return;
+  }
+  closeTab(tab);
+}
+
+function closeTab(tab: OpenTab): void {
+  if (closeAsking === tab) closeAsking = null;
+  if (!isOpen(tab)) return;
+  if (viewed() === tab) stopPlaying();
+  clearTimeout(tab.redoTimer);
+  const nextViewed = viewedAfterClosing(
+    tabs.map((each) => each.id),
+    tab.id,
+    viewedId,
   );
+  tabs = tabs.filter((each) => each !== tab);
+  // What the main process holds for it goes too; a job still running for it is refused when it finishes.
+  void window.smarttrim.closeTab(tab.id);
+  if (nextViewed !== viewedId) {
+    naming = false;
+    asking = null;
+  }
+  viewedId = nextViewed;
+  draw();
+  void pump();
 }
 
-async function showProject(project: TrimProject, summary: CutSummary): Promise<void> {
-  session = projectOpened(session, project);
-  finished = summary;
-  waveforms = [];
-  playheadSeconds = null;
-  clearStatus();
+function cancelClosing(): void {
+  if (savingForClose) return;
+  const tab = closeAsking;
+  closeAsking = null;
   draw();
+  // Back to the × that asked, so the keyboard is where the user left it.
+  if (tab) [...view.tabStrip.querySelectorAll<HTMLButtonElement>(".tabClose")][tabs.indexOf(tab)]?.focus();
+}
 
-  // The project holds what the analysis found, not the audio, so the waveform has to be read again. It runs in the
-  // background: the sliders and the numbers are already usable, and the waveform appears when it arrives.
-  view.status.textContent = "Liest den Ton für die Wellenform …";
-  const shownThen = filesShown;
-  const answer = await window.smarttrim.readProjectAudio();
-  // Another file was opened meanwhile. The main process refuses this read, and showing that in red would call the
-  // user's own switch an error.
-  if (shownThen !== filesShown) return;
-  const drawn = show(answer, "Der Ton ließ sich nicht nachlesen");
-  if (drawn) {
-    waveforms = drawn;
-    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: summary.recordingSeconds };
-    // What a threshold is decided from is back in memory, so moving it decides again instead of asking for a whole
-    // new cut.
-    // Not `cutFinished`: that would also claim the sliders as they stand now are what this cut was planned with,
-    // swallowing a replan the user asked for by moving one while the read ran.
-    session = audioBackInMemory(session);
-    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
-  }
+// Saves without a dialog — into the Tab's own project, else beside its Recording — and closes. The owner found a
+// save dialog one question too many here, and one that opened behind the window left this dialog stuck (ADR-0025).
+view.saveClose.addEventListener("click", async () => {
+  const tab = closeAsking;
+  if (!tab || savingForClose) return;
+  savingForClose = true;
   draw();
+  const saved = await saveProjectOf(tab);
+  savingForClose = false;
+  if (saved === undefined) {
+    // The reason is in the Tab's status line, which the dialog would cover.
+    closeAsking = null;
+    draw();
+    return;
+  }
+  // The Tab is about to go, so where its project landed is said where opening files reports.
+  openNotes = [{ tone: "info", name: fileName(saved), text: "Als Projekt gespeichert.", detail: `Ordner: ${saved.slice(0, saved.length - fileName(saved).length - 1)}` }];
+  if (closeAsking === tab) closeTab(tab);
+  else draw();
+});
+
+view.discardClose.addEventListener("click", () => {
+  const tab = closeAsking;
+  closeAsking = null;
+  if (tab) closeTab(tab);
+  else draw();
+});
+
+view.cancelClose.addEventListener("click", cancelClosing);
+// A click on the dimmed window around the dialog, or Esc, is Abbrechen.
+view.tabAsking.addEventListener("click", (event) => {
+  if (event.target === view.tabAsking) cancelClosing();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && closeAsking) cancelClosing();
+});
+
+view.dismissNotes.addEventListener("click", () => {
+  openNotes = [];
+  draw();
+});
+
+/** A refused file in the user's words, with the core of what was reported beneath (ADR-0025). */
+function refusalNote({ path, kind, detail }: Refusal): OpenNote {
+  const name = fileName(path);
+  const because = detail ? `Grund: ${detail}` : undefined;
+  switch (kind) {
+    case "missing":
+      return { tone: "refused", name, text: "Die Datei gibt es nicht mehr." };
+    case "folder":
+      return { tone: "refused", name, text: "Das ist ein Ordner, keine Datei." };
+    case "notARecording":
+      return {
+        tone: "refused",
+        name,
+        text: "Das ist keine Aufnahme. Darin ließ sich weder Bild noch Ton lesen.",
+        detail: detail ? `ffprobe meldet: ${detail}` : undefined,
+      };
+    case "cannotCut":
+      return { tone: "refused", name, text: "Diese Aufnahme kann SmartTrim nicht schneiden.", detail: because };
+    case "notAProject":
+      return { tone: "refused", name, text: "Das Projekt lässt sich nicht lesen.", detail: because };
+    case "projectRecordingMissing":
+      return {
+        tone: "refused",
+        name,
+        text: "Die Aufnahme zu diesem Projekt ist nicht mehr da, wo sie beim Speichern lag.",
+        detail: `Gesucht unter: ${detail}`,
+      };
+    case "projectRecordingChanged":
+      return {
+        tone: "refused",
+        name,
+        text: "Die Aufnahme zu diesem Projekt hat sich seit dem Speichern verändert, die Schnitte würden nicht mehr passen.",
+        detail: because,
+      };
+  }
 }
 
 /**
- * The one way a file reaches the screen, whether picked in a dialog or dropped. The refusal names no kind of file:
- * either dialog can open both kinds, and nothing is known about a file before it has opened.
+ * What opening files had to say. A Recording already open is shown rather than opened again; a project of one is not
+ * loaded over the Tab, whose work would be lost (ADR-0025).
+ */
+function openingNotes(opened: OpenedInWindow): OpenNote[] {
+  const notes: OpenNote[] = opened.refused.map(refusalNote);
+  const alreadyOpen = opened.tabs.filter((one) => one.alreadyOpen);
+  const recordings = alreadyOpen.filter((one) => one.kind === "recording");
+  if (recordings.length === 1) {
+    notes.push({ tone: "info", name: fileName(recordings[0]?.path ?? ""), text: "Ist schon offen." });
+  }
+  if (recordings.length > 1) notes.push({ tone: "info", name: "", text: `${recordings.length} Aufnahmen sind schon offen.` });
+  for (const project of alreadyOpen.filter((one) => one.kind === "project")) {
+    notes.push({
+      tone: "info",
+      name: fileName(project.path),
+      text: "Nicht geladen, weil die Aufnahme dazu schon in einem Tab offen ist. Schließ diesen Tab zuerst, wenn du das Projekt öffnen willst.",
+    });
+  }
+  return notes;
+}
+
+/**
+ * The one way files reach the window, whether picked in a dialog or dropped. Each file opened gets a Tab at the end
+ * of the strip; the first of them — or the Tab an already open Recording has — is put on screen.
  */
 async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>): Promise<void> {
-  stopPlaying();
-  clearStatus();
-  const opened = show(await opening(), "Die Datei ließ sich nicht öffnen");
-  // undefined is a refusal, null means the user closed the dialog.
-  if (opened) await showOpened(opened);
+  const answer = await opening();
+  if (!answer.ok) {
+    openNotes = [{ tone: "refused", name: "", text: "Die Dateien ließen sich nicht öffnen.", detail: `Grund: ${answer.message}` }];
+    draw();
+    return;
+  }
+  // null means the user closed the dialog.
+  if (!answer.value) return;
+  const opened = answer.value;
+  openNotes = openingNotes(opened);
+  for (const one of opened.tabs) {
+    if (one.alreadyOpen || tabById(one.tabId)) continue;
+    tabs.push(
+      one.kind === "recording"
+        ? openTabFrom(recordingTab(one.tabId, one.recording), null)
+        : openTabFrom(projectTab(one.tabId, one.project), one.summary),
+    );
+  }
+  const first = opened.tabs[0];
+  if (first && tabById(first.tabId)) viewTab(first.tabId);
+  else draw();
 }
 
 view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
 view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
 
+/* ── Dropping files ────────────────────────────────────────────────────────────────────────────────────────── */
+
 /** Whether a drop may open something now: the same moments the two buttons above are enabled. */
-const mayOpen = () => !working && !preparing;
+const mayOpen = () => !preparing;
 const carriesFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
 /** dragenter and dragleave fire for every element the pointer crosses, so only their balance says it has left. */
 let dragDepth = 0;
@@ -1544,18 +1976,14 @@ window.addEventListener("drop", async (event) => {
   dragDepth = 0;
   view.dropOverlay.hidden = true;
   const files = [...(event.dataTransfer?.files ?? [])];
-  const [file] = files;
-  if (!file || !mayOpen()) return;
-  if (files.length > 1) {
-    say("Bitte nur eine Datei ablegen – mehrere auf einmal kommen mit den Tabs.");
+  if (files.length === 0 || !mayOpen()) return;
+  const paths = files.map((file) => window.smarttrim.pathOf(file)).filter((path) => path !== "");
+  if (paths.length === 0) {
+    openNotes = [{ tone: "refused", name: "", text: "Das lässt sich nicht öffnen: Es ist keine Datei auf diesem Rechner." }];
+    draw();
     return;
   }
-  const path = window.smarttrim.pathOf(file);
-  if (!path) {
-    say("Das lässt sich nicht öffnen: Es ist keine Datei auf diesem Rechner.");
-    return;
-  }
-  await openAndShow(() => window.smarttrim.openFile(path));
+  await openAndShow(() => window.smarttrim.openFiles(paths));
 });
 
 // A drag over the window delivers no pointer events, so one arriving means no drag is going on. Should a leave ever be
@@ -1566,49 +1994,58 @@ window.addEventListener("pointermove", () => {
   view.dropOverlay.hidden = true;
 });
 
+/* ── Cutting ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
 view.cut.addEventListener("click", async () => {
+  const tab = viewed();
+  if (!tab) return;
   stopPlaying();
-  clearStatus();
-  working = true;
-  finished = null;
+  tab.working = true;
+  tab.finished = null;
   // The waveforms are kept: they belong to this Recording, and this analysis reuses what was read to draw them
   // (ADR-0020). They simply lose their colours until the new plan arrives.
+  setStatus(tab, "Liest die Aufnahme …");
   draw();
-  view.status.textContent = "Liest die Aufnahme …";
-  const summary = show(await window.smarttrim.cut(analysisRequestFrom(session)), "Der Schnitt ging nicht");
-  working = false;
+  const answer = await window.smarttrim.cut(tab.id, analysisRequestFrom(tab.session));
+  tab.working = false;
+  if (!isOpen(tab)) return;
+  const summary = show(tab, answer, "Der Schnitt ging nicht");
   if (summary) {
-    finished = summary;
+    tab.finished = summary;
     // From here on, moving Luft or Pause only replans (ADR-0004).
-    session = cutFinished(session);
-    clearStatus();
+    tab.session = cutFinished(tab.session);
+    clearStatus(tab);
   }
   draw();
-  if (summary) await loadWaveforms(summary.recordingSeconds);
+  if (summary) await loadWaveforms(tab);
 });
 
 draw();
 
-// A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
-// and this is over before the window has finished drawing.
-window.smarttrim.onReadProgress((progress) => {
-  readingCount = progress;
-  drawReading();
+window.smarttrim.onReadProgress(({ tabId, done, total }) => {
+  const tab = tabById(tabId);
+  // Progress from a read the window no longer waits for — its Tab closed — has nowhere to go.
+  if (!tab || job?.tabId !== tabId) return;
+  tab.readingCount = { done, total };
+  drawReading(tab);
 });
 
+// A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
+// and this is over before the window has finished drawing.
 window.smarttrim.onToolsProgress(({ name, percent }) => {
-  view.status.textContent = `Lädt ${name} … ${percent} % (nur beim ersten Start)`;
+  setStatus(null, `Lädt ${name} … ${percent} % (nur beim ersten Start)`);
 });
 // The user's own Presets are read once at startup; without them the dropdown shows only the built-in three.
 void (async () => {
-  const saved = show(await window.smarttrim.loadPresets(), "Die eigenen Voreinstellungen ließen sich nicht lesen");
+  const saved = show(null, await window.smarttrim.loadPresets(), "Die eigenen Voreinstellungen ließen sich nicht lesen");
   if (saved) ownPresets = saved;
   draw();
 })();
 
 void (async () => {
-  const ready = show(await window.smarttrim.ensureTools(), "Die Werkzeuge fehlen");
+  const ready = show(null, await window.smarttrim.ensureTools(), "Die Werkzeuge fehlen");
   preparing = false;
-  if (ready !== undefined) clearStatus();
+  if (ready !== undefined) clearStatus(null);
   draw();
+  void pump();
 })();

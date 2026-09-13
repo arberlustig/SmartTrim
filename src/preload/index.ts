@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { ReadProgress, SmartTrimApi, ToolsProgress } from "./api.ts";
 
-// The window runs without Node (contextIsolation), so this is the whole surface it can reach.
+// The window runs without Node (contextIsolation), so this is the whole surface it can reach. An IPC handler takes a
+// single argument, so the calls that name a Tab send one object.
 const api: SmartTrimApi = {
   ensureTools: () => ipcRenderer.invoke("tools:ensure"),
   onToolsProgress: (listen) => {
@@ -10,21 +11,22 @@ const api: SmartTrimApi = {
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
   // A dropped File no longer carries its path (Electron 32 removed File.path); only this call can still ask for it.
   pathOf: (file) => webUtils.getPathForFile(file),
-  openFile: (path) => ipcRenderer.invoke("file:open", path),
-  scan: () => ipcRenderer.invoke("recording:scan"),
-  readSourceTracks: (positions) => ipcRenderer.invoke("sourceTrack:read", positions),
+  openFiles: (paths) => ipcRenderer.invoke("file:open", paths),
+  closeTab: (tabId) => ipcRenderer.invoke("tab:close", tabId),
+  scan: (tabId) => ipcRenderer.invoke("recording:scan", tabId),
+  readSourceTracks: (tabId, positions) => ipcRenderer.invoke("sourceTrack:read", { tabId, positions }),
   readExcerpt: (request) => ipcRenderer.invoke("sourceTrack:excerpt", request),
   onReadProgress: (listen) => {
     ipcRenderer.on("sourceTrack:progress", (_event, progress: ReadProgress) => listen(progress));
   },
-  cut: (request) => ipcRenderer.invoke("cut:run", request),
-  waveforms: () => ipcRenderer.invoke("cut:waveforms"),
-  replan: (settings) => ipcRenderer.invoke("cut:replan", settings),
-  redecide: (settings) => ipcRenderer.invoke("cut:redecide", settings),
-  save: (exportSourceTracks) => ipcRenderer.invoke("cut:save", exportSourceTracks),
-  saveProject: (choices) => ipcRenderer.invoke("project:save", choices),
+  cut: (tabId, request) => ipcRenderer.invoke("cut:run", { tabId, request }),
+  waveforms: (tabId) => ipcRenderer.invoke("cut:waveforms", tabId),
+  replan: (tabId, settings) => ipcRenderer.invoke("cut:replan", { tabId, settings }),
+  redecide: (tabId, settings) => ipcRenderer.invoke("cut:redecide", { tabId, settings }),
+  save: (tabId, exportSourceTracks) => ipcRenderer.invoke("cut:save", { tabId, exportSourceTracks }),
+  saveProjectBeside: (tabId, choices) => ipcRenderer.invoke("project:saveBeside", { tabId, choices }),
   openProject: () => ipcRenderer.invoke("project:open"),
-  readProjectAudio: () => ipcRenderer.invoke("project:readAudio"),
+  readProjectAudio: (tabId) => ipcRenderer.invoke("project:readAudio", tabId),
   loadPresets: () => ipcRenderer.invoke("presets:load"),
   savePreset: (preset) => ipcRenderer.invoke("presets:save", preset),
   deletePreset: (name) => ipcRenderer.invoke("presets:delete", name),

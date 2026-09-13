@@ -1,34 +1,18 @@
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
-import {
-  readSourceTrackFrom,
-  type AnalysisRequest,
-  type AnalysisTools,
-  type ReadSourceTrack,
-} from "../analysis/analyseRecording.ts";
-import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
-import {
-  redecideCut,
-  replanCut,
-  runCut,
-  saveCutPlan,
-  type CutResult,
-  type CutSummary,
-  waveformOf,
-  type PlanSettings,
-  type SourceTrackWaveform,
-} from "../app/runCut.ts";
+import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
+import { saveCutPlan, type CutSummary, type PlanSettings, type SourceTrackWaveform } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
-import { openFile } from "../app/openFile.ts";
+import { openFiles } from "../app/openFile.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
-import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
-import type { Answer, ExcerptRequest, OpenedInWindow } from "../preload/api.ts";
-import { readExcerpt, type Excerpt } from "../playback/readExcerpt.ts";
-import { saveTrimProject, trimProjectOf, type SavedChoices } from "../project/openTrimProject.ts";
+import { newTabStore, type OnRead } from "../app/tabStore.ts";
+import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab } from "../preload/api.ts";
+import type { Excerpt } from "../playback/readExcerpt.ts";
+import type { SavedChoices } from "../project/openTrimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
-import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
  * Where ffmpeg, ffprobe and the Silero model live: next to the installed app they belong to the user, so they go in
@@ -65,32 +49,9 @@ async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
   return tools;
 }
 
-/** The finished cut waits here for the user to choose where to save it, so the plan never crosses into the window. */
-let lastCut: CutResult | null = null;
-/**
- * What was read of each SourceTrack, by position: its chunk levels and its waveform, never its audio (ADR-0021).
- * It belongs to the Recording in `chosen` and is emptied with it; the cut reuses it rather than reading the
- * Recording a second time (ADR-0020). Both parts are built once, when the SourceTrack is read.
- */
-const sourceTracksRead = new Map<number, ReadSourceTrack>();
-
-/** The waveforms of the named SourceTracks, from what was read of them. */
-function waveformsRead(positions: readonly number[]): SourceTrackWaveform[] {
-  return positions.map((position) => waveformOf(sourceTracksRead.get(position) as ReadSourceTrack));
-}
-
-/** The Recording on screen, so the scan and the save work on the one the user actually chose. */
-let chosen: RecordingInfo | null = null;
-/**
- * Which SourceTracks a reopened project was cut from, so its audio can be read again for the waveform. A project
- * holds what the analysis found, never the audio itself (ADR-0016), so this is the only record of them.
- */
-let reopenedVoice: readonly number[] = [];
-let reopenedSourceTracks: readonly number[] = [];
-
 /** Turns a handler's refusal into an answer the window can show, rather than an IPC exception. */
 function answering<Request, Value>(
-  handle: (request: Request) => Promise<Value>,
+  handle: (request: Request) => Promise<Value> | Value,
 ): (event: unknown, request: Request) => Promise<Answer<Value>> {
   return async (_event, request) => {
     try {
@@ -102,6 +63,19 @@ function answering<Request, Value>(
 }
 
 function registerHandlers(window: BrowserWindow): void {
+  /**
+   * Every Tab's Recording, what was read of it and its cut. Every request below names its Tab, so nothing one
+   * Recording read can end up in another's cut (ADR-0025).
+   */
+  const tabs = newTabStore(() => analysisTools(window));
+
+  /** Tells the window how far reading one Tab's SourceTracks has got. */
+  const progressOf =
+    (tabId: number): OnRead =>
+    (done, total) => {
+      if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { tabId, done, total });
+    };
+
   // Called once when the window opens, so a first run downloads while the user is still reading the window.
   ipcMain.handle(
     "tools:ensure",
@@ -112,171 +86,39 @@ function registerHandlers(window: BrowserWindow): void {
   );
 
   /**
-   * Opens one file as whatever it is and makes it the one on screen. Every way into the window comes through here —
-   * both dialogs and a drop — so none of them can forget to let go of what belonged to the file open before.
+   * Opens files and folders, each file in a Tab of its own. Every way into the window comes through here — both
+   * dialogs and a drop. A Recording already open in a Tab keeps that Tab, and a project of it is not loaded over it.
    */
-  async function openInWindow(path: string): Promise<OpenedInWindow> {
-    // Probing reads only the stream descriptions, so this stays instant even on a 20 GB Recording.
-    const opened = await openFile(path, (await analysisTools(window)).ffprobe);
-    // What was read of whatever was open before belongs to that Recording, not to this one.
-    sourceTracksRead.clear();
-    if (opened.kind === "recording") {
-      lastCut = null;
-      chosen = opened.recording;
-      return opened;
-    }
-    lastCut = opened.cut;
-    chosen = opened.cut.recording;
-    // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
-    // found, never the audio (ADR-0016), so this is the only record of what was listened to.
-    reopenedVoice = opened.project.listenTo;
-    reopenedSourceTracks = [...new Set([...reopenedVoice, ...(opened.project.contentSourceTracks ?? [])])];
-    return { kind: "project", project: opened.project, summary: opened.cut.summary };
+  async function openInWindow(paths: readonly string[]): Promise<OpenedInWindow> {
+    // Probing reads only the stream descriptions, so this stays quick even for a folder of 20 GB Recordings.
+    const { opened, refused } = await openFiles(paths, (await analysisTools(window)).ffprobe);
+    const shown = opened.map((file): OpenedTab => {
+      const { tabId, alreadyOpen } = tabs.open(file);
+      if (alreadyOpen) return { tabId, path: file.path, alreadyOpen, kind: file.kind };
+      return file.kind === "recording"
+        ? { tabId, path: file.path, alreadyOpen, kind: "recording", recording: file.recording }
+        : { tabId, path: file.path, alreadyOpen, kind: "project", project: file.project, summary: file.cut.summary };
+    });
+    return { tabs: shown, refused };
   }
 
-  // A file dropped on the window: the window only knows its path.
+  // Files or folders dropped on the window: the window only knows their paths.
   ipcMain.handle("file:open", answering(openInWindow));
 
   ipcMain.handle(
     "recording:choose",
     answering(async (): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
-        title: "Aufnahme wählen",
-        properties: ["openFile"],
+        title: "Aufnahmen wählen",
+        properties: ["openFile", "multiSelections"],
         // MKV is left out on purpose: it reports no stream lengths, so the probe refuses it (ADR-0009).
         filters: [
           { name: "Aufnahmen", extensions: ["mp4", "mov", "m4v"] },
           { name: "Alle Dateien", extensions: ["*"] },
         ],
       });
-      const chosenPath = filePaths[0];
-      if (canceled || !chosenPath) return null;
-      return openInWindow(chosenPath);
-    }),
-  );
-
-  // Kept apart from choosing so the window can show the Recording at once and the slices afterwards.
-  ipcMain.handle(
-    "recording:scan",
-    answering(async (): Promise<SourceTrackScan[]> => {
-      if (!chosen) throw new Error("No Recording is chosen, so there are no SourceTracks to listen to.");
-      const scanning = chosen;
-      const scan = await scanSourceTracks(scanning, (await analysisTools(window)).ffmpeg);
-      // Another Recording may have been opened while the slices were measured; this scan describes the one before.
-      if (chosen !== scanning) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-      return scan;
-    }),
-  );
-
-  /**
-   * Reads the SourceTracks the window names, so their waveform can be drawn before anything is cut (ADR-0020).
-   * What is read stays here for the rest of the Recording: the cut below reuses it instead of reading again, and a
-   * role the user took away and put back costs nothing.
-   */
-  ipcMain.handle(
-    "sourceTrack:read",
-    answering(async (positions: readonly number[]): Promise<SourceTrackWaveform[]> => {
-      if (!chosen) throw new Error("No Recording is chosen, so there is no SourceTrack to read.");
-      const readingFor = chosen;
-      const missing = positions.filter((position) => !sourceTracksRead.has(position));
-      if (missing.length > 0) {
-        // Each SourceTrack is read down to its levels and waveform as soon as it is decoded, and its audio let go.
-        const read = await decodeSourceTracks(
-          readingFor,
-          missing,
-          (await analysisTools(window)).ffmpeg,
-          readSourceTrackFrom,
-          (done, total) => {
-            if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
-          },
-        );
-        // The user may have chosen another Recording while this ran; that audio belongs to the old one.
-        if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-        for (const one of read) sourceTracksRead.set(one.position, one);
-      }
-      return waveformsRead(positions);
-    }),
-  );
-
-  /**
-   * Reads one SourceTrack of the chosen Recording over a stretch, for the window to play (ADR-0022). Nothing of it
-   * stays here: it is a few megabytes for the ear, read afresh for every press of a play button.
-   */
-  ipcMain.handle(
-    "sourceTrack:excerpt",
-    answering(async ({ position, fromSeconds, toSeconds }: ExcerptRequest): Promise<Excerpt> => {
-      if (!chosen) throw new Error("No Recording is chosen, so there is nothing to play.");
-      const readingFor = chosen;
-      const excerpt = await readExcerpt(readingFor, position, fromSeconds, toSeconds, (await analysisTools(window)).ffmpeg);
-      // Sound of the Recording that was open before would be played over the waveform of this one.
-      if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-      return excerpt;
-    }),
-  );
-
-  ipcMain.handle(
-    "cut:run",
-    answering(async (request: AnalysisRequest): Promise<CutSummary> => {
-      lastCut = null;
-      // What was read belongs to `chosen`, and is matched to a request by position alone. A request naming any other
-      // file reads its own, or one Recording would be cut from another's levels.
-      const readForThis = chosen !== null && resolve(chosen.path) === resolve(request.recordingPath);
-      // Whatever the waveforms already read is handed over, so the Recording is read once and not twice.
-      const result = await runCut(request, await analysisTools(window), readForThis ? [...sourceTracksRead.values()] : []);
-      lastCut = result;
-      // An analysis may have read more SourceTracks than the waveforms did; keep those too.
-      for (const read of readForThis ? result.read : []) {
-        if (!sourceTracksRead.has(read.position)) sourceTracksRead.set(read.position, read);
-      }
-      return result.summary;
-    }),
-  );
-
-  // Asked for once after an analysis: the shape of the sound does not change when a slider moves, only the colours
-  // drawn over it do, and those travel with every summary (ADR-0019).
-  ipcMain.handle(
-    "cut:waveforms",
-    answering(async (): Promise<SourceTrackWaveform[]> => {
-      if (!lastCut) throw new Error("There is no cut to draw a waveform for.");
-      return lastCut.read.map(waveformOf);
-    }),
-  );
-
-  // ADR-0004: Margin and MinimumDeadZone only decide how the cuts are planned around what the analysis found, so
-  // moving those sliders must not read the Recording again.
-  ipcMain.handle(
-    "cut:replan",
-    answering(async (settings: PlanSettings): Promise<CutSummary> => {
-      if (!lastCut) throw new Error("There is no cut to replan. Press Schneiden first.");
-      lastCut = replanCut(lastCut, settings);
-      return lastCut.summary;
-    }),
-  );
-
-  // ADR-0004 again: the chunk levels stay in the main process, so another threshold is decided from memory.
-  ipcMain.handle(
-    "cut:redecide",
-    answering(async (settings: PlanSettings & { thresholdDbfs: number }): Promise<CutSummary> => {
-      if (!lastCut) throw new Error("There is no cut to decide again. Press Schneiden first.");
-      lastCut = redecideCut(lastCut, settings.thresholdDbfs, settings);
-      return lastCut.summary;
-    }),
-  );
-
-  // The saved project holds what the analysis found, so tomorrow's session starts from it instead of from the file.
-  ipcMain.handle(
-    "project:save",
-    answering(async (choices: SavedChoices): Promise<string | null> => {
-      if (!lastCut) throw new Error("There is no finished cut to save. Press Schneiden first.");
-      const { recording } = lastCut;
-      const { canceled, filePath } = await dialog.showSaveDialog(window, {
-        title: "SmartTrim-Projekt speichern",
-        defaultPath: join(dirname(recording.path), `${basename(recording.path, extname(recording.path))}.smarttrim`),
-        filters: [{ name: "SmartTrim-Projekt", extensions: ["smarttrim"] }],
-      });
-      if (canceled || !filePath) return null;
-      await saveTrimProject(filePath, trimProjectOf(lastCut, choices));
-      return filePath;
+      if (canceled || filePaths.length === 0) return null;
+      return openInWindow(filePaths);
     }),
   );
 
@@ -284,15 +126,84 @@ function registerHandlers(window: BrowserWindow): void {
     "project:open",
     answering(async (): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
-        title: "SmartTrim-Projekt öffnen",
-        properties: ["openFile"],
+        title: "SmartTrim-Projekte öffnen",
+        properties: ["openFile", "multiSelections"],
         filters: [{ name: "SmartTrim-Projekt", extensions: ["smarttrim"] }],
       });
-      const chosenPath = filePaths[0];
-      if (canceled || !chosenPath) return null;
+      if (canceled || filePaths.length === 0) return null;
       // Only the stream descriptions are read, to make sure it is still the Recording the project was cut from.
-      return openInWindow(chosenPath);
+      return openInWindow(filePaths);
     }),
+  );
+
+  // Whatever a closed Tab still has running is refused when it finishes (ADR-0025).
+  ipcMain.handle(
+    "tab:close",
+    answering((tabId: number): null => {
+      tabs.close(tabId);
+      return null;
+    }),
+  );
+
+  // Kept apart from opening so the window can show the Recording at once and the slices afterwards.
+  ipcMain.handle("recording:scan", answering((tabId: number): Promise<SourceTrackScan[]> => tabs.scan(tabId)));
+
+  /**
+   * Reads the SourceTracks the window names, so their waveform can be drawn before anything is cut (ADR-0020).
+   * What is read stays with the Tab: its cut reuses it, and a role taken away and put back costs nothing.
+   */
+  ipcMain.handle(
+    "sourceTrack:read",
+    answering(
+      ({ tabId, positions }: { tabId: number; positions: readonly number[] }): Promise<SourceTrackWaveform[]> =>
+        tabs.readSourceTracks(tabId, positions, progressOf(tabId)),
+    ),
+  );
+
+  /**
+   * Reads one SourceTrack of a Tab's Recording over a stretch, for the window to play (ADR-0022). Nothing of it stays
+   * here: it is a few megabytes for the ear, read afresh for every press of a play button.
+   */
+  ipcMain.handle(
+    "sourceTrack:excerpt",
+    answering(({ tabId, ...stretch }: ExcerptRequest): Promise<Excerpt> => tabs.readExcerpt(tabId, stretch)),
+  );
+
+  ipcMain.handle(
+    "cut:run",
+    answering(
+      ({ tabId, request }: { tabId: number; request: AnalysisRequest }): Promise<CutSummary> => tabs.cut(tabId, request),
+    ),
+  );
+
+  // Asked for once after an analysis: the shape of the sound does not change when a slider moves, only the colours
+  // drawn over it do, and those travel with every summary (ADR-0019).
+  ipcMain.handle("cut:waveforms", answering((tabId: number): SourceTrackWaveform[] => tabs.waveformsOfCut(tabId)));
+
+  // ADR-0004: Margin and MinimumDeadZone only decide how the cuts are planned around what the analysis found, so
+  // moving those sliders must not read the Recording again.
+  ipcMain.handle(
+    "cut:replan",
+    answering(({ tabId, settings }: { tabId: number; settings: PlanSettings }): CutSummary => tabs.replan(tabId, settings)),
+  );
+
+  // ADR-0004 again: the chunk levels stay in the main process, so another threshold is decided from memory.
+  ipcMain.handle(
+    "cut:redecide",
+    answering(
+      ({ tabId, settings }: { tabId: number; settings: PlanSettings & { thresholdDbfs: number } }): CutSummary =>
+        tabs.redecide(tabId, settings),
+    ),
+  );
+
+  // The saved project holds what the analysis found, so tomorrow's session starts from it instead of from the file.
+  // It asks nothing: back into the Tab's own project, else beside its Recording. The save dialog it once opened never
+  // came into view on the owner's machine (ADR-0025).
+  ipcMain.handle(
+    "project:saveBeside",
+    answering(
+      ({ tabId, choices }: { tabId: number; choices: SavedChoices }): Promise<string> => tabs.saveProject(tabId, choices),
+    ),
   );
 
   /**
@@ -301,50 +212,26 @@ function registerHandlers(window: BrowserWindow): void {
    */
   ipcMain.handle(
     "project:readAudio",
-    answering(async (): Promise<SourceTrackWaveform[]> => {
-      if (!lastCut) throw new Error("There is no project whose audio could be read.");
-      if (lastCut.read.length > 0) return lastCut.read.map(waveformOf);
-      if (reopenedSourceTracks.length === 0) throw new Error("This project names no SourceTrack to listen to.");
-
-      const readingFor = lastCut;
-      const positions = reopenedSourceTracks;
-      const read = await decodeSourceTracks(
-        readingFor.recording,
-        positions,
-        (await analysisTools(window)).ffmpeg,
-        readSourceTrackFrom,
-        (done, total) => {
-          if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
-        },
-      );
-      // Another project or Recording may have been opened while this ran; that audio belongs to the old one.
-      if (lastCut !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-
-      // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
-      const listened = reopenedVoice.map((position) => read[positions.indexOf(position)] as ReadSourceTrack);
-      lastCut = { ...readingFor, read, listened };
-      // Into the same store the cut reads from, or pressing Schneiden would read the whole Recording again and
-      // break ADR-0004's promise that it is read once.
-      for (const one of read) sourceTracksRead.set(one.position, one);
-      return read.map(waveformOf);
-    }),
+    answering((tabId: number): Promise<SourceTrackWaveform[]> => tabs.readProjectAudio(tabId, progressOf(tabId))),
   );
 
   ipcMain.handle(
     "cut:save",
-    answering(async (exportSourceTracks: readonly number[]): Promise<string | null> => {
-      // Saving a plan that is no longer the one on screen would hand the user a file for settings they changed.
-      if (!lastCut) throw new Error("There is no finished cut to save. Press Schneiden first.");
-      const { recording, cutPlan } = lastCut;
-      const { canceled, filePath } = await dialog.showSaveDialog(window, {
-        title: "Premiere-Datei speichern",
-        defaultPath: join(dirname(recording.path), `${basename(recording.path, extname(recording.path))}.xml`),
-        filters: [{ name: "Premiere-Projekt (FCP7 XML)", extensions: ["xml"] }],
-      });
-      if (canceled || !filePath) return null;
-      await saveCutPlan(filePath, recording, cutPlan, exportSourceTracks);
-      return filePath;
-    }),
+    answering(
+      async ({ tabId, exportSourceTracks }: { tabId: number; exportSourceTracks: readonly number[] }): Promise<string | null> => {
+        // Saving a plan that is no longer the one on screen would hand the user a file for settings they changed.
+        const { recording } = tabs.cutOf(tabId);
+        const { canceled, filePath } = await dialog.showSaveDialog(window, {
+          title: "Premiere-Datei speichern",
+          defaultPath: join(dirname(recording.path), `${basename(recording.path, extname(recording.path))}.xml`),
+          filters: [{ name: "Premiere-Projekt (FCP7 XML)", extensions: ["xml"] }],
+        });
+        if (canceled || !filePath) return null;
+        const { cutPlan } = tabs.cutOf(tabId);
+        await saveCutPlan(filePath, recording, cutPlan, exportSourceTracks);
+        return filePath;
+      },
+    ),
   );
 
   // The user's own Presets sit next to the downloaded tools, in the folder that belongs to them rather than to the
@@ -384,8 +271,8 @@ function registerHandlers(window: BrowserWindow): void {
 
 function createWindow(): void {
   const window = new BrowserWindow({
-    width: 760,
-    height: 720,
+    width: 820,
+    height: 760,
     minWidth: 560,
     minHeight: 560,
     title: "SmartTrim",
@@ -395,8 +282,8 @@ function createWindow(): void {
       preload: fileURLToPath(new URL("../preload/index.mjs", import.meta.url)),
       contextIsolation: true,
       nodeIntegration: false,
-      // The preload script is an ES module, which Electron only loads outside the sandbox. It exposes four
-      // functions and nothing else, so the window still never sees Node itself.
+      // The preload script is an ES module, which Electron only loads outside the sandbox. It exposes the bridge in
+      // src/preload/api.ts and nothing else, so the window still never sees Node itself.
       sandbox: false,
     },
   });
