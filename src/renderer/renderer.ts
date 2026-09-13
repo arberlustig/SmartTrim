@@ -89,9 +89,13 @@ const view = {
   zoomValue: element("zoomValue"),
   skipRow: element("skipRow"),
   skipRemoved: element<HTMLInputElement>("skipRemoved"),
+  longestExcerpt: element("longestExcerpt"),
   status: element("status"),
   result: element("result"),
 };
+
+// Said once, from the same number `readExcerpt` refuses by, so the hint cannot promise a length the app refuses.
+view.longestExcerpt.textContent = `${LONGEST_EXCERPT_SECONDS / 60} Minuten`;
 
 let session: CutSession = newCutSession();
 /** The Presets the user saved themselves, as the main process last reported them. */
@@ -250,8 +254,9 @@ function drawSourceTracks(): void {
     }
     role.value = roleOf(session, index);
     role.addEventListener("change", () => {
-      // An ignored SourceTrack loses its row's waveform and with it the only button that could stop its sound.
-      if (role.value === "ignored" && playing?.position === index) stopPlaying();
+      // An ignored SourceTrack loses its row's waveform and with it the only button that could stop its sound —
+      // a sound still on its way included.
+      if (role.value === "ignored" && (playing?.position ?? fetchingFor) === index) stopPlaying();
       session = setSourceTrackRole(session, index, role.value as TrackRole);
       afterSettingChange();
       draw();
@@ -287,7 +292,7 @@ function drawSourceTracks(): void {
     playButton.textContent = isPlaying ? "■" : fetchingFor === index ? "…" : "▶";
     playButton.title = isPlaying
       ? `Tonspur ${index + 1} anhalten`
-      : `Tonspur ${index + 1} ab dem weißen Strich anhören (höchstens 3 Minuten)`;
+      : `Tonspur ${index + 1} ab dem weißen Strich anhören (höchstens ${LONGEST_EXCERPT_SECONDS / 60} Minuten)`;
     playButton.addEventListener("click", () => void play(index));
     holder.append(playButton, waveformCanvas(index));
     row.append(holder);
@@ -711,7 +716,7 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     }
     lineAt = heardIn(now);
   } else if (!now) {
-    lineAt = cursorSeconds;
+    lineAt = playheadSeconds;
   }
   if (lineAt === null) return;
   const x = xOf(lineAt);
@@ -969,7 +974,7 @@ view.zoom.addEventListener("input", () => {
 
 /**
  * The SourceTrack that is playing, if any — one at a time (ADR-0022). `startedAt` is the audio clock's time of the
- * first sample, so the playhead is read off the clock the sound runs on rather than off a timer that drifts from it.
+ * first sample, so the Playhead is read off the clock the sound runs on rather than off a timer that drifts from it.
  */
 let playing: {
   position: number;
@@ -1000,7 +1005,7 @@ let playheadFrame = 0;
  * The Playhead while nothing plays: where listening starts next, shared by every waveform because they all show the
  * same stretch of the Recording. Set by clicking a waveform, left where the sound stopped. Null until either happens.
  */
-let cursorSeconds: number | null = null;
+let playheadSeconds: number | null = null;
 /** Where the Playhead was on the frame before, so the view pages along only when the Playhead runs out of it. */
 let lastHeard: number | null = null;
 
@@ -1013,7 +1018,7 @@ function stopPlaying(): void {
   playing = null;
   if (!was) return;
   // The Playhead stays where the sound stopped, so the next press goes on from there.
-  cursorSeconds = heardIn(was);
+  playheadSeconds = heardIn(was);
   was.source.onended = null;
   was.source.stop();
   // The context stays for the next press; only this sound's node goes.
@@ -1057,11 +1062,13 @@ function placePlayhead(canvas: HTMLCanvasElement, clientX: number): void {
   const box = canvas.getBoundingClientRect();
   const span = zoom.toSeconds - zoom.fromSeconds;
   const clicked = Math.min(Math.max(zoom.fromSeconds + ((clientX - box.left) / box.width) * span, 0), seconds);
-  const position = playing?.position;
+  // A SourceTrack that plays, or whose Excerpt is still on its way, jumps there; with nothing playing the click only
+  // moves the Playhead. Counting the one on its way is what keeps a second quick click from stopping the sound.
+  const position = playing?.position ?? fetchingFor;
   // Stopping leaves the Playhead where the sound was, so the click is put back after it.
   stopPlaying();
-  cursorSeconds = clicked;
-  if (position === undefined) drawWaveforms();
+  playheadSeconds = clicked;
+  if (position === null) drawWaveforms();
   else void play(position);
 }
 
@@ -1081,14 +1088,15 @@ async function play(position: number): Promise<void> {
   const request = playRequest;
   // From the Playhead — unless it is not in view, or at the very end: then from the start of what the user sees.
   // Up to three minutes, past the edge of the view if need be; the view pages along (followPlayhead).
-  const cursorUsable =
-    cursorSeconds !== null &&
-    cursorSeconds >= zoom.fromSeconds &&
-    cursorSeconds <= zoom.toSeconds &&
-    cursorSeconds < seconds - 0.05;
-  const fromSeconds = cursorUsable ? (cursorSeconds as number) : zoom.fromSeconds;
+  const playheadUsable =
+    playheadSeconds !== null &&
+    playheadSeconds >= zoom.fromSeconds &&
+    playheadSeconds <= zoom.toSeconds &&
+    playheadSeconds < seconds - 0.05;
+  const fromSeconds = playheadUsable ? (playheadSeconds as number) : zoom.fromSeconds;
   const toSeconds = Math.min(fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
-  lastHeard = null;
+  // The Playhead starts in view, so a start that skipping carries past the right edge still turns the page.
+  lastHeard = fromSeconds;
   // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
   const kept = finished?.keptRanges ?? null;
   const skipping = view.skipRemoved.checked && kept !== null;
@@ -1109,12 +1117,33 @@ async function play(position: number): Promise<void> {
   let playback: Playback;
   try {
     playback = playbackOf(excerpt, kept ?? [], skipping);
-  } catch {
-    say("Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten.");
+  } catch (error) {
+    // Skipping is the one case in which nothing may be left to play; anything else is reported as what it is.
+    say(
+      skipping
+        ? "Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten."
+        : `Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`,
+    );
     draw();
     return;
   }
 
+  // `play` runs detached from the button, so a failure here would otherwise vanish without a word.
+  let sound: ReturnType<typeof startSound>;
+  try {
+    sound = startSound(playback);
+  } catch (error) {
+    say(`Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`);
+    draw();
+    return;
+  }
+  playing = { position, playback, ...sound };
+  draw();
+  followPlayhead();
+}
+
+/** Turns what is to be played into sound on the shared AudioContext and starts it a moment from now. */
+function startSound(playback: Playback): { context: AudioContext; source: AudioBufferSourceNode; startedAt: number } {
   const context = sharedAudio();
   const frames = playback.samples.length / playback.channelCount;
   const buffer = context.createBuffer(playback.channelCount, frames, playback.sampleRate);
@@ -1134,15 +1163,14 @@ async function play(position: number): Promise<void> {
   };
   const startedAt = context.currentTime + 0.05;
   source.start(startedAt);
-  playing = { position, playback, context, source, startedAt };
-  draw();
-  followPlayhead();
+  return { context, source, startedAt };
 }
 
-// Switching while it plays starts the same SourceTrack again the new way, rather than leaving the old sound running.
+// Switching while it plays — or while its Excerpt is on its way — starts the same SourceTrack again the new way,
+// rather than leaving the old sound running or playing what arrives with the old setting.
 view.skipRemoved.addEventListener("change", () => {
-  const position = playing?.position;
-  if (position === undefined) return;
+  const position = playing?.position ?? fetchingFor;
+  if (position === null) return;
   stopPlaying();
   void play(position);
 });
@@ -1182,6 +1210,12 @@ view.overview.addEventListener("pointerdown", (event) => {
 });
 
 /**
+ * A press that moves less than this many pixels is a click that sets the Playhead, not a drag. A hand never clicks
+ * without moving a pixel or two.
+ */
+const CLICK_SLOP_PX = 4;
+
+/**
  * Dragging a waveform sideways slides the window; a click that barely moves puts the Playhead there instead; the
  * wheel zooms around where the pointer is.
  */
@@ -1192,12 +1226,15 @@ view.sourceTracks.addEventListener("pointerdown", (event) => {
   const box = canvas.getBoundingClientRect();
   const startX = event.clientX;
   let lastX = event.clientX;
-  // How far the pointer got from where it went down. A hand never clicks without moving a pixel or two.
+  // How far the pointer got from where it went down.
   let travelled = 0;
   canvas.classList.add("dragging");
 
   const move = (moved: PointerEvent) => {
     travelled = Math.max(travelled, Math.abs(moved.clientX - startX));
+    // Until the press is plainly a drag the view stays put, or a click would nudge it and the Playhead would land
+    // beside the spot clicked. `lastX` stays at the press, so the drag catches up on the pixels held back.
+    if (travelled < CLICK_SLOP_PX) return;
     const span = zoom.toSeconds - zoom.fromSeconds;
     // Dragging right pulls the Recording along with the pointer, so the window moves the other way.
     showWindow(pannedBy(zoom, seconds, -((moved.clientX - lastX) / box.width) * span));
@@ -1208,7 +1245,7 @@ view.sourceTracks.addEventListener("pointerdown", (event) => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
-    if (ended.type === "pointerup" && travelled < 4) placePlayhead(canvas, ended.clientX);
+    if (ended.type === "pointerup" && travelled < CLICK_SLOP_PX) placePlayhead(canvas, ended.clientX);
   };
   // On the window, not the canvas: a drag that wanders off the waveform keeps working, and it keeps working even
   // where capturing the pointer is refused — a silent stop mid-drag is worse than a drag that leaves the canvas.
@@ -1245,7 +1282,7 @@ view.chooseRecording.addEventListener("click", async () => {
   waveforms = [];
   readAhead = [];
   // A moment in the Recording that was open before means nothing in this one.
-  cursorSeconds = null;
+  playheadSeconds = null;
   zoom = { fromSeconds: 0, toSeconds: 1 };
   draw();
 
@@ -1276,7 +1313,7 @@ view.openProject.addEventListener("click", async () => {
   session = projectOpened(session, opened.project);
   finished = opened.summary;
   waveforms = [];
-  cursorSeconds = null;
+  playheadSeconds = null;
   clearStatus();
   draw();
 

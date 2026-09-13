@@ -38,9 +38,9 @@ describe("listening to the cut", () => {
     ]);
   });
 
-  // The playhead is drawn over the waveform, which shows the Recording, while the sound runs on a clock of its own
+  // The Playhead is drawn over the waveform, which shows the Recording, while the sound runs on a clock of its own
   // that knows nothing of what was skipped.
-  test("the playhead points at the moment of the Recording being heard, jumping ahead at every Join", () => {
+  test("the Playhead points at the moment of the Recording being heard, jumping ahead at every Join", () => {
     const played = playbackOf(numberedExcerpt(100, 3), kept([99, 100.5], [101.2, 101.8], [102.5, 110]), true);
 
     const heard = [
@@ -59,7 +59,7 @@ describe("listening to the cut", () => {
 
   // With the switch off — and before anything is cut, when there is nothing to skip — the user hears the Recording
   // as it is, removed stretches included, so they can hear what the cut would take away.
-  test("not skipping plays the whole Excerpt as it is, with no Joins, and the playhead runs with the Recording", () => {
+  test("not skipping plays the whole Excerpt as it is, with no Joins, and the Playhead runs with the Recording", () => {
     const excerpt = numberedExcerpt(100, 3);
 
     const played = playbackOf(excerpt, kept([99, 100.5], [101.2, 101.8], [102.5, 110]), false);
@@ -72,7 +72,7 @@ describe("listening to the cut", () => {
   });
 
   // Zoomed into a long removed stretch there is nothing left to hear. Playing nothing would sound like a Recording
-  // nobody made a sound on, and the playhead would have no moment to point at.
+  // nobody made a sound on, and the Playhead would have no moment to point at.
   test("refuses to skip through an Excerpt the cut keeps nothing of", () => {
     expect(() => playbackOf(numberedExcerpt(100, 3), kept([0, 10], [500, 600]), true)).toThrow(/nothing/);
     // A kept stretch that only touches the Excerpt's edge keeps no frame of it either.

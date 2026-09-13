@@ -54,7 +54,7 @@ export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRem
     const end = frameAt(range.endSeconds);
     if (end > start) pieces.push([start, end]);
   }
-  // Playing nothing would sound like a Recording nobody made a sound on, and the playhead would have nowhere to be.
+  // Playing nothing would sound like a Recording nobody made a sound on, and the Playhead would have nowhere to be.
   if (pieces.length === 0) {
     throw new Error(
       `The cut keeps nothing between ${secondsAt(0)} s and ${secondsAt(frames)} s, so skipping what it removes leaves nothing to play.`,
@@ -87,7 +87,7 @@ export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRem
 }
 
 /**
- * The moment of the Recording being heard after `playedSeconds` of a Playback, for the playhead over the waveform.
+ * The moment of the Recording being heard after `playedSeconds` of a Playback, for the Playhead over the waveform.
  * At a Join it is already the start of the next kept stretch; past the end it stays where the sound stopped.
  */
 export function recordingSecondsAt(playback: Playback, playedSeconds: number): number {

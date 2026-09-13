@@ -31,8 +31,10 @@ export async function readExcerpt(
   }
   // An empty Excerpt would play as silence, which sounds like a Recording nobody made a sound on.
   if (!(toSeconds > fromSeconds)) throw new Error(`${fromSeconds} s to ${toSeconds} s has no length to listen to.`);
-  if (toSeconds - fromSeconds > LONGEST_EXCERPT_SECONDS) {
-    throw new Error(`${toSeconds - fromSeconds} s is longer than the three minutes an Excerpt may last.`);
+  // A millisecond of slack: the window asks for a start plus the limit, and from a start with many decimals adding
+  // and subtracting again comes out a hair over it — about one press in thirty was refused for that alone.
+  if (toSeconds - fromSeconds > LONGEST_EXCERPT_SECONDS + 0.001) {
+    throw new Error(`${toSeconds - fromSeconds} s is longer than the ${LONGEST_EXCERPT_SECONDS} s an Excerpt may last.`);
   }
 
   const { sampleRate, channelCount } = info;
@@ -57,6 +59,12 @@ export async function readExcerpt(
         return;
       }
       const bytes = Buffer.concat(chunks);
+      // Past the end of a SourceTrack ffmpeg writes nothing and still exits as if it had succeeded (ADR-0009: a later
+      // SourceTrack can end before the video). An empty Excerpt would be played as silence, or not at all.
+      if (bytes.length === 0) {
+        reject(new Error(`${failure}: ffmpeg read nothing there; the SourceTrack may end before ${fromSeconds} s.`));
+        return;
+      }
       if (bytes.length % (2 * channelCount) !== 0) {
         reject(new Error(`${failure}: its output ended in the middle of a sample.`));
         return;

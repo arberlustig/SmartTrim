@@ -90,16 +90,31 @@ describe("readExcerpt", () => {
     expect(hertzOf(excerpt, 0, 0.51, 0.61)).toBeLessThan(1590);
   });
 
+  // A later SourceTrack can end before the video (ADR-0009), so a stretch past its end holds no sound at all. ffmpeg
+  // exits as if it had succeeded and writes nothing; an empty Excerpt would play as silence, or not at all.
+  test("refuses a stretch the SourceTrack holds no sound in, rather than handing back an empty Excerpt", async () => {
+    await expect(readExcerpt(recording, 0, 7, 8, vendor("ffmpeg.exe"))).rejects.toThrow(/nothing/);
+  });
+
   // The owner set the limit at three minutes: 33 MB of stereo at 48 kHz, and a window asking for more has lost track
   // of what it shows. Each refusal comes before ffmpeg is started, which is why an ffmpeg that does not exist is
   // handed in: reaching it would fail with a different message.
   test("refuses more than three minutes, a stretch of no length and a SourceTrack the Recording lacks", async () => {
     const noFfmpeg = join(workDir, "no-ffmpeg.exe");
 
-    await expect(readExcerpt(recording, 0, 10, 190.01, noFfmpeg)).rejects.toThrow(/three minutes/);
+    await expect(readExcerpt(recording, 0, 10, 190.01, noFfmpeg)).rejects.toThrow(/longer than/);
     await expect(readExcerpt(recording, 0, 2, 2, noFfmpeg)).rejects.toThrow(/no length/);
     await expect(readExcerpt(recording, 5, 0, 1, noFfmpeg)).rejects.toThrow(/SourceTrack 6/);
     // Exactly three minutes is allowed, so this one gets as far as starting ffmpeg.
     await expect(readExcerpt(recording, 0, 10, 190, noFfmpeg)).rejects.toThrow(/ENOENT/);
+  });
+
+  // The window asks for three minutes from wherever the Playhead was clicked, a start with many decimals. Adding 180
+  // and subtracting again does not always give back 180: from 923.475593556 s it gives 180.0000000000001, and about
+  // one press in thirty was refused for being longer than three minutes.
+  test("three minutes from a start with many decimals are still three minutes", async () => {
+    const from = 923.475593556;
+
+    await expect(readExcerpt(recording, 0, from, from + 180, join(workDir, "no-ffmpeg.exe"))).rejects.toThrow(/ENOENT/);
   });
 });

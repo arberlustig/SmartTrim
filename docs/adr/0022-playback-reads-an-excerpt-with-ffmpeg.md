@@ -74,7 +74,7 @@ window rather than at its start. The cause is not known. It changes nothing abou
 - IPC `sourceTrack:excerpt` takes `{ position, fromSeconds, toSeconds }` and refuses when another Recording was
   chosen while ffmpeg ran, like `sourceTrack:read`.
 - The window plays through Web Audio (an `AudioBuffer`, not an `<audio>` element), which is what keeps the Joins
-  exact. The playhead is read off `AudioContext.currentTime`; only the playing SourceTrack's canvas is redrawn per
+  exact. The Playhead is read off `AudioContext.currentTime`; only the playing SourceTrack's canvas is redrawn per
   frame. A press on another row, choosing a Recording, opening a project, pressing Schneiden or setting the playing
   SourceTrack to "wird ignoriert" stops the sound. The switch "überspringen" appears only once there is a cut, and
   flipping it while playing starts that SourceTrack again the new way.
@@ -91,10 +91,33 @@ window rather than at its start. The cause is not known. It changes nothing abou
   also made every latency it reported meaningless. Positions, requests and paging were checked there; how quickly
   a click is heard needs the real window.
 
+## What a review found
+
+A two-axis review of this work (standards, and against what the owner asked) on 2026-09-13 found faults that all
+lived where nothing is tested, or where a test only tried round numbers:
+
+- **About one press in thirty was refused.** The window asks for a start plus 180 s; from a start with many decimals
+  that difference comes out a hair over 180 (from 923.475593556 s: 180.0000000000001). `readExcerpt` now allows a
+  millisecond of slack, and a test uses that very start.
+- **An empty Excerpt passed as a success.** Past the end of a SourceTrack — which may end before the video
+  (ADR-0009) — ffmpeg writes nothing and exits 0. `readExcerpt` now refuses it, tested past the fixture's end.
+- **The gap while an Excerpt is on its way** (0.3–0.4 s) was treated as "nothing plays": a second quick click
+  stopped the sound instead of jumping, flipping the switch was ignored, setting that SourceTrack to "wird
+  ignoriert" let a sound start with no button left to stop it, and a click during the gap left the button on "…".
+  Every such place now counts the SourceTrack whose Excerpt is on its way as the one playing.
+- **A click nudged the view** before placing the Playhead, since panning started on the first pixel of movement.
+  The view now stays put until the press has moved 4 px.
+- **A start carried past the right edge by skipping never paged**, because paging required the Playhead to have
+  been in view on the frame before. It now counts as in view where it started.
+- Failures while turning the Playback into sound were swallowed by the detached `play()`; they are now shown.
+
+Checked in the browser pane with a fake bridge whose Excerpt arrives only when the check says so, which makes "while
+it is on its way" exact even on a throttled page.
+
 ## Tested, and not
 
 `readExcerpt` runs the real ffmpeg on a generated Recording whose SourceTracks differ left from right and in sample
 rate, and whose second SourceTrack changes pitch at a known moment; the test was confirmed to fail when the sample
 rate is assumed or the Excerpt starts 20 ms late. `playbackOf` and `recordingSecondsAt` are pure and tested on an
 Excerpt whose samples carry their own frame numbers, so which frames are played can be read off the result. The
-play button, the playhead and the Join marks are drawing, untested like the rest of the window (ADR-0012).
+play button, the Playhead and the Join marks are drawing, untested like the rest of the window (ADR-0012).
