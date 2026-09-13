@@ -111,12 +111,18 @@ export async function analyseRecording(
   const known = new Map(alreadyRead.map((read) => [read.position, read]));
   const needSamples = decideBy.kind === "voice" ? request.voiceSourceTracks : [];
   const toDecode = wanted.filter((position) => !known.has(position) || needSamples.includes(position));
-  const fresh = toDecode.length === 0 ? [] : await decodeSourceTracks(recording, toDecode, tools.ffmpeg);
-  // The audio lives only as long as this call. What outlives it is each SourceTrack read down to levels and peaks.
-  const samplesOf = new Map(toDecode.map((position, index) => [position, fresh[index] as MonoPcm]));
-  for (const [position, pcm] of samplesOf) {
-    if (!known.has(position)) known.set(position, readSourceTrackFrom(position, pcm));
-  }
+  // Each SourceTrack is read down to levels and peaks the moment it is decoded, so its audio is let go while the
+  // others are still decoding (ADR-0011). Only Silero's samples are held, and only as long as this call.
+  const fresh =
+    toDecode.length === 0
+      ? []
+      : await decodeSourceTracks(recording, toDecode, tools.ffmpeg, (position, pcm) => ({
+          position,
+          read: known.has(position) ? null : readSourceTrackFrom(position, pcm),
+          samples: needSamples.includes(position) ? pcm : null,
+        }));
+  for (const { position, read } of fresh) if (read) known.set(position, read);
+  const samplesOf = new Map(fresh.map(({ position, samples }) => [position, samples]));
   const readOf = (position: number) => known.get(position) as ReadSourceTrack;
 
   const listened = request.voiceSourceTracks.map(readOf);

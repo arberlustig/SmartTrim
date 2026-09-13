@@ -34,8 +34,8 @@ six run side by side. Each SourceTrack is 278 MB of PCM; six were **1.7 GB held*
 peak near 4 GB while decoding.
 
 That was the real cost of reading everything up front, and it is why the empty SourceTracks are skipped. ADR-0021
-has since stopped holding the audio: what is kept of those six SourceTracks is 17.2 MB. The peak while reading is
-unchanged.
+has since stopped holding the audio: what is kept of those six SourceTracks is 17.2 MB. The peak while reading
+came down from about 3.4 GB to 2.3 GB once each SourceTrack was reduced as soon as it finished (ADR-0011).
 
 ## It costs nothing, because it is the same read
 

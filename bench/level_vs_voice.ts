@@ -34,7 +34,7 @@ const THRESHOLDS_DBFS = [-50, -45, -40, -35, -30];
 
 const recording = await probeRecording(recordingPath, vendor("ffprobe.exe"));
 const sourceTrackIndex = Number(sourceTrackNumber) - 1;
-const [pcm] = await decodeSourceTracks(recording, [sourceTrackIndex], vendor("ffmpeg.exe"));
+const [pcm] = await decodeSourceTracks(recording, [sourceTrackIndex], vendor("ffmpeg.exe"), (_index, audio) => audio);
 if (!pcm) throw new Error("nothing decoded");
 
 const framesPerSecond = recording.frameRate.numerator / recording.frameRate.denominator;

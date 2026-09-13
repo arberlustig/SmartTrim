@@ -51,6 +51,10 @@ The peak is ffmpeg's output being collected and copied while six SourceTracks de
 is kept, and this decision does not touch it. It could be lowered by decoding fewer SourceTracks at once, which
 costs time. That has not been measured and is not done.
 
+**Lowered since, without costing time:** each SourceTrack is now reduced the moment its own decode finishes rather
+than after all of them, which brought this peak down to about 2,300 MB for six SourceTracks with the read time
+unchanged (ADR-0011).
+
 **A pitfall in measuring this.** The first version of the bench decoded in top-level module code across an `await`.
 The suspended module kept the decoded audio reachable after its block had ended, and reported **2,012.8 MB after
 collection** — the bench holding on to the audio, not the product. The read now happens inside a function, as it does

@@ -8,25 +8,32 @@ const DECODE_SAMPLE_RATE = 16000;
 /**
  * Decodes SourceTracks of a Recording to 16 kHz mono PCM held in memory (ADR-0004); nothing is written to disk.
  * Every requested SourceTrack gets its own ffmpeg process and all run at once, which on a coarsely interleaved
- * Recording lets each process skip the video (ADR-0005). Results come back in the order they were asked for.
+ * Recording lets each process skip the video (ADR-0005). Each SourceTrack is handed to `keep` the moment it
+ * finishes, and what `keep` returns comes back, in the order the SourceTracks were asked for.
  */
-export function decodeSourceTracks(
+export function decodeSourceTracks<Kept>(
   recording: RecordingInfo,
   sourceTrackIndexes: readonly number[],
   ffmpegPath: string,
+  /**
+   * What to keep of one decoded SourceTrack. Its audio is let go as soon as this returns, unless the result holds on
+   * to it. Holding every SourceTrack's audio until the last one finished made the peak while reading far higher than
+   * anything that is kept afterwards (ADR-0011).
+   */
+  keep: (sourceTrackIndex: number, pcm: MonoPcm) => Kept,
   /**
    * Called as each SourceTrack finishes, so the window can say how far it has got. They are decoded side by side
    * and finish in no particular order, which is why this reports a count rather than a position.
    */
   onDecoded?: (done: number, total: number) => void,
-): Promise<MonoPcm[]> {
+): Promise<Kept[]> {
   let done = 0;
   return Promise.all(
     sourceTrackIndexes.map(async (index) => {
-      const pcm = await decodeSourceTrack(recording.path, index, ffmpegPath);
+      const kept = keep(index, await decodeSourceTrack(recording.path, index, ffmpegPath));
       done += 1;
       onDecoded?.(done, sourceTrackIndexes.length);
-      return pcm;
+      return kept;
     }),
   );
 }

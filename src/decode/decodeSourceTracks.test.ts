@@ -52,7 +52,7 @@ describe("decodeSourceTracks", () => {
   });
 
   test("each requested SourceTrack comes back as 16 kHz mono with its own length and sound, in the order asked for", async () => {
-    const decoded = await decodeSourceTracks(recording, [2, 0, 1], vendor("ffmpeg.exe"));
+    const decoded = await decodeSourceTracks(recording, [2, 0, 1], vendor("ffmpeg.exe"), (_index, pcm) => pcm);
 
     expect(decoded.map(describePcm)).toEqual([
       { sampleRate: 16000, seconds: 1.2, sound: "1000 Hz" },
@@ -61,10 +61,24 @@ describe("decodeSourceTracks", () => {
     ]);
   });
 
+  // Six SourceTracks of a 2.5-hour Recording are 1.7 GB of audio. Kept until the last one finished, they doubled the
+  // peak while reading; handed to `keep` one by one, each is let go as soon as it is reduced (ADR-0011).
+  test("each SourceTrack is handed to keep with its index, and only what keep returns comes back", async () => {
+    const handed: number[] = [];
+
+    const kept = await decodeSourceTracks(recording, [2, 0, 1], vendor("ffmpeg.exe"), (index, pcm) => {
+      handed.push(index);
+      return `SourceTrack ${index + 1}: ${describePcm(pcm).sound}`;
+    });
+
+    expect(kept).toEqual(["SourceTrack 3: 1000 Hz", "SourceTrack 1: 440 Hz", "SourceTrack 2: silence"]);
+    expect(handed.sort()).toEqual([0, 1, 2]);
+  });
+
   test("a SourceTrack ffmpeg cannot decode is reported with ffmpeg's reason", async () => {
     const missing = { ...recording, path: join(workDir, "missing.mp4") };
 
-    await expect(decodeSourceTracks(missing, [0], vendor("ffmpeg.exe"))).rejects.toThrow(
+    await expect(decodeSourceTracks(missing, [0], vendor("ffmpeg.exe"), (_index, pcm) => pcm)).rejects.toThrow(
       /^ffmpeg could not decode SourceTrack 1 of .+missing\.mp4: [\s\S]*No such file or directory/,
     );
   });

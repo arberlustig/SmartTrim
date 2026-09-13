@@ -27,7 +27,7 @@ const indexes =
 const recordingSeconds = (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
 
 const started = performance.now();
-const decoded = await decodeSourceTracks(recording, indexes, vendor("ffmpeg.exe"));
+const decoded = await decodeSourceTracks(recording, indexes, vendor("ffmpeg.exe"), (_index, pcm) => pcm);
 const elapsedSeconds = (performance.now() - started) / 1000;
 
 decoded.forEach((pcm, position) => {

@@ -11,7 +11,7 @@
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readSourceTrackFrom, type ReadSourceTrack } from "../src/analysis/analyseRecording.ts";
+import { readSourceTrackFrom } from "../src/analysis/analyseRecording.ts";
 import { decodeSourceTracks } from "../src/decode/decodeSourceTracks.ts";
 import { probeRecording } from "../src/probe/probeRecording.ts";
 import type { RecordingInfo } from "../src/export/exportFcp7Xml.ts";
@@ -36,9 +36,11 @@ async function readAndKeep(recording: RecordingInfo, positions: readonly number[
     peakRss = Math.max(peakRss, process.memoryUsage().rss);
   }, 50);
   const started = performance.now();
-  const audio = await decodeSourceTracks(recording, positions, vendor("ffmpeg.exe"));
-  const audioBytes = audio.reduce((total, pcm) => total + pcm.samples.byteLength, 0);
-  const kept: ReadSourceTrack[] = audio.map((pcm, index) => readSourceTrackFrom(positions[index] as number, pcm));
+  let audioBytes = 0;
+  const kept = await decodeSourceTracks(recording, positions, vendor("ffmpeg.exe"), (position, pcm) => {
+    audioBytes += pcm.samples.byteLength;
+    return readSourceTrackFrom(position, pcm);
+  });
   clearInterval(sampler);
   return { kept, audioBytes, peakRss, seconds: (performance.now() - started) / 1000 };
 }

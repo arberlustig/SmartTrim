@@ -9,7 +9,6 @@ import {
   type ReadSourceTrack,
 } from "../analysis/analyseRecording.ts";
 import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
-import type { MonoPcm } from "../speech/detectSpeech.ts";
 import {
   redecideCut,
   replanCut,
@@ -163,20 +162,19 @@ function registerHandlers(window: BrowserWindow): void {
       const readingFor = chosen;
       const missing = positions.filter((position) => !sourceTracksRead.has(position));
       if (missing.length > 0) {
-        const audio = await decodeSourceTracks(
+        // Each SourceTrack is read down to its levels and waveform as soon as it is decoded, and its audio let go.
+        const read = await decodeSourceTracks(
           readingFor,
           missing,
           (await analysisTools(window)).ffmpeg,
+          readSourceTrackFrom,
           (done, total) => {
             if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
           },
         );
         // The user may have chosen another Recording while this ran; that audio belongs to the old one.
         if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-        // Each SourceTrack is read down to its levels and waveform here; the audio is let go as this returns.
-        missing.forEach((position, index) =>
-          sourceTracksRead.set(position, readSourceTrackFrom(position, audio[index] as MonoPcm)),
-        );
+        for (const one of read) sourceTracksRead.set(one.position, one);
       }
       return waveformsRead(positions);
     }),
@@ -283,10 +281,11 @@ function registerHandlers(window: BrowserWindow): void {
 
       const readingFor = lastCut;
       const positions = reopenedSourceTracks;
-      const audio = await decodeSourceTracks(
+      const read = await decodeSourceTracks(
         readingFor.recording,
         positions,
         (await analysisTools(window)).ffmpeg,
+        readSourceTrackFrom,
         (done, total) => {
           if (!window.isDestroyed()) window.webContents.send("sourceTrack:progress", { done, total });
         },
@@ -294,7 +293,6 @@ function registerHandlers(window: BrowserWindow): void {
       // Another project or Recording may have been opened while this ran; that audio belongs to the old one.
       if (lastCut !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
 
-      const read = positions.map((position, index) => readSourceTrackFrom(position, audio[index] as MonoPcm));
       // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
       const listened = reopenedVoice.map((position) => read[positions.indexOf(position)] as ReadSourceTrack);
       lastCut = { ...readingFor, read, listened };

@@ -21,7 +21,7 @@ const riseDb = Number(process.argv[4] ?? 12);
 const baselineSeconds = Number(process.argv[5] ?? 5);
 
 const recording = await probeRecording(recordingPath, vendor("ffprobe.exe"));
-const [audio] = await decodeSourceTracks(recording, [sourceTrackNumber - 1], vendor("ffmpeg.exe"));
+const [audio] = await decodeSourceTracks(recording, [sourceTrackNumber - 1], vendor("ffmpeg.exe"), (_index, pcm) => pcm);
 if (!audio) throw new Error(`SourceTrack ${sourceTrackNumber} could not be decoded.`);
 const seconds = audio.samples.length / audio.sampleRate;
 
