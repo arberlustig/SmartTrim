@@ -287,7 +287,7 @@ function drawSourceTracks(): void {
     playButton.textContent = isPlaying ? "■" : fetchingFor === index ? "…" : "▶";
     playButton.title = isPlaying
       ? `Tonspur ${index + 1} anhalten`
-      : `Tonspur ${index + 1} im gezeigten Ausschnitt anhören (höchstens 3 Minuten)`;
+      : `Tonspur ${index + 1} ab dem weißen Strich anhören (höchstens 3 Minuten)`;
     playButton.addEventListener("click", () => void play(index));
     holder.append(playButton, waveformCanvas(index));
     row.append(holder);
@@ -695,20 +695,26 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     paint.fillRect(column, middle - half, 1, half * 2);
   }
 
-  // While this SourceTrack plays: a bar over every stretch the sound jumps across, and the playhead at the moment
-  // being heard, read off the clock the sound itself runs on (ADR-0022).
+  // The Playhead. While this SourceTrack plays: a bar over every stretch the sound jumps across, and the line at the
+  // moment being heard, read off the clock the sound itself runs on (ADR-0022). While nothing plays: the line on
+  // every waveform, where listening starts next. While another SourceTrack plays, this one shows none.
   const now = playing;
-  if (!now || now.position !== waveform.position) return;
-  paint.fillStyle = JOIN_MARK;
-  for (const join of now.playback.joins) {
-    const from = xOf(join.removedFromSeconds);
-    const to = xOf(join.removedToSeconds);
-    if (to < 0 || from > width) continue;
-    paint.fillRect(from, 0, Math.max(to - from, 1), 3);
-    paint.fillRect(from, height - 3, Math.max(to - from, 1), 3);
+  let lineAt: number | null = null;
+  if (now && now.position === waveform.position) {
+    paint.fillStyle = JOIN_MARK;
+    for (const join of now.playback.joins) {
+      const from = xOf(join.removedFromSeconds);
+      const to = xOf(join.removedToSeconds);
+      if (to < 0 || from > width) continue;
+      paint.fillRect(from, 0, Math.max(to - from, 1), 3);
+      paint.fillRect(from, height - 3, Math.max(to - from, 1), 3);
+    }
+    lineAt = heardIn(now);
+  } else if (!now) {
+    lineAt = cursorSeconds;
   }
-  const heard = recordingSecondsAt(now.playback, Math.max(now.context.currentTime - now.startedAt, 0));
-  const x = xOf(heard);
+  if (lineAt === null) return;
+  const x = xOf(lineAt);
   if (x >= 0 && x <= width) {
     paint.fillStyle = PLAYHEAD;
     paint.fillRect(x - 1, 0, 2, height);
@@ -727,7 +733,7 @@ function waveformCanvas(position: number): HTMLCanvasElement {
   if (made) return made;
   const canvas = document.createElement("canvas");
   canvas.dataset["position"] = String(position);
-  canvas.title = `Tonspur ${position + 1} · ziehen zum Verschieben, Mausrad zum Zoomen`;
+  canvas.title = `Tonspur ${position + 1} · klicken setzt den Strich, ziehen verschiebt, Mausrad zoomt`;
   waveformCanvases.set(position, canvas);
   return canvas;
 }
@@ -972,11 +978,31 @@ let playing: {
   source: AudioBufferSourceNode;
   startedAt: number;
 } | null = null;
+/**
+ * One AudioContext for the whole window, made on the first press and kept, rather than one per press: every press,
+ * and every click on the waveform while listening, would otherwise get an audio device going again. How much that
+ * saves is not measured — the browser pane throttles a hidden page to about one timer a second, so it cannot tell.
+ */
+let audio: AudioContext | null = null;
+
+function sharedAudio(): AudioContext {
+  audio ??= new AudioContext();
+  if (audio.state === "suspended") void audio.resume();
+  return audio;
+}
+
 /** The SourceTrack whose Excerpt is on its way, so its button says so and a second press cancels instead. */
 let fetchingFor: number | null = null;
 /** Counts presses, so an Excerpt arriving after the user pressed something else is dropped instead of played. */
 let playRequest = 0;
 let playheadFrame = 0;
+/**
+ * The Playhead while nothing plays: where listening starts next, shared by every waveform because they all show the
+ * same stretch of the Recording. Set by clicking a waveform, left where the sound stopped. Null until either happens.
+ */
+let cursorSeconds: number | null = null;
+/** Where the Playhead was on the frame before, so the view pages along only when the Playhead runs out of it. */
+let lastHeard: number | null = null;
 
 /** Stops the sound and forgets an Excerpt still on its way. */
 function stopPlaying(): void {
@@ -986,19 +1012,57 @@ function stopPlaying(): void {
   const was = playing;
   playing = null;
   if (!was) return;
+  // The Playhead stays where the sound stopped, so the next press goes on from there.
+  cursorSeconds = heardIn(was);
   was.source.onended = null;
   was.source.stop();
-  void was.context.close();
+  // The context stays for the next press; only this sound's node goes.
+  was.source.disconnect();
 }
 
-/** Redraws the playing SourceTrack's waveform every frame, so the playhead moves. Only that one canvas. */
+/** The moment of the Recording a playing SourceTrack is at, read off the clock the sound runs on. */
+function heardIn(sound: NonNullable<typeof playing>): number {
+  return recordingSecondsAt(sound.playback, Math.max(sound.context.currentTime - sound.startedAt, 0));
+}
+
+/**
+ * Redraws the playing SourceTrack's waveform every frame, so the Playhead moves — only that one canvas. When the
+ * Playhead runs out of the right edge of the view, the view turns a page so the Playhead starts it again. It does
+ * not when the user has moved the view away while listening: that would snatch the view back from them.
+ */
 function followPlayhead(): void {
   const now = playing;
   if (!now) return;
-  const waveform = waveforms.find((each) => each.position === now.position);
-  const canvas = waveformCanvases.get(now.position);
-  if (waveform && canvas?.isConnected) drawWaveform(canvas, waveform);
+  const heard = heardIn(now);
+  const seconds = recordingSeconds();
+  const wasInView = lastHeard !== null && lastHeard >= zoom.fromSeconds && lastHeard <= zoom.toSeconds;
+  lastHeard = heard;
+  if (seconds && wasInView && heard > zoom.toSeconds) {
+    showWindow(pannedBy(zoom, seconds, heard - zoom.fromSeconds));
+  } else {
+    const waveform = waveforms.find((each) => each.position === now.position);
+    const canvas = waveformCanvases.get(now.position);
+    if (waveform && canvas?.isConnected) drawWaveform(canvas, waveform);
+  }
   playheadFrame = requestAnimationFrame(followPlayhead);
+}
+
+/**
+ * Puts the Playhead where the user clicked a waveform. While a SourceTrack plays it jumps there and plays on, the
+ * way a click on Premiere's timeline does.
+ */
+function placePlayhead(canvas: HTMLCanvasElement, clientX: number): void {
+  const seconds = recordingSeconds();
+  if (!seconds) return;
+  const box = canvas.getBoundingClientRect();
+  const span = zoom.toSeconds - zoom.fromSeconds;
+  const clicked = Math.min(Math.max(zoom.fromSeconds + ((clientX - box.left) / box.width) * span, 0), seconds);
+  const position = playing?.position;
+  // Stopping leaves the Playhead where the sound was, so the click is put back after it.
+  stopPlaying();
+  cursorSeconds = clicked;
+  if (position === undefined) drawWaveforms();
+  else void play(position);
 }
 
 /**
@@ -1015,8 +1079,16 @@ async function play(position: number): Promise<void> {
   }
 
   const request = playRequest;
-  const fromSeconds = zoom.fromSeconds;
-  const toSeconds = Math.min(zoom.toSeconds, fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
+  // From the Playhead — unless it is not in view, or at the very end: then from the start of what the user sees.
+  // Up to three minutes, past the edge of the view if need be; the view pages along (followPlayhead).
+  const cursorUsable =
+    cursorSeconds !== null &&
+    cursorSeconds >= zoom.fromSeconds &&
+    cursorSeconds <= zoom.toSeconds &&
+    cursorSeconds < seconds - 0.05;
+  const fromSeconds = cursorUsable ? (cursorSeconds as number) : zoom.fromSeconds;
+  const toSeconds = Math.min(fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
+  lastHeard = null;
   // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
   const kept = finished?.keptRanges ?? null;
   const skipping = view.skipRemoved.checked && kept !== null;
@@ -1043,7 +1115,7 @@ async function play(position: number): Promise<void> {
     return;
   }
 
-  const context = new AudioContext();
+  const context = sharedAudio();
   const frames = playback.samples.length / playback.channelCount;
   const buffer = context.createBuffer(playback.channelCount, frames, playback.sampleRate);
   for (let channel = 0; channel < playback.channelCount; channel += 1) {
@@ -1109,26 +1181,34 @@ view.overview.addEventListener("pointerdown", (event) => {
   move(event);
 });
 
-/** Dragging a waveform sideways slides the window; the wheel zooms around where the pointer is. */
+/**
+ * Dragging a waveform sideways slides the window; a click that barely moves puts the Playhead there instead; the
+ * wheel zooms around where the pointer is.
+ */
 view.sourceTracks.addEventListener("pointerdown", (event) => {
   const canvas = (event.target as HTMLElement).closest("canvas");
   const seconds = recordingSeconds();
   if (!canvas || !seconds) return;
   const box = canvas.getBoundingClientRect();
+  const startX = event.clientX;
   let lastX = event.clientX;
+  // How far the pointer got from where it went down. A hand never clicks without moving a pixel or two.
+  let travelled = 0;
   canvas.classList.add("dragging");
 
   const move = (moved: PointerEvent) => {
+    travelled = Math.max(travelled, Math.abs(moved.clientX - startX));
     const span = zoom.toSeconds - zoom.fromSeconds;
     // Dragging right pulls the Recording along with the pointer, so the window moves the other way.
     showWindow(pannedBy(zoom, seconds, -((moved.clientX - lastX) / box.width) * span));
     lastX = moved.clientX;
   };
-  const stop = () => {
+  const stop = (ended: PointerEvent) => {
     canvas.classList.remove("dragging");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
+    if (ended.type === "pointerup" && travelled < 4) placePlayhead(canvas, ended.clientX);
   };
   // On the window, not the canvas: a drag that wanders off the waveform keeps working, and it keeps working even
   // where capturing the pointer is refused — a silent stop mid-drag is worse than a drag that leaves the canvas.
@@ -1164,6 +1244,8 @@ view.chooseRecording.addEventListener("click", async () => {
   // The waveforms and the read-ahead list belong to the Recording that was open before this one.
   waveforms = [];
   readAhead = [];
+  // A moment in the Recording that was open before means nothing in this one.
+  cursorSeconds = null;
   zoom = { fromSeconds: 0, toSeconds: 1 };
   draw();
 
@@ -1194,6 +1276,7 @@ view.openProject.addEventListener("click", async () => {
   session = projectOpened(session, opened.project);
   finished = opened.summary;
   waveforms = [];
+  cursorSeconds = null;
   clearStatus();
   draw();
 

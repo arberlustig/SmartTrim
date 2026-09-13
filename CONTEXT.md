@@ -143,6 +143,11 @@ The sound of one SourceTrack over a stretch of the Recording, read so it can be 
 SourceTrack's own sample rate, at most three minutes. Unlike ChunkLevels it is never kept once it has been played.
 _Avoid_: clip, snippet, preview, sample
 
+**Playhead**:
+The white line over the waveforms: the moment of the Recording being heard, or, while nothing plays, the moment
+listening starts from next. The user sets it by clicking a waveform; stopping leaves it where the sound stopped.
+_Avoid_: cursor, marker, position
+
 **Join**:
 A place in what is played where a removed stretch was skipped and two kept stretches meet — where the Premiere
 sequence will have a cut. The window marks each one while it plays.

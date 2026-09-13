@@ -78,6 +78,18 @@ window rather than at its start. The cause is not known. It changes nothing abou
   frame. A press on another row, choosing a Recording, opening a project, pressing Schneiden or setting the playing
   SourceTrack to "wird ignoriert" stops the sound. The switch "überspringen" appears only once there is a cut, and
   flipping it while playing starts that SourceTrack again the new way.
+- The Playhead (CONTEXT.md) is settable, asked for by the owner after the first listening check: "ich selber kann
+  den Strich nicht setzen, sodass ich entscheiden kann wo ich starten möchte". A click on any waveform — a press
+  that moves less than 4 px, anything more is a drag that pans — puts it there, and jumps there while playing.
+  Stopping leaves it where the sound stopped instead of making it vanish. ▶ plays up to three minutes from it, past
+  the edge of the view, and the view turns a page when the Playhead runs out of it — but not when the user has
+  moved the view away while listening. A Playhead out of view is ignored: ▶ then starts at the left edge of what is
+  shown, since playing from a place the user cannot see would be a surprise.
+- One AudioContext serves the whole window and is never closed; stopping disconnects the sound's node only. A
+  context per press would get an audio device going on every click-to-jump. The saving is not measured: the
+  browser pane checks were run on a hidden page that got 3 animation frames and about one timer a second, which
+  also made every latency it reported meaningless. Positions, requests and paging were checked there; how quickly
+  a click is heard needs the real window.
 
 ## Tested, and not
 
