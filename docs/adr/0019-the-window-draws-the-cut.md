@@ -99,8 +99,8 @@ columns):
 - **`canvasBrush` reassigned `canvas.width`/`height` every time**, which throws the bitmap away and allocates a new
   one — about 3.7 MB per redraw. It only does so now when the size really changed.
 - **The waveform numbers were rebuilt from the PCM on every request** (`waveformsOf` in `cut:waveforms`), walking
-  144 million samples per SourceTrack. The main process now files a SourceTrack's waveform beside its audio when it
-  is read, and hands out the kept one.
+  144 million samples per SourceTrack. The main process now builds a SourceTrack's waveform once, when it is read,
+  and hands out the kept one — since ADR-0021 beside its chunk levels, with the audio itself no longer kept.
 
 Measured after: **8.12 ms per redraw zoomed out, 3.77 ms zoomed in** — the whole redraw, drawing included.
 
