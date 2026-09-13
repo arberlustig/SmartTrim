@@ -1,0 +1,6 @@
+{
+  "name": "prototype-webcodecs-picture",
+  "private": true,
+  "description": "PROTOTYPE, throw away: can WebCodecs keep the picture smooth across Joins? Not product code.",
+  "main": "main.cjs"
+}
