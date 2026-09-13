@@ -1,4 +1,5 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
+import { normalisedLockedRanges } from "../cutting/lockedRanges.ts";
 import type { TimeRange } from "../cutting/planCuts.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
@@ -238,10 +239,23 @@ export function markLockedRangeEnd(session: CutSession, atSeconds: number): CutS
   const anfang = session.lockedRangeStart;
   // A stretch from nowhere would hold everything before this moment, or nothing — neither is what was pressed.
   if (anfang === null) throw new Error("Press Anfang festhalten first: an Ende on its own holds nothing.");
-  // It would keep not a single frame, and the list would show a held stretch that holds nothing.
-  if (anfang === atSeconds) throw new Error(`Anfang and Ende are both at ${atSeconds} s: that stretch has no length.`);
-  const marked = { startSeconds: Math.min(anfang, atSeconds), endSeconds: Math.max(anfang, atSeconds) };
-  return { ...session, lockedRanges: merged([...session.lockedRanges, marked]), lockedRangeStart: null };
+  if (!session.recording) throw new Error("No Recording is chosen, so there is no moment to hold.");
+  // Marks read off the audio clock can be microseconds apart without being equal. Less than a frame holds nothing
+  // anyone could hear, yet the plan would widen it to a whole frame of the cut and the list would show "0:30,0 – 0:30,0".
+  const { numerator, denominator } = session.recording.frameRate;
+  if (Math.abs(atSeconds - anfang) < denominator / numerator) {
+    throw new Error(`Anfang (${anfang} s) and Ende (${atSeconds} s) are less than a frame apart: that stretch has no length.`);
+  }
+  const marked = { startSeconds: anfang, endSeconds: atSeconds };
+  return { ...session, lockedRanges: normalisedLockedRanges([...session.lockedRanges, marked]), lockedRangeStart: null };
+}
+
+/**
+ * The held stretches as an optional field, named only when there are any. An absent list means none, as it does for
+ * every request, setting and saved file written before held stretches existed.
+ */
+function heldIfAny(session: CutSession): { lockedRanges?: TimeRange[] } {
+  return session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {};
 }
 
 /** Whether two lists of held stretches hold exactly the same stretches. */
@@ -259,24 +273,6 @@ export function removeLockedRange(session: CutSession, index: number): CutSessio
     throw new Error(`There is no held stretch number ${index + 1}; there are ${session.lockedRanges.length}.`);
   }
   return { ...session, lockedRanges: session.lockedRanges.filter((_range, at) => at !== index) };
-}
-
-/**
- * Held stretches in the order of the Recording, those that overlap or touch joined into one. The list shows each
- * stretch once: two entries for one held stretch would leave it held after one of them was removed.
- */
-function merged(ranges: readonly TimeRange[]): TimeRange[] {
-  const sorted = [...ranges].sort((one, other) => one.startSeconds - other.startSeconds);
-  const joined: TimeRange[] = [];
-  for (const range of sorted) {
-    const previous = joined.at(-1);
-    if (previous && range.startSeconds <= previous.endSeconds) {
-      joined[joined.length - 1] = { ...previous, endSeconds: Math.max(previous.endSeconds, range.endSeconds) };
-    } else {
-      joined.push({ ...range });
-    }
-  }
-  return joined;
 }
 
 /** Whether Schneiden can be pressed. */
@@ -315,7 +311,7 @@ export function analysisRequestFrom(session: CutSession): AnalysisRequest {
   if (session.listenTo.length === 0) throw new Error("Tick at least one SourceTrack to listen to.");
   return {
     recordingPath: session.recording.path,
-    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
+    ...heldIfAny(session),
     voiceSourceTracks: [...session.listenTo],
     contentSourceTracks: [...session.contentSourceTracks],
     decideBy: { kind: "loudness", thresholdDbfs: session.thresholdDbfs },
@@ -395,7 +391,7 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
     plannedWith: null,
     audioInMemory: false,
     // Exactly the project's own held stretches: none from a file older than them, and none from the session before.
-    lockedRanges: [...(project.lockedRanges ?? [])],
+    lockedRanges: normalisedLockedRanges(project.lockedRanges ?? []),
     lockedRangeStart: null,
   };
   return { ...opened, plannedWith: settingsNow(opened) };
@@ -404,8 +400,7 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
 /** The settings a replan needs; the rest of a request decides what was found, not how it is planned. */
 export function planSettingsFrom(session: CutSession): PlanSettings {
   return {
-    // Only named when there are any: an absent list means none, as it does for every caller written before them.
-    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
+    ...heldIfAny(session),
     marginSeconds: session.marginSeconds,
     eventLeadSeconds: session.eventLeadSeconds,
     eventTailSeconds: session.eventTailSeconds,
@@ -522,7 +517,7 @@ export function savedChoicesFrom(session: CutSession): SavedChoices {
     eventTailSeconds: session.eventTailSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
     // The user's own work on this Recording; a reopened project without it would cut away what they held.
-    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
+    ...heldIfAny(session),
   };
   return session.scan ? { ...choices, scan: session.scan } : choices;
 }

@@ -418,12 +418,14 @@ function drawResult(): void {
   save.className = "primary";
   save.textContent = "Premiere-Datei speichern …";
   // Without a SourceTrack to export the file would hold a sequence with no audio at all.
-  save.disabled = !canExport(session);
+  // While a replan is still pending the plan in the main process is the one before the last change: saved now, the
+  // file would lack a stretch just held and still say "Gespeichert".
+  save.disabled = !canExport(session) || redoNeeded(session) !== "nothing";
   save.addEventListener("click", async () => {
     save.disabled = true;
     clearStatus();
     const saved = show(await window.smarttrim.save(session.exportSourceTracks), "Speichern ging nicht");
-    save.disabled = false;
+    save.disabled = !canExport(session) || redoNeeded(session) !== "nothing";
     // undefined is a refusal, already on screen; null means the user closed the dialog.
     if (saved === undefined || saved === null) return;
     const done = document.createElement("p");
@@ -516,6 +518,20 @@ async function redoNow(): Promise<void> {
   redoing = false;
   if (summary) {
     finished = summary;
+    // A sound that skips what the cut removes was built from the cut before this one: heard on, it would jump over a
+    // stretch just held, under a band that now says kept. It starts again from where it is, on the new cut. So does
+    // one still on its way, which was asked for with the old cut.
+    const stale = playing
+      ? playing.skipping
+        ? playing.position
+        : null
+      : fetchingFor !== null && view.skipRemoved.checked
+        ? fetchingFor
+        : null;
+    if (stale !== null) {
+      stopPlaying();
+      void play(stale);
+    }
     const now = settingsNow();
     // The sliders may have moved on while this ran; then these numbers are already one step behind.
     // Every setting a plan is made with counts, held stretches and the event sliders included; comparing only some
@@ -1020,6 +1036,8 @@ view.zoom.addEventListener("input", () => {
 let playing: {
   position: number;
   playback: Playback;
+  /** Whether this sound skips what the cut removes, and so goes stale the moment the cut changes. */
+  skipping: boolean;
   context: AudioContext;
   source: AudioBufferSourceNode;
   startedAt: number;
@@ -1109,11 +1127,8 @@ function placePlayhead(canvas: HTMLCanvasElement, clientX: number): void {
   // Stopping leaves the Playhead where the sound was, so the click is put back after it.
   stopPlaying();
   playheadSeconds = clicked;
-  if (position === null) {
-    drawWaveforms();
-    // The hold buttons follow the Playhead: without it "Anfang festhalten" has no moment to mark and stays disabled.
-    drawHeld();
-  } else void play(position);
+  if (position === null) drawWaveforms();
+  else void play(position);
 }
 
 /**
@@ -1181,7 +1196,7 @@ async function play(position: number): Promise<void> {
     draw();
     return;
   }
-  playing = { position, playback, ...sound };
+  playing = { position, playback, skipping, ...sound };
   draw();
   followPlayhead();
 }
@@ -1271,13 +1286,16 @@ function clock(seconds: number): string {
 
 /** The two buttons and the list of held stretches under the waveforms (ADR-0023). */
 function drawHeld(): void {
-  // Held stretches are moments on the waveforms, so they are offered wherever there are waveforms to mark them on.
-  view.held.hidden = view.cutPicture.hidden;
+  // Offered wherever there are waveforms to mark on — and wherever something is held, so a reopened project shows its
+  // held stretches before its audio has been read again, and still shows them if that read fails.
+  view.held.hidden = !session.recording || (view.cutPicture.hidden && session.lockedRanges.length === 0);
   if (view.held.hidden) return;
-  const at = playheadNow();
   const anfang = session.lockedRangeStart;
-  view.holdStart.disabled = working || at === null;
-  view.holdEnd.disabled = working || at === null || anfang === null || at === anfang;
+  // Enabled only on what cannot change without a redraw. The Playhead moves with the sound, and a state read from it
+  // here went stale while listening: "Ende festhalten" stayed disabled for a whole playback. A click without a
+  // Playhead, or an Ende on the Anfang, is answered with a sentence instead.
+  view.holdStart.disabled = working;
+  view.holdEnd.disabled = working || anfang === null;
   view.holdEnd.textContent = anfang === null ? "Ende festhalten" : `Ende festhalten (Anfang ${clock(anfang)})`;
   view.heldList.replaceChildren(
     ...session.lockedRanges.map((range, index) => {
@@ -1302,14 +1320,20 @@ function drawHeld(): void {
 
 view.holdStart.addEventListener("click", () => {
   const at = playheadNow();
-  if (at === null) return;
+  if (at === null) {
+    say("Setz zuerst den weißen Strich: ein Klick in die Wellenform, dann „Anfang festhalten“.");
+    return;
+  }
   session = markLockedRangeStart(session, at);
   draw();
 });
 
 view.holdEnd.addEventListener("click", () => {
   const at = playheadNow();
-  if (at === null) return;
+  if (at === null) {
+    say("Setz zuerst den weißen Strich an das Ende: ein Klick in die Wellenform, dann „Ende festhalten“.");
+    return;
+  }
   try {
     session = markLockedRangeEnd(session, at);
   } catch (error) {

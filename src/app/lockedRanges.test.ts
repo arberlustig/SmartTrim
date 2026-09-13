@@ -66,6 +66,16 @@ describe("LockedRanges in the session", () => {
     expect(() => markLockedRangeStart(newCutSession(), 62.5)).toThrow(/Recording/);
   });
 
+  // Marks taken off the audio clock can be microseconds apart without being equal. Such a stretch holds nothing anyone
+  // could hear, yet the plan widens it to a whole frame of the cut, and the list shows it as "0:30,0 – 0:30,0".
+  test("an Anfang and an Ende less than a frame apart are refused like a stretch of no length", () => {
+    // tenMinutes() runs at 60 fps, so a frame is 1/60 s.
+    const started = markLockedRangeStart(chooseRecording(newCutSession(), tenMinutes()), 30);
+
+    expect(() => markLockedRangeEnd(started, 30 + 1 / 120)).toThrow(/no length/);
+    expect(markLockedRangeEnd(started, 30 + 1 / 30).lockedRanges).toEqual([{ startSeconds: 30, endSeconds: 30 + 1 / 30 }]);
+  });
+
   // The list under the waveforms shows each held stretch once, in the order of the Recording. Two held stretches
   // that overlap or touch hold one stretch, and listing them twice would make removing one of them keep the other.
   test("held stretches that overlap or touch become one, and the list stays in the order of the Recording", () => {

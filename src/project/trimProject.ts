@@ -1,4 +1,5 @@
 import type { Decision } from "../analysis/analyseRecording.ts";
+import { normalisedLockedRanges } from "../cutting/lockedRanges.ts";
 import type { TimeRange } from "../cutting/planCuts.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
@@ -95,6 +96,11 @@ export function readTrimProject(text: string): TrimProject {
     minimumDeadZoneSeconds: need(file, "minimumDeadZoneSeconds", isNumber),
     worthKeeping: need(file, "worthKeeping", isRangeArray),
   };
+  // Format 3 added held stretches. An absent list means none, as in every older file — but a list that is there and
+  // broken is refused like any other broken field: opening without it would silently cut away what the user held.
+  const held = file["lockedRanges"];
+  if (held !== undefined && !isRangeArray(held)) throw new Error("This SmartTrim project's lockedRanges are damaged.");
+
   // Format 2 added these. A file from format 1 simply has no Content SourceTracks, which is what an absent field
   // means here — not a broken file.
   const withContent: TrimProject = {
@@ -103,8 +109,8 @@ export function readTrimProject(text: string): TrimProject {
     ...(isRangeArray(file["contentEvents"]) ? { contentEvents: file["contentEvents"] as TimeRange[] } : {}),
     ...(isNumber(file["eventLeadSeconds"]) ? { eventLeadSeconds: file["eventLeadSeconds"] as number } : {}),
     ...(isNumber(file["eventTailSeconds"]) ? { eventTailSeconds: file["eventTailSeconds"] as number } : {}),
-    // Format 3 added held stretches. An older file holds none, which is what the absent field means.
-    ...(isRangeArray(file["lockedRanges"]) ? { lockedRanges: file["lockedRanges"] as TimeRange[] } : {}),
+    // Through the same rule as two presses in the window: in order, joined, edges the right way round (ADR-0023).
+    ...(held === undefined ? {} : { lockedRanges: normalisedLockedRanges(held as TimeRange[]) }),
   };
 
   const scan = file["scan"];

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+import type { TimeRange } from "../cutting/planCuts";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
 import { readTrimProject, trimProjectText, type TrimProject } from "./trimProject";
 
@@ -58,6 +59,35 @@ describe("the TrimProject file", () => {
     };
 
     expect(readTrimProject(trimProjectText(withHeld))).toEqual(withHeld);
+  });
+
+  // Held stretches pass through one rule wherever they come from (ADR-0023). A file written by hand or by another
+  // version can hold them out of order, overlapping, or with their edges swapped; planned as they stand, a swapped
+  // pair would give a KeepSegment that runs backwards in the Premiere sequence.
+  test("held stretches read from a file come back in order, joined, and with their edges the right way round", () => {
+    const untidy: TimeRange[] = [
+      { startSeconds: 80, endSeconds: 70 },
+      { startSeconds: 10, endSeconds: 20 },
+      { startSeconds: 15, endSeconds: 30 },
+    ];
+
+    const reopened = readTrimProject(trimProjectText({ ...project, lockedRanges: untidy }));
+
+    expect(reopened.lockedRanges).toEqual([
+      { startSeconds: 10, endSeconds: 30 },
+      { startSeconds: 70, endSeconds: 80 },
+    ]);
+  });
+
+  // A list of held stretches that is there but broken is refused like any other broken field. Opening the project
+  // without it would silently cut away everything the user had held.
+  test("a file whose held stretches are damaged is refused rather than opened without them", () => {
+    const damaged = JSON.parse(
+      trimProjectText({ ...project, lockedRanges: [{ startSeconds: 62.5, endSeconds: 71.25 }] }),
+    ) as Record<string, unknown>;
+    damaged["lockedRanges"] = [{ startSeconds: 62.5 }];
+
+    expect(() => readTrimProject(JSON.stringify(damaged))).toThrow("lockedRanges");
   });
 
   test("a file that is not a TrimProject, or from a newer SmartTrim, is refused rather than half read", () => {

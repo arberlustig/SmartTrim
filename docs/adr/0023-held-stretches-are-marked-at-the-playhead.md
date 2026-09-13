@@ -53,6 +53,30 @@ and owes nothing.
   and draws a waiting Anfang as a thin line. The pending-replan check in `redoNow` now compares every setting a plan
   is made with, not only threshold, Margin and MinimumDeadZone, so a stretch held while a replan ran is not lost.
 
+## What a review found
+
+A review of this work on 2026-09-13 found nine points; all were fixed the same day.
+
+- **"Ende festhalten" stayed disabled while listening.** The buttons were disabled on `at === anfang` and `at ===
+  null`, values read from the moving Playhead but only in `draw()`, which playback never calls: press Anfang while a
+  SourceTrack plays and Ende stayed greyed out until the sound was stopped. The buttons now depend only on what
+  cannot change without a redraw (`working`, a waiting Anfang); a press without a Playhead, or an Ende on the Anfang,
+  is answered with a sentence. That also removed the special case `placePlayhead` had grown for the same reason.
+- **A Premiere file saved right after holding lacked the stretch.** `cut:save` takes the plan at the click and the
+  button was not held back while the replan was pending. It now is, like "Projekt speichern".
+- **Held stretches from a file were taken as they stood.** Out of order, overlapping or with swapped edges — the last
+  would plan a KeepSegment running backwards. `normalisedLockedRanges` in `src/cutting/lockedRanges.ts` is now the one
+  rule for both sources: `markLockedRangeEnd`, and `readTrimProject` (and `projectOpened` besides).
+- **A damaged list of held stretches was dropped silently.** `readTrimProject` now refuses it like any broken field.
+- **Less than a frame counted as a stretch.** Marks off the audio clock can be microseconds apart without being equal;
+  an Anfang and Ende less than a frame of the Recording apart are refused as having no length.
+- **The list was hidden after opening a project** until its audio was read again, or for good if that failed. It now
+  shows whenever something is held.
+- **A skipping sound kept skipping what was just held.** When a new cut arrives, a sound that skips removed stretches
+  (or one still on its way) starts again from where it is, on the new cut.
+- The "only when there are any" spread for held stretches is one helper, `heldIfAny`, in `cutSession.ts`;
+  `trimProjectOf` keeps its own beside the Content SourceTracks it mirrors.
+
 ## Tested, and not
 
 - `src/app/lockedRanges.test.ts`: an Anfang and an Ende make one stretch, in either order; an Ende without Anfang, a
