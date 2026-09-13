@@ -139,6 +139,26 @@ describe("openFiles", () => {
     expect(result.refused).toEqual([]);
   }, 60_000);
 
+  // Saving never overwrites, so `Part1 (2).smarttrim` ends up beside an older `Part1.smarttrim` (ADR-0025).
+  test("of two projects of one Recording one opens, and the other is named with the project that opened instead", async () => {
+    const folder = join(workDir, "two-projects");
+    mkdirSync(folder);
+    const recording = join(folder, "Part1.mp4");
+    copyFileSync(recordingPath, recording);
+    const request = { ...voiceRequest, recordingPath: recording };
+    const cut = await runCut(request, tools);
+    for (const name of ["Part1.smarttrim", "Part1 (2).smarttrim"]) {
+      await saveTrimProject(join(folder, name), trimProjectOf(cut, { ...request, exportSourceTracks: [0] }));
+    }
+
+    const result = await openFiles([folder], tools.ffprobe);
+
+    expect(result.opened.map((file) => file.kind)).toEqual(["project"]);
+    const openedProject = result.opened[0]?.path;
+    const other = [join(folder, "Part1.smarttrim"), join(folder, "Part1 (2).smarttrim")].find((path) => path !== openedProject);
+    expect(result.refused).toEqual([{ path: other, kind: "otherProjectOpened", detail: openedProject }]);
+  }, 60_000);
+
   // Recordings get moved and re-exported between sessions; the window has to say which of those happened.
   test("a project says whether its Recording is gone, changed, or the project itself broken; an MKV says it cannot be cut", async () => {
     const folder = join(workDir, "refusals");

@@ -21,8 +21,11 @@ export type OpenedFile =
  * - `notAProject`: a `.smarttrim` file that is damaged, not a project, or from a newer SmartTrim.
  * - `projectRecordingMissing`: the project is fine, but its Recording is not where it was saved; `detail` is where.
  * - `projectRecordingChanged`: its Recording is there but is no longer the one the project was cut from (ADR-0016).
+ * - `otherProjectOpened`: another project of the same Recording, handed over together, opens instead; `detail` is its
+ *   path. A Recording opens in one Tab only (ADR-0025).
  */
 export type RefusalKind =
+  | "otherProjectOpened"
   | "missing"
   | "folder"
   | "notARecording"
@@ -136,7 +139,7 @@ async function filesIn(path: string): Promise<string[]> {
  */
 export async function openFiles(paths: readonly string[], ffprobePath: string): Promise<OpenedFiles> {
   const files = (await Promise.all(paths.map(filesIn))).flat();
-  const outcomes = await Promise.allSettled(files.map((path) => openFile(path, ffprobePath)));
+  const outcomes = await settledInTurns(files, FILES_OPENED_AT_ONCE, (path) => openFile(path, ffprobePath));
   const opened: (OpenedFile & { path: string })[] = [];
   const refused: Refusal[] = [];
   outcomes.forEach((outcome, at) => {
@@ -155,10 +158,44 @@ export async function openFiles(paths: readonly string[], ffprobePath: string): 
     // One Recording opens once. Its project wins over the bare Recording, since the project holds the work done on it,
     // and takes the place of whichever of the two came first.
     const twin = opened.findIndex((each) => sameRecording(recordingPathOf(each), recordingPathOf(file)));
-    if (twin === -1) opened.push(file);
-    else if (file.kind === "project" && opened[twin]?.kind === "recording") opened[twin] = file;
+    const kept = opened[twin];
+    if (!kept) opened.push(file);
+    else if (file.kind === "project" && kept.kind === "recording") opened[twin] = file;
+    // A second project of the same Recording is work of its own the user may be looking for; it is named, not lost.
+    else if (file.kind === "project" && kept.kind === "project" && !sameRecording(kept.path, file.path)) {
+      refused.push({ path, kind: "otherProjectOpened", detail: kept.path });
+    }
   });
   return { opened, refused };
+}
+
+/**
+ * How many files are probed at once. A dropped folder can hold hundreds of files; one ffprobe for each, all started
+ * together, would fight over a slow external drive and can fail to start at all, turning good Recordings into refusals.
+ */
+const FILES_OPENED_AT_ONCE = 4;
+
+/** Like `Promise.allSettled(items.map(run))`, with no more than `atOnce` of them running at a time, in the same order. */
+async function settledInTurns<Item, Value>(
+  items: readonly Item[],
+  atOnce: number,
+  run: (item: Item) => Promise<Value>,
+): Promise<PromiseSettledResult<Value>[]> {
+  const outcomes = new Array<PromiseSettledResult<Value>>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const at = next;
+      next += 1;
+      try {
+        outcomes[at] = { status: "fulfilled", value: await run(items[at] as Item) };
+      } catch (reason) {
+        outcomes[at] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(atOnce, items.length) }, worker));
+  return outcomes;
 }
 
 /** The Recording an opened file stands for: itself, or the one a project was cut from. */

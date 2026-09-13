@@ -44,6 +44,15 @@ refusal does not stop the others. Within one batch, **a project wins over its ba
 whichever of the two came first: a folder holding `Part2.mp4` and `Part2.smarttrim` opens the project, where the
 Recording stood. Natural order is `Intl.Collator` with `numeric: true`, the order Explorer shows.
 
+A review found two faults here, both fixed the same day:
+
+- **A second project of the same Recording vanished without a word.** Saving never overwrites, so `Part1 (2).smarttrim`
+  beside an older `Part1.smarttrim` is an ordinary sight. One of them opens — whichever comes first in natural order —
+  and the other is now listed in grey (`otherProjectOpened`) with the name of the one that opened.
+- **A dropped folder started one ffprobe per file, all at once.** A folder of a few hundred files on the slow external
+  drive could fail to start some of them and refuse good Recordings. Files are now probed four at a time
+  (`FILES_OPENED_AT_ONCE`), in order. That limit has no test: nothing short of counting processes would see it.
+
 ## What runs in the background, and in which order
 
 `nextBackgroundJob(tabs, viewed)` in `src/app/tabs.ts` decides the one job that runs next: scanning a Recording,

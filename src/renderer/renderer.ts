@@ -1879,6 +1879,14 @@ function refusalNote({ path, kind, detail }: Refusal): OpenNote {
         text: "Die Aufnahme zu diesem Projekt ist nicht mehr da, wo sie beim Speichern lag.",
         detail: `Gesucht unter: ${detail}`,
       };
+    case "otherProjectOpened":
+      // Not an error: the Recording opens, only through the other project. Grey, not red.
+      return {
+        tone: "info",
+        name,
+        text: "Nicht geöffnet, weil zu derselben Aufnahme schon ein anderes Projekt geöffnet wird.",
+        detail: `Geöffnet: ${fileName(detail)}`,
+      };
     case "projectRecordingChanged":
       return {
         tone: "refused",
