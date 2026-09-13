@@ -1,4 +1,5 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
+import type { TimeRange } from "../cutting/planCuts.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
 import type { PlanSettings } from "./runCut.ts";
@@ -70,6 +71,10 @@ export interface CutSession {
   eventLeadSeconds: number;
   eventTailSeconds: number;
   minimumDeadZoneSeconds: number;
+  /** The stretches the user marked to keep whatever the sliders say (CONTEXT.md), in order. */
+  lockedRanges: readonly TimeRange[];
+  /** Where "Anfang festhalten" was pressed, while its "Ende festhalten" has not come yet. */
+  lockedRangeStart: number | null;
 }
 
 /** The settings a finished cut belongs to, so the window can tell what a change costs. */
@@ -81,6 +86,7 @@ interface PlannedWith {
   eventLeadSeconds: number;
   eventTailSeconds: number;
   minimumDeadZoneSeconds: number;
+  lockedRanges: readonly TimeRange[];
 }
 
 /** A named set of thresholds for one kind of video (CONTEXT.md). The TrackRoles are not in it: which
@@ -134,6 +140,8 @@ export function newCutSession(): CutSession {
     eventLeadSeconds: 1.5,
     eventTailSeconds: 2,
     minimumDeadZoneSeconds: 0.25,
+    lockedRanges: [],
+    lockedRangeStart: null,
   };
 }
 
@@ -156,6 +164,9 @@ export function chooseRecording(
     // Another Recording means the cut on screen belongs to nothing that is still chosen.
     plannedWith: null,
     audioInMemory: false,
+    // A held stretch is a moment in the old Recording; at that moment the new one holds something else entirely.
+    lockedRanges: [],
+    lockedRangeStart: null,
     // What the window shows is what it exports: a SourceTrack hidden as an EmptyTrack would otherwise arrive in
     // Premiere with a tick nobody can see (ADR-0014). Where no scan looked, nothing is dropped.
     exportSourceTracks: recording.sourceTracks
@@ -213,6 +224,61 @@ export function setSourceTrackRole(session: CutSession, sourceTrackIndex: number
   };
 }
 
+/** "Anfang festhalten": remembers where a LockedRange begins, until its Ende is marked. */
+export function markLockedRangeStart(session: CutSession, atSeconds: number): CutSession {
+  if (!session.recording) throw new Error("No Recording is chosen, so there is no moment to hold.");
+  return { ...session, lockedRangeStart: atSeconds };
+}
+
+/**
+ * "Ende festhalten": the stretch between the waiting Anfang and here is held. Which of the two lies earlier does not
+ * matter — clicking back to where a moment began puts the Ende before the Anfang, and the same stretch is meant.
+ */
+export function markLockedRangeEnd(session: CutSession, atSeconds: number): CutSession {
+  const anfang = session.lockedRangeStart;
+  // A stretch from nowhere would hold everything before this moment, or nothing — neither is what was pressed.
+  if (anfang === null) throw new Error("Press Anfang festhalten first: an Ende on its own holds nothing.");
+  // It would keep not a single frame, and the list would show a held stretch that holds nothing.
+  if (anfang === atSeconds) throw new Error(`Anfang and Ende are both at ${atSeconds} s: that stretch has no length.`);
+  const marked = { startSeconds: Math.min(anfang, atSeconds), endSeconds: Math.max(anfang, atSeconds) };
+  return { ...session, lockedRanges: merged([...session.lockedRanges, marked]), lockedRangeStart: null };
+}
+
+/** Whether two lists of held stretches hold exactly the same stretches. */
+function sameRanges(was: readonly TimeRange[], is: readonly TimeRange[]): boolean {
+  return (
+    was.length === is.length &&
+    was.every((range, at) => range.startSeconds === is[at]?.startSeconds && range.endSeconds === is[at]?.endSeconds)
+  );
+}
+
+/** "entfernen": lets go of the held stretch at this place in the list, and of nothing else. */
+export function removeLockedRange(session: CutSession, index: number): CutSession {
+  // A button from before a redraw could otherwise remove whichever stretch sits at that place now, or nothing.
+  if (!Number.isInteger(index) || index < 0 || index >= session.lockedRanges.length) {
+    throw new Error(`There is no held stretch number ${index + 1}; there are ${session.lockedRanges.length}.`);
+  }
+  return { ...session, lockedRanges: session.lockedRanges.filter((_range, at) => at !== index) };
+}
+
+/**
+ * Held stretches in the order of the Recording, those that overlap or touch joined into one. The list shows each
+ * stretch once: two entries for one held stretch would leave it held after one of them was removed.
+ */
+function merged(ranges: readonly TimeRange[]): TimeRange[] {
+  const sorted = [...ranges].sort((one, other) => one.startSeconds - other.startSeconds);
+  const joined: TimeRange[] = [];
+  for (const range of sorted) {
+    const previous = joined.at(-1);
+    if (previous && range.startSeconds <= previous.endSeconds) {
+      joined[joined.length - 1] = { ...previous, endSeconds: Math.max(previous.endSeconds, range.endSeconds) };
+    } else {
+      joined.push({ ...range });
+    }
+  }
+  return joined;
+}
+
 /** Whether Schneiden can be pressed. */
 export function canCut(session: CutSession): boolean {
   return session.recording !== null && session.listenTo.length > 0;
@@ -249,6 +315,7 @@ export function analysisRequestFrom(session: CutSession): AnalysisRequest {
   if (session.listenTo.length === 0) throw new Error("Tick at least one SourceTrack to listen to.");
   return {
     recordingPath: session.recording.path,
+    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
     voiceSourceTracks: [...session.listenTo],
     contentSourceTracks: [...session.contentSourceTracks],
     decideBy: { kind: "loudness", thresholdDbfs: session.thresholdDbfs },
@@ -280,6 +347,7 @@ export function canExport(session: CutSession): boolean {
 /** The settings as they are now, as the thing a finished plan belongs to. */
 function settingsNow(session: CutSession): PlannedWith {
   return {
+    lockedRanges: [...session.lockedRanges],
     listenTo: [...session.listenTo],
     contentSourceTracks: [...session.contentSourceTracks],
     thresholdDbfs: session.thresholdDbfs,
@@ -326,13 +394,18 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
     minimumDeadZoneSeconds: project.minimumDeadZoneSeconds,
     plannedWith: null,
     audioInMemory: false,
+    // Exactly the project's own held stretches: none from a file older than them, and none from the session before.
+    lockedRanges: [...(project.lockedRanges ?? [])],
+    lockedRangeStart: null,
   };
   return { ...opened, plannedWith: settingsNow(opened) };
 }
 
-/** The two settings a replan needs; the rest of a request decides what was found, not how it is planned. */
+/** The settings a replan needs; the rest of a request decides what was found, not how it is planned. */
 export function planSettingsFrom(session: CutSession): PlanSettings {
   return {
+    // Only named when there are any: an absent list means none, as it does for every caller written before them.
+    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
     marginSeconds: session.marginSeconds,
     eventLeadSeconds: session.eventLeadSeconds,
     eventTailSeconds: session.eventTailSeconds,
@@ -363,7 +436,9 @@ export function redoNeeded(session: CutSession): Redo {
     planned.marginSeconds !== session.marginSeconds ||
     planned.eventLeadSeconds !== session.eventLeadSeconds ||
     planned.eventTailSeconds !== session.eventTailSeconds ||
-    planned.minimumDeadZoneSeconds !== session.minimumDeadZoneSeconds
+    planned.minimumDeadZoneSeconds !== session.minimumDeadZoneSeconds ||
+    // Held stretches are planned around what was found, like a Margin: holding or letting one go reads nothing.
+    !sameRanges(planned.lockedRanges, session.lockedRanges)
   ) {
     return "replan";
   }
@@ -446,6 +521,8 @@ export function savedChoicesFrom(session: CutSession): SavedChoices {
     eventLeadSeconds: session.eventLeadSeconds,
     eventTailSeconds: session.eventTailSeconds,
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
+    // The user's own work on this Recording; a reopened project without it would cut away what they held.
+    ...(session.lockedRanges.length > 0 ? { lockedRanges: [...session.lockedRanges] } : {}),
   };
   return session.scan ? { ...choices, scan: session.scan } : choices;
 }

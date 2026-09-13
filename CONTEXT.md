@@ -67,7 +67,7 @@ How long a DeadZone must last before SmartTrim removes it, measured *after* Marg
 _Avoid_: threshold, min silence
 
 **LockedRange**:
-A time range the user marks so that SmartTrim never removes anything inside it. Its edges are exact — no Margin is added — but a pause beside it follows the same MinimumDeadZone rule as a pause beside speech.
+A time range the user marks so that SmartTrim never removes anything inside it. Its edges are exact — no Margin is added — but a pause beside it follows the same MinimumDeadZone rule as a pause beside speech. The window calls it a held stretch ("festgehalten") and marks it at the Playhead with an Anfang and an Ende (ADR-0023); it belongs to one Recording and is saved in the TrimProject, never in a Preset.
 _Avoid_: protected zone, do-not-touch, safe zone
 
 **SourceTrackScan**:

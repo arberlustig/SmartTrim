@@ -8,9 +8,10 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
  * newer version is refused rather than half read: saving it again would throw away what this version cannot see.
  *
  * 1: the first format. 2: Content SourceTracks, their moments, EventLead and EventTail — all absent in a format 1
- * file, which therefore opens as a session that has no Content SourceTracks.
+ * file, which therefore opens as a session that has no Content SourceTracks. 3: held stretches (ADR-0023), absent in
+ * older files, which open with none.
  */
-const FORMAT = 2;
+const FORMAT = 3;
 
 /**
  * A saved session: the Recording as it was probed, what the user chose, and — the point of the whole file — the
@@ -39,6 +40,8 @@ export interface TrimProject {
   /** ADR-0007: measured after the Margin is kept. */
   minimumDeadZoneSeconds: number;
   worthKeeping: readonly TimeRange[];
+  /** The stretches the user holds whatever the sliders say (ADR-0023); absent in a file from before format 3. */
+  lockedRanges?: readonly TimeRange[];
 }
 
 /** Writes a session as the text of a `.smarttrim` file. */
@@ -100,6 +103,8 @@ export function readTrimProject(text: string): TrimProject {
     ...(isRangeArray(file["contentEvents"]) ? { contentEvents: file["contentEvents"] as TimeRange[] } : {}),
     ...(isNumber(file["eventLeadSeconds"]) ? { eventLeadSeconds: file["eventLeadSeconds"] as number } : {}),
     ...(isNumber(file["eventTailSeconds"]) ? { eventTailSeconds: file["eventTailSeconds"] as number } : {}),
+    // Format 3 added held stretches. An older file holds none, which is what the absent field means.
+    ...(isRangeArray(file["lockedRanges"]) ? { lockedRanges: file["lockedRanges"] as TimeRange[] } : {}),
   };
 
   const scan = file["scan"];

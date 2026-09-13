@@ -203,6 +203,42 @@ describe("runCut", () => {
     // Replanning hands back a new result instead of changing the one on screen.
     expect(cut.summary.keepSegments).toBe(2);
   }, 60_000);
+
+  // A held stretch keeps what nothing else would: here a second of the closing silence, which the threshold alone
+  // removes (the first test above). It is kept to the frame as marked, with no Margin around it (CONTEXT.md).
+  test("a held stretch of silence is kept exactly as marked", async () => {
+    const { cutPlan } = await runCut(
+      {
+        recordingPath,
+        voiceSourceTracks: [0],
+        decideBy: { kind: "loudness", thresholdDbfs: -40 },
+        marginSeconds: 0.05,
+        minimumDeadZoneSeconds: 0.25,
+        lockedRanges: [{ startSeconds: 10.5, endSeconds: 11.5 }],
+      },
+      tools,
+    );
+
+    // 30 fps: 10.5 s is frame 315 and 11.5 s is frame 345. With the Margin of 0.05 s around it, it would be 313..347.
+    expect(cutPlan.map(({ recordingIn, recordingOut }) => [recordingIn, recordingOut])).toContainEqual([315, 345]);
+  }, 60_000);
+
+  // Holding a stretch after a cut is only a replan (cutSession), so the replan has to keep it exactly as a cut that
+  // reads the Recording again would — compared against that expensive path, like every shortcut here (ADR-0004).
+  test("holding a stretch after a cut replans to exactly what reading the Recording again would give", async () => {
+    const settings = { marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 };
+    const listened = { recordingPath, voiceSourceTracks: [0], decideBy: { kind: "loudness", thresholdDbfs: -40 } as const };
+    const lockedRanges = [{ startSeconds: 10.5, endSeconds: 11.5 }];
+
+    const cut = await runCut({ ...listened, ...settings }, tools);
+    const held = replanCut(cut, { ...settings, lockedRanges });
+    const readAgain = await runCut({ ...listened, ...settings, lockedRanges }, tools);
+
+    expect(held.cutPlan).toEqual(readAgain.cutPlan);
+    expect(held.summary).toEqual(readAgain.summary);
+    // The held stretch has to change the plan, or the comparison above would hold for the wrong reason.
+    expect(held.summary.keepSegments).toBe(cut.summary.keepSegments + 1);
+  }, 90_000);
 });
 
 describe("replanCut with ContentEvents", () => {

@@ -206,6 +206,50 @@
       .skipRow[hidden] {
         display: none;
       }
+      .held {
+        padding: 10px 8px 0;
+      }
+      .held[hidden] {
+        display: none;
+      }
+      .holdButtons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .holdButtons button {
+        padding: 5px 11px;
+        border-color: #2f5f86;
+        font-size: 13px;
+      }
+      .holdHint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      #heldList {
+        display: grid;
+        gap: 2px;
+        margin: 8px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      #heldList li {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        font-variant-numeric: tabular-nums;
+      }
+      #heldList li::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        background: #5aa9e6;
+      }
+      #heldList button.link {
+        margin-top: 0;
+      }
       #sourceTracks .waveform canvas.dragging {
         cursor: grabbing;
       }
@@ -350,6 +394,14 @@
         </p>
       </div>
       <div id="sourceTracks"></div>
+      <div class="held" id="held" hidden>
+        <div class="holdButtons">
+          <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
+          <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
+          <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
+        </div>
+        <ul id="heldList"></ul>
+      </div>
       <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
     </section>
 

@@ -8,6 +8,9 @@ import {
   analysisRequestFrom,
   applyPreset,
   canCut,
+  markLockedRangeEnd,
+  markLockedRangeStart,
+  removeLockedRange,
   canExport,
   cutFinished,
   planFinished,
@@ -90,6 +93,10 @@ const view = {
   skipRow: element("skipRow"),
   skipRemoved: element<HTMLInputElement>("skipRemoved"),
   longestExcerpt: element("longestExcerpt"),
+  held: element("held"),
+  holdStart: element<HTMLButtonElement>("holdStart"),
+  holdEnd: element<HTMLButtonElement>("holdEnd"),
+  heldList: element("heldList"),
   status: element("status"),
   result: element("result"),
 };
@@ -453,6 +460,8 @@ function draw(): void {
   drawResult();
   // The colours over the waveform come from the plan, so every redraw of the numbers redraws them too.
   drawWaveforms();
+  // After the waveforms: whether there is anything to hold on follows whether they are shown.
+  drawHeld();
   view.chooseRecording.disabled = working || preparing;
   view.openProject.disabled = working || preparing;
   view.threshold.disabled = working;
@@ -509,11 +518,9 @@ async function redoNow(): Promise<void> {
     finished = summary;
     const now = settingsNow();
     // The sliders may have moved on while this ran; then these numbers are already one step behind.
-    if (
-      now.thresholdDbfs === used.thresholdDbfs &&
-      now.marginSeconds === used.marginSeconds &&
-      now.minimumDeadZoneSeconds === used.minimumDeadZoneSeconds
-    ) {
+    // Every setting a plan is made with counts, held stretches and the event sliders included; comparing only some
+    // would call a plan current that was made before a stretch was held.
+    if (JSON.stringify(now) === JSON.stringify(used)) {
       session = planFinished(session);
       clearStatus();
     }
@@ -567,6 +574,35 @@ const REMOVED_WAVE = "#7a4046";
 /** Over a stretch the playing sound jumps across, so a Join is seen as it is heard. Neither green nor red. */
 const JOIN_MARK = "#e8b04a";
 const PLAYHEAD = "#e8eaed";
+/** Held stretches (ADR-0023): blue, a colour the cut itself never uses, so held reads apart from kept. */
+const HELD = "#5aa9e6";
+
+/**
+ * Tints every held stretch blue and edges it near the top, over whatever the cut and the sound drew there, and draws
+ * a waiting Anfang as a thin blue line. `xOf` places a moment of the Recording on this canvas.
+ */
+function drawHeldOver(
+  paint: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  xOf: (second: number) => number,
+  edge = 4,
+): void {
+  paint.fillStyle = HELD;
+  for (const range of session.lockedRanges) {
+    const from = Math.max(xOf(range.startSeconds), 0);
+    const to = Math.min(xOf(range.endSeconds), width);
+    if (to <= 0 || from >= width) continue;
+    paint.globalAlpha = 0.16;
+    paint.fillRect(from, 0, Math.max(to - from, 1), height);
+    paint.globalAlpha = 1;
+    paint.fillRect(from, 3, Math.max(to - from, 1), edge);
+  }
+  const waiting = session.lockedRangeStart;
+  if (waiting === null) return;
+  const x = xOf(waiting);
+  if (x >= 0 && x <= width) paint.fillRect(x - 0.5, 0, 1, height);
+}
 
 /** Draws one canvas at the screen's own pixel density, and hands back its context and size in CSS pixels. */
 function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: CanvasRenderingContext2D; width: number } {
@@ -650,6 +686,9 @@ function drawOverview(): void {
     paint.fillRect(column, middle - half, 1, half * 2);
   }
 
+  // Held stretches over the whole Recording, so a held moment far outside the zoom can still be found.
+  drawHeldOver(paint, width, height, (second) => (second / seconds) * width, 3);
+
   // Where the zoom below is looking.
   const left = (zoom.fromSeconds / seconds) * width;
   const right = (zoom.toSeconds / seconds) * width;
@@ -699,6 +738,8 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     paint.fillStyle = !finished ? PLAIN_WAVE : (bands[band] as CutBand).kept ? KEPT_WAVE : REMOVED_WAVE;
     paint.fillRect(column, middle - half, 1, half * 2);
   }
+
+  drawHeldOver(paint, width, height, xOf);
 
   // The Playhead. While this SourceTrack plays: a bar over every stretch the sound jumps across, and the line at the
   // moment being heard, read off the clock the sound itself runs on (ADR-0022). While nothing plays: the line on
@@ -1068,8 +1109,11 @@ function placePlayhead(canvas: HTMLCanvasElement, clientX: number): void {
   // Stopping leaves the Playhead where the sound was, so the click is put back after it.
   stopPlaying();
   playheadSeconds = clicked;
-  if (position === null) drawWaveforms();
-  else void play(position);
+  if (position === null) {
+    drawWaveforms();
+    // The hold buttons follow the Playhead: without it "Anfang festhalten" has no moment to mark and stays disabled.
+    drawHeld();
+  } else void play(position);
 }
 
 /**
@@ -1207,6 +1251,74 @@ view.overview.addEventListener("pointerdown", (event) => {
   window.addEventListener("pointercancel", stop);
   // A press outside the frame should move there at once, not wait for the first movement.
   move(event);
+});
+
+/* ── Held stretches ────────────────────────────────────────────────────────────────────────────────────────── */
+
+/** The moment "Anfang/Ende festhalten" mark: where the sound is while it plays, else where the Playhead waits. */
+function playheadNow(): number | null {
+  return playing ? heardIn(playing) : playheadSeconds;
+}
+
+/** A moment as the list shows it: minutes and seconds to a tenth, with hours in front when there are any. */
+function clock(seconds: number): string {
+  const tenths = Math.round(seconds * 10);
+  const hours = Math.floor(tenths / 36000);
+  const minutes = Math.floor((tenths % 36000) / 600);
+  const rest = decimals((tenths % 600) / 10, 1).padStart(4, "0");
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
+/** The two buttons and the list of held stretches under the waveforms (ADR-0023). */
+function drawHeld(): void {
+  // Held stretches are moments on the waveforms, so they are offered wherever there are waveforms to mark them on.
+  view.held.hidden = view.cutPicture.hidden;
+  if (view.held.hidden) return;
+  const at = playheadNow();
+  const anfang = session.lockedRangeStart;
+  view.holdStart.disabled = working || at === null;
+  view.holdEnd.disabled = working || at === null || anfang === null || at === anfang;
+  view.holdEnd.textContent = anfang === null ? "Ende festhalten" : `Ende festhalten (Anfang ${clock(anfang)})`;
+  view.heldList.replaceChildren(
+    ...session.lockedRanges.map((range, index) => {
+      const item = document.createElement("li");
+      const text = document.createElement("span");
+      text.textContent = `Festgehalten: ${clock(range.startSeconds)} – ${clock(range.endSeconds)}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "link";
+      remove.textContent = "entfernen";
+      remove.disabled = working;
+      remove.addEventListener("click", () => {
+        session = removeLockedRange(session, index);
+        afterSettingChange();
+        draw();
+      });
+      item.append(text, remove);
+      return item;
+    }),
+  );
+}
+
+view.holdStart.addEventListener("click", () => {
+  const at = playheadNow();
+  if (at === null) return;
+  session = markLockedRangeStart(session, at);
+  draw();
+});
+
+view.holdEnd.addEventListener("click", () => {
+  const at = playheadNow();
+  if (at === null) return;
+  try {
+    session = markLockedRangeEnd(session, at);
+  } catch (error) {
+    say(`Das ließ sich nicht festhalten: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  // Holding a stretch only replans (ADR-0023), which a finished cut does at once and a pending one picks up.
+  afterSettingChange();
+  draw();
 });
 
 /**

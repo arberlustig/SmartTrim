@@ -29,6 +29,8 @@ export interface AnalysisRequest {
   eventTailSeconds?: number;
   /** ADR-0007: measured after the Margin is kept. */
   minimumDeadZoneSeconds: number;
+  /** Stretches the user holds, kept with exact edges and no Margin (CONTEXT.md). None when absent. */
+  lockedRanges?: readonly TimeRange[];
 }
 
 /**
@@ -143,8 +145,8 @@ export async function analyseRecording(
     // planCuts calls these the speech; with a loudness threshold they are simply the stretches loud enough to keep.
     speech: worthKeeping,
     contentEvents,
-    // LockedRanges do not exist yet.
-    lockedRanges: [],
+    // Held stretches keep exact edges; planCuts adds no Margin around them (CONTEXT.md, ADR-0023).
+    lockedRanges: request.lockedRanges ?? [],
     marginSeconds: request.marginSeconds,
     eventLeadSeconds: request.eventLeadSeconds ?? 0,
     eventTailSeconds: request.eventTailSeconds ?? 0,

@@ -82,6 +82,8 @@ export interface PlanSettings {
   eventTailSeconds?: number;
   /** ADR-0007: measured after the Margin is kept. */
   minimumDeadZoneSeconds: number;
+  /** Stretches the user holds, kept with exact edges and no Margin (CONTEXT.md). None when absent. */
+  lockedRanges?: readonly TimeRange[];
 }
 
 /**
@@ -106,8 +108,8 @@ export function replanCut(cut: CutResult, settings: PlanSettings): CutResult {
     recording: cut.recording,
     speech: cut.worthKeeping,
     contentEvents: cut.contentEvents,
-    // LockedRanges do not exist yet.
-    lockedRanges: [],
+    // Held stretches are planned around what was found, like a Margin, so holding one reads nothing (ADR-0023).
+    lockedRanges: settings.lockedRanges ?? [],
     marginSeconds: settings.marginSeconds,
     eventLeadSeconds: settings.eventLeadSeconds ?? 0,
     eventTailSeconds: settings.eventTailSeconds ?? 0,

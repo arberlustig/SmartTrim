@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import type { Decision } from "../analysis/analyseRecording.ts";
+import type { TimeRange } from "../cutting/planCuts.ts";
 import { replanCut, type CutResult } from "../app/runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
@@ -16,6 +17,8 @@ export interface SavedChoices {
   eventTailSeconds?: number;
   minimumDeadZoneSeconds: number;
   scan?: TrimProject["scan"];
+  /** The stretches the user holds (ADR-0023). */
+  lockedRanges?: readonly TimeRange[];
 }
 
 /** Turns a finished cut and the choices behind it into the session that gets saved. */
@@ -28,6 +31,8 @@ export function trimProjectOf(cut: CutResult, choices: SavedChoices): TrimProjec
     marginSeconds: choices.marginSeconds,
     minimumDeadZoneSeconds: choices.minimumDeadZoneSeconds,
     worthKeeping: cut.worthKeeping,
+    // Only written when there are any, like the Content SourceTracks below: an absent list means none.
+    ...(choices.lockedRanges?.length ? { lockedRanges: [...choices.lockedRanges] } : {}),
     // Only worth writing down when there are Content SourceTracks: a file that names none stays a format 1 session
     // in everything but its version number.
     ...(choices.contentSourceTracks?.length
@@ -101,6 +106,8 @@ export async function openTrimProject(
       eventLeadSeconds: project.eventLeadSeconds,
       eventTailSeconds: project.eventTailSeconds,
       minimumDeadZoneSeconds: project.minimumDeadZoneSeconds,
+      // Without them the reopened plan would cut away what the user had marked to keep.
+      lockedRanges: project.lockedRanges,
     },
   );
   return { project, cut };

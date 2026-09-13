@@ -61,6 +61,21 @@ describe("openTrimProject", () => {
     expect(reopened.cut.listened).toEqual([]);
   }, 60_000);
 
+  // A held stretch is the user's own decision about this Recording (ADR-0023). Reopened without it, the plan would
+  // quietly cut away the second of silence the user had marked to keep.
+  test("a session saved with a held stretch reopens with that stretch still kept", async () => {
+    const lockedRanges = [{ startSeconds: 10.5, endSeconds: 11.5 }];
+    const cut = await runCut({ ...request(), lockedRanges }, tools);
+    const saved = trimProjectText(trimProjectOf(cut, { ...request(), lockedRanges, exportSourceTracks: [0] }));
+
+    const reopened = await openTrimProject(saved, tools.ffprobe);
+
+    expect(reopened.project.lockedRanges).toEqual(lockedRanges);
+    expect(reopened.cut.cutPlan).toEqual(cut.cutPlan);
+    // 30 fps: the held second is frame 315 to frame 345, exactly as marked.
+    expect(reopened.cut.cutPlan.map(({ recordingIn, recordingOut }) => [recordingIn, recordingOut])).toContainEqual([315, 345]);
+  }, 60_000);
+
   // Every position in a CutPlan is a frame of one particular Recording. Against a different file of a different
   // length they point somewhere else, or past its end.
   test("a Recording that is no longer the one the project was cut from is refused", async () => {

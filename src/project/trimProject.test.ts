@@ -46,6 +46,20 @@ describe("the TrimProject file", () => {
     expect(reopened).toEqual(project);
   });
 
+  // Held stretches are the user's own work on this Recording (ADR-0023). A reopened project that forgot them would
+  // quietly cut away what the user had marked to keep.
+  test("held stretches come back out of the file they were written to", () => {
+    const withHeld: TrimProject = {
+      ...project,
+      lockedRanges: [
+        { startSeconds: 62.5, endSeconds: 71.25 },
+        { startSeconds: 1200, endSeconds: 1234.5 },
+      ],
+    };
+
+    expect(readTrimProject(trimProjectText(withHeld))).toEqual(withHeld);
+  });
+
   test("a file that is not a TrimProject, or from a newer SmartTrim, is refused rather than half read", () => {
     expect(() => readTrimProject("{}")).toThrow("not a SmartTrim project");
     expect(() => readTrimProject("this is not JSON at all")).toThrow("not a SmartTrim project");
