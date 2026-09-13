@@ -30,3 +30,10 @@ The predecessor ran a full ffmpeg pass **per SourceTrack** and then wrote every 
 Memory is not unbounded. Very long Recordings with many populated SourceTracks need a ceiling and a spill strategy; this is unsolved and only matters well beyond six hours. The audio of the previous cut is dropped as soon as the next one replaces it.
 
 The voice decision cannot be repeated from memory the way loudness can: `redecideCut` only re-measures loudness, because Silero would have to run again (about 70 s per SourceTrack for a 2.5-hour Recording) and the window does not offer the voice decision anyway (ADR-0003). Moving a threshold is instant; switching the kind of decision would not be.
+
+## Amended by ADR-0021
+
+The decoded PCM is no longer what is kept. Every later decision reads only each SourceTrack's chunk levels, so
+those and its waveform are kept instead, and the audio is let go once they exist — 17.2 MB held for six
+SourceTracks of a 2.5-hour Recording instead of 1,668 MB. The promise above stands: changing a setting still
+recomputes from memory.

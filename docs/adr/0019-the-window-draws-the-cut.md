@@ -26,7 +26,7 @@ that shows a plan has nothing to show without one. It now carries both, like the
 band behind, the sound as a waveform in front. The waveform is the **loudest** of the shown SourceTracks in each
 column, which answers "is there any sound here at all" across a column that may be minutes wide.
 
-It is hidden entirely when no SourceTrack has a role. Audio read for a role that was taken away is kept in memory
+It is hidden entirely when no SourceTrack has a role. What was read for a role that was taken away is kept in memory
 (ADR-0020), but keeping it on screen left an empty strip claiming to show a cut.
 
 ## The CutPlan still stays in the main process; its kept ranges do not
@@ -81,7 +81,8 @@ waveform. The owner chose to read it again rather than live without one: reopeni
 check yesterday's cut by eye and ear.
 
 `project:readAudio` decodes the SourceTracks the project names while the window is already usable. When it lands,
-the audio is back in memory, so moving the threshold decides again instead of demanding a whole new cut.
+what a threshold is decided from is back in memory — the chunk levels since ADR-0021 — so moving the threshold
+decides again instead of demanding a whole new cut.
 
 ## What drawing is allowed to cost
 

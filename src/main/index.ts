@@ -2,7 +2,12 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
-import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
+import {
+  readSourceTrackFrom,
+  type AnalysisRequest,
+  type AnalysisTools,
+  type ReadSourceTrack,
+} from "../analysis/analyseRecording.ts";
 import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
 import type { MonoPcm } from "../speech/detectSpeech.ts";
 import {
@@ -12,7 +17,7 @@ import {
   saveCutPlan,
   type CutResult,
   type CutSummary,
-  waveformsOf,
+  waveformOf,
   type PlanSettings,
   type SourceTrackWaveform,
 } from "../app/runCut.ts";
@@ -70,29 +75,15 @@ async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
 /** The finished cut waits here for the user to choose where to save it, so the plan never crosses into the window. */
 let lastCut: CutResult | null = null;
 /**
- * The audio read for the waveforms, by SourceTrack position. It belongs to the Recording in `chosen` and is
- * emptied with it; the cut reuses it rather than reading the Recording a second time (ADR-0020).
+ * What was read of each SourceTrack, by position: its chunk levels and its waveform, never its audio (ADR-0021).
+ * It belongs to the Recording in `chosen` and is emptied with it; the cut reuses it rather than reading the
+ * Recording a second time (ADR-0020). Both parts are built once, when the SourceTrack is read.
  */
-const readAudio = new Map<number, MonoPcm>();
-/**
- * The waveform made from each of those, kept beside it. Building one walks every sample of a SourceTrack — 144
- * million of them on a 2.5-hour Recording — so it is done once, not on every request.
- */
-const readWaveforms = new Map<number, SourceTrackWaveform>();
+const sourceTracksRead = new Map<number, ReadSourceTrack>();
 
-/** Files decoded audio and its waveform together, so no SourceTrack is walked twice to draw the same picture. */
-function keepAudio(position: number, pcm: MonoPcm): SourceTrackWaveform {
-  readAudio.set(position, pcm);
-  const [waveform] = waveformsOf([{ position, pcm }]);
-  readWaveforms.set(position, waveform as SourceTrackWaveform);
-  return waveform as SourceTrackWaveform;
-}
-
-/** The waveforms of the named SourceTracks, making any that is missing from what was read. */
-function waveformsKept(positions: readonly number[]): SourceTrackWaveform[] {
-  return positions.map(
-    (position) => readWaveforms.get(position) ?? keepAudio(position, readAudio.get(position) as MonoPcm),
-  );
+/** The waveforms of the named SourceTracks, from what was read of them. */
+function waveformsRead(positions: readonly number[]): SourceTrackWaveform[] {
+  return positions.map((position) => waveformOf(sourceTracksRead.get(position) as ReadSourceTrack));
 }
 
 /** The Recording on screen, so the scan and the save work on the one the user actually chose. */
@@ -145,9 +136,8 @@ function registerHandlers(window: BrowserWindow): void {
       const recording = await probeRecording(chosenPath, (await analysisTools(window)).ffprobe);
       lastCut = null;
       chosen = recording;
-      // The audio read for the old Recording says nothing about this one.
-      readAudio.clear();
-      readWaveforms.clear();
+      // What was read of the old Recording says nothing about this one.
+      sourceTracksRead.clear();
       return recording;
     }),
   );
@@ -171,7 +161,7 @@ function registerHandlers(window: BrowserWindow): void {
     answering(async (positions: readonly number[]): Promise<SourceTrackWaveform[]> => {
       if (!chosen) throw new Error("No Recording is chosen, so there is no SourceTrack to read.");
       const readingFor = chosen;
-      const missing = positions.filter((position) => !readAudio.has(position));
+      const missing = positions.filter((position) => !sourceTracksRead.has(position));
       if (missing.length > 0) {
         const audio = await decodeSourceTracks(
           readingFor,
@@ -183,9 +173,12 @@ function registerHandlers(window: BrowserWindow): void {
         );
         // The user may have chosen another Recording while this ran; that audio belongs to the old one.
         if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
-        missing.forEach((position, index) => keepAudio(position, audio[index] as MonoPcm));
+        // Each SourceTrack is read down to its levels and waveform here; the audio is let go as this returns.
+        missing.forEach((position, index) =>
+          sourceTracksRead.set(position, readSourceTrackFrom(position, audio[index] as MonoPcm)),
+        );
       }
-      return waveformsKept(positions);
+      return waveformsRead(positions);
     }),
   );
 
@@ -194,11 +187,12 @@ function registerHandlers(window: BrowserWindow): void {
     answering(async (request: AnalysisRequest): Promise<CutSummary> => {
       lastCut = null;
       // Whatever the waveforms already read is handed over, so the Recording is read once and not twice.
-      const alreadyRead = [...readAudio].map(([position, pcm]) => ({ position, pcm }));
-      const result = await runCut(request, await analysisTools(window), alreadyRead);
+      const result = await runCut(request, await analysisTools(window), [...sourceTracksRead.values()]);
       lastCut = result;
       // An analysis may have read more SourceTracks than the waveforms did; keep those too.
-      for (const { position, pcm } of result.decoded) if (!readAudio.has(position)) keepAudio(position, pcm);
+      for (const read of result.read) {
+        if (!sourceTracksRead.has(read.position)) sourceTracksRead.set(read.position, read);
+      }
       return result.summary;
     }),
   );
@@ -209,8 +203,7 @@ function registerHandlers(window: BrowserWindow): void {
     "cut:waveforms",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no cut to draw a waveform for.");
-      for (const { position, pcm } of lastCut.decoded) if (!readAudio.has(position)) keepAudio(position, pcm);
-      return waveformsKept(lastCut.decoded.map(({ position }) => position));
+      return lastCut.read.map(waveformOf);
     }),
   );
 
@@ -225,7 +218,7 @@ function registerHandlers(window: BrowserWindow): void {
     }),
   );
 
-  // ADR-0004 again: the decoded audio stays in the main process, so another threshold is decided from memory.
+  // ADR-0004 again: the chunk levels stay in the main process, so another threshold is decided from memory.
   ipcMain.handle(
     "cut:redecide",
     answering(async (settings: PlanSettings & { thresholdDbfs: number }): Promise<CutSummary> => {
@@ -267,9 +260,8 @@ function registerHandlers(window: BrowserWindow): void {
       const opened = await openTrimProject(text, (await analysisTools(window)).ffprobe);
       lastCut = opened.cut;
       chosen = opened.cut.recording;
-      // Audio read for whatever was open before belongs to that Recording, not to this project's one.
-      readAudio.clear();
-      readWaveforms.clear();
+      // What was read of whatever was open before belongs to that Recording, not to this project's one.
+      sourceTracksRead.clear();
       // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
       // found, never the audio (ADR-0016), so this is the only record of what was listened to.
       reopenedVoice = opened.project.listenTo;
@@ -286,7 +278,7 @@ function registerHandlers(window: BrowserWindow): void {
     "project:readAudio",
     answering(async (): Promise<SourceTrackWaveform[]> => {
       if (!lastCut) throw new Error("There is no project whose audio could be read.");
-      if (lastCut.decoded.length > 0) return waveformsKept(lastCut.decoded.map(({ position }) => position));
+      if (lastCut.read.length > 0) return lastCut.read.map(waveformOf);
       if (reopenedSourceTracks.length === 0) throw new Error("This project names no SourceTrack to listen to.");
 
       const readingFor = lastCut;
@@ -302,14 +294,14 @@ function registerHandlers(window: BrowserWindow): void {
       // Another project or Recording may have been opened while this ran; that audio belongs to the old one.
       if (lastCut !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
 
-      const decoded = positions.map((position, index) => ({ position, pcm: audio[index] as MonoPcm }));
+      const read = positions.map((position, index) => readSourceTrackFrom(position, audio[index] as MonoPcm));
       // The Voice SourceTracks are what another threshold would be decided from, in the order the project names.
-      const listened = reopenedVoice.map((position) => audio[positions.indexOf(position)] as MonoPcm);
-      lastCut = { ...readingFor, decoded, listened };
+      const listened = reopenedVoice.map((position) => read[positions.indexOf(position)] as ReadSourceTrack);
+      lastCut = { ...readingFor, read, listened };
       // Into the same store the cut reads from, or pressing Schneiden would read the whole Recording again and
       // break ADR-0004's promise that it is read once.
-      for (const { position, pcm } of decoded) keepAudio(position, pcm);
-      return waveformsKept(positions);
+      for (const one of read) sourceTracksRead.set(one.position, one);
+      return read.map(waveformOf);
     }),
   );
 

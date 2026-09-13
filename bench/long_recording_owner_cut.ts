@@ -54,9 +54,19 @@ console.log(`geschrieben: ${target}`);
 
 const judged = resolve(outDir, `long-recording-spur${sourceTrackNumber}-pegel40db.xml`);
 if (existsSync(judged)) {
-  const digest = (text: string) => createHash("sha256").update(text).digest("hex");
-  const same = digest(xml) === digest(readFileSync(judged, "utf8"));
-  console.log(`identisch mit der von dir gehoerten Datei: ${same ? "ja" : "NEIN"}`);
+  // Where the Recording lives is written into the XML, and long-recording.mp4 has moved since the owner listened
+  // (C:\Users\user\Downloads then, G:\Streams on 2026-09-13). Only the cut is compared, so that one
+  // line is left out; comparing the whole file reported every later run as a different cut.
+  const pathOf = (text: string) => text.match(/<pathurl>[^<]*<\/pathurl>/)?.[0] ?? "";
+  const withoutPath = (text: string) => text.replace(/<pathurl>[^<]*<\/pathurl>/g, "<pathurl/>");
+  const digest = (text: string) => createHash("sha256").update(withoutPath(text)).digest("hex");
+  const judgedText = readFileSync(judged, "utf8");
+  const same = digest(xml) === digest(judgedText);
+  const moved = pathOf(xml) !== pathOf(judgedText);
+  console.log(
+    `identisch mit der von dir gehoerten Datei: ${same ? "ja" : "NEIN"}` +
+      (same && moved ? " (nur der Speicherort der Aufnahme ist ein anderer)" : ""),
+  );
 } else {
   console.log(`Vergleichsdatei fehlt: ${judged}`);
 }

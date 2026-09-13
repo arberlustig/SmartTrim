@@ -3,13 +3,11 @@ import {
   analyseRecording,
   type AnalysisRequest,
   type AnalysisTools,
-  type DecodedSourceTrack,
+  type ReadSourceTrack,
 } from "../analysis/analyseRecording.ts";
 import { planCuts, type CutPlan, type TimeRange } from "../cutting/planCuts.ts";
 import { exportFcp7Xml, type RecordingInfo } from "../export/exportFcp7Xml.ts";
-import { detectLoudness } from "../level/detectLoudness.ts";
-import type { MonoPcm } from "../speech/detectSpeech.ts";
-import { peakEnvelope } from "../waveform/peakEnvelope.ts";
+import { loudRanges, type ChunkLevels } from "../level/detectLoudness.ts";
 
 /** What the window reports once a CutPlan exists. Seconds, because that is what the user recognises. */
 export interface CutSummary {
@@ -53,15 +51,17 @@ export function summariseCutPlan(recording: RecordingInfo, cutPlan: CutPlan): Cu
 export interface CutResult {
   recording: RecordingInfo;
   /**
-   * The decoded SourceTracks that were listened to, kept in memory for the rest of the session, so another
-   * threshold can be decided without touching the Recording again (ADR-0004). Never sent to the window.
+   * How loud every chunk of each Voice SourceTrack is, kept for the rest of the session so another threshold can be
+   * decided without touching the Recording again (ADR-0004). The audio itself is **not** kept: the levels are all a
+   * threshold reads, and they are 128 times smaller (ADR-0021). Never sent to the window.
    */
-  listened: readonly MonoPcm[];
+  listened: readonly ChunkLevels[];
   /**
-   * Every SourceTrack that was decoded, by its position in the Recording — the ones the window draws a waveform
-   * for. Never sent over IPC either; `waveformsOf` turns it into something small enough to send (ADR-0019).
+   * Every SourceTrack that was read, by its position in the Recording — the ones the window draws a waveform for.
+   * Their chunk levels and waveform, never their audio (ADR-0021). Not sent over IPC as they are: `waveformOf`
+   * picks out the part the window draws (ADR-0019).
    */
-  decoded: readonly DecodedSourceTrack[];
+  read: readonly ReadSourceTrack[];
   /**
    * The stretches the analysis found worth keeping, before any Margin or MinimumDeadZone was applied. Kept so that
    * those two settings can be changed without reading the Recording again (ADR-0004).
@@ -93,7 +93,7 @@ export function redecideCut(cut: CutResult, thresholdDbfs: number, settings: Pla
   if (cut.listened.length === 0) {
     throw new Error("The audio of this cut is no longer in memory, so it has to be read again.");
   }
-  const worthKeeping = cut.listened.flatMap((pcm) => detectLoudness(pcm, thresholdDbfs));
+  const worthKeeping = cut.listened.flatMap((levels) => loudRanges(levels, thresholdDbfs));
   return replanCut({ ...cut, worthKeeping }, settings);
 }
 
@@ -124,9 +124,9 @@ export async function runCut(
   request: AnalysisRequest,
   tools: AnalysisTools,
   /** What the window already read to draw the waveforms; those SourceTracks are not read again (ADR-0020). */
-  alreadyRead: readonly DecodedSourceTrack[] = [],
+  alreadyRead: readonly ReadSourceTrack[] = [],
 ): Promise<CutResult> {
-  const { recording, listened, decoded, worthKeeping, contentEvents, cutPlan } = await analyseRecording(
+  const { recording, listened, read, worthKeeping, contentEvents, cutPlan } = await analyseRecording(
     request,
     tools,
     alreadyRead,
@@ -134,7 +134,7 @@ export async function runCut(
   return {
     recording,
     listened,
-    decoded,
+    read,
     worthKeeping,
     contentEvents,
     cutPlan,
@@ -151,21 +151,11 @@ export interface SourceTrackWaveform {
 }
 
 /**
- * How finely the waveform is drawn. Twenty a second is a peak every 50 ms: at the closest zoom that is two peaks
- * per pixel, and over a 2.5-hour Recording it is 182 000 numbers — 728 KB, sent once per analysis (ADR-0019).
+ * The part of a read SourceTrack the window draws. The chunk levels stay behind in the main process: the window
+ * decides nothing from them, and they would add three times the waveform's own size to what crosses.
  */
-export const PEAKS_PER_SECOND = 20;
-
-/**
- * The waveforms of decoded SourceTracks. Computed on demand rather than kept anywhere: a replan changes the
- * colours drawn over a waveform, never its shape, so the window asks for these once per SourceTrack.
- */
-export function waveformsOf(decoded: readonly DecodedSourceTrack[]): SourceTrackWaveform[] {
-  return decoded.map(({ position, pcm }) => ({
-    position,
-    peaksPerSecond: PEAKS_PER_SECOND,
-    peaks: peakEnvelope(pcm, PEAKS_PER_SECOND),
-  }));
+export function waveformOf(read: ReadSourceTrack): SourceTrackWaveform {
+  return { position: read.position, peaksPerSecond: read.peaksPerSecond, peaks: read.peaks };
 }
 
 /**

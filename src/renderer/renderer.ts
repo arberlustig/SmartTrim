@@ -1047,7 +1047,8 @@ view.openProject.addEventListener("click", async () => {
   if (drawn) {
     waveforms = drawn;
     if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: opened.summary.recordingSeconds };
-    // The audio is back in memory, so moving the threshold decides again instead of asking for a whole new cut.
+    // What a threshold is decided from is back in memory, so moving it decides again instead of asking for a whole
+    // new cut.
     // Not `cutFinished`: that would also claim the sliders as they stand now are what this cut was planned with,
     // swallowing a replan the user asked for by moving one while the read ran.
     session = audioBackInMemory(session);
@@ -1060,8 +1061,8 @@ view.cut.addEventListener("click", async () => {
   clearStatus();
   working = true;
   finished = null;
-  // The waveforms are kept: they belong to this Recording and this analysis reuses the very audio they were drawn
-  // from (ADR-0020). They simply lose their colours until the new plan arrives.
+  // The waveforms are kept: they belong to this Recording, and this analysis reuses what was read to draw them
+  // (ADR-0020). They simply lose their colours until the new plan arrives.
   draw();
   view.status.textContent = "Liest die Aufnahme …";
   const summary = show(await window.smarttrim.cut(analysisRequestFrom(session)), "Der Schnitt ging nicht");

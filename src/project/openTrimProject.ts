@@ -89,8 +89,8 @@ export async function openTrimProject(
     {
       recording,
       listened: [],
-      // Nothing was decoded, so the window has no waveform to draw until the audio is read again (ADR-0019).
-      decoded: [],
+      // Nothing was read, so the window has no waveform to draw until the SourceTracks are read again (ADR-0019).
+      read: [],
       worthKeeping: project.worthKeeping,
       contentEvents: project.contentEvents ?? [],
       cutPlan: [],

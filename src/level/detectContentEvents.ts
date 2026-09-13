@@ -1,6 +1,6 @@
 import type { TimeRange } from "../cutting/planCuts.ts";
 import type { MonoPcm } from "../speech/detectSpeech.ts";
-import { CHUNK_SAMPLES, SAMPLE_RATE, chunkLevelsDbfs } from "./detectLoudness.ts";
+import { CHUNK_SAMPLES, SAMPLE_RATE, chunkLevelsDbfs, type ChunkLevels } from "./detectLoudness.ts";
 
 /** How a ContentEvent is told apart from a SourceTrack's own background. */
 export interface ContentEventOptions {
@@ -70,8 +70,16 @@ export function detectContentEvents(audio: MonoPcm, options: ContentEventOptions
   if (audio.sampleRate !== SAMPLE_RATE) {
     throw new Error(`Content events need ${SAMPLE_RATE} Hz audio; this audio is ${audio.sampleRate} Hz.`);
   }
+  return contentEventsFrom({ levelsDbfs: Float64Array.from(chunkLevelsDbfs(audio)) }, options);
+}
+
+/**
+ * The same moments found from a SourceTrack's kept chunk levels instead of its audio — the levels are all the
+ * search reads. SmartTrim keeps the levels for the session and lets the audio go (ADR-0021).
+ */
+export function contentEventsFrom(chunkLevels: ChunkLevels, options: ContentEventOptions = {}): TimeRange[] {
   const { riseDb, dropDb, baselineSeconds, minimumEventSeconds } = { ...DEFAULTS, ...options };
-  const levels = chunkLevelsDbfs(audio);
+  const levels = chunkLevels.levelsDbfs;
   const chunksPerSecond = SAMPLE_RATE / CHUNK_SAMPLES;
   const baselineChunks = Math.max(1, Math.round(baselineSeconds * chunksPerSecond));
   const minimumChunks = Math.max(1, Math.round(minimumEventSeconds * chunksPerSecond));

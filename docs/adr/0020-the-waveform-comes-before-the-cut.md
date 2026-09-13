@@ -30,10 +30,12 @@ Recording's positions.
 
 `bench/decode_speed.ts` on long-recording.mp4 (23.5 GB, 2.5 hours, six stereo SourceTracks) **from the slow external drive**:
 **26.7 s for all six**, against 23.7 s from the internal SSD. The drive is not the bottleneck — ffmpeg is, and the
-six run side by side. Each SourceTrack is 278 MB of PCM, so six are **1.7 GB held** for the session, with a peak
-near 4 GB while decoding.
+six run side by side. Each SourceTrack is 278 MB of PCM; six were **1.7 GB held** for the session at first, with a
+peak near 4 GB while decoding.
 
-That peak is the real cost of reading everything up front, and it is why the empty SourceTracks are skipped.
+That was the real cost of reading everything up front, and it is why the empty SourceTracks are skipped. ADR-0021
+has since stopped holding the audio: what is kept of those six SourceTracks is 17.2 MB. The peak while reading is
+unchanged.
 
 ## It costs nothing, because it is the same read
 
@@ -41,22 +43,24 @@ Reading one SourceTrack of a 2.5-hour Recording takes about a minute (ADR-0011).
 spent, just later, behind the Schneiden button. Moving it earlier means:
 
 - the user waits with something to look at instead of with a disabled window,
-- the cut afterwards is almost instant, because its audio is already in memory,
+- the cut afterwards is almost instant, because what it needs of each SourceTrack is already in memory,
 - and ADR-0004's rule holds unchanged: **the Recording is read once**, not once for the picture and once for the cut.
 
 `analyseRecording(request, tools, alreadyRead)` takes the SourceTracks that were read for the waveform and decodes
 only what is missing. A reused SourceTrack that did not belong to the one being cut would quietly cut on the wrong
 sound, so `runCut.test.ts` compares a cut built on audio read earlier against one that reads the file itself: same
-CutPlan, same summary, and the very same PCM object — proof it was reused rather than read again.
+CutPlan, same summary, and the very same object handed in — proof it was reused rather than read again. Since
+ADR-0021 that object holds the SourceTrack's chunk levels and waveform, not its audio.
 
 ## What is read is kept; what is drawn follows the role
 
 `sourceTracksToRead(session, alreadyRead)` names the SourceTracks with a role that nobody has read yet. Taking a
-role away does **not** throw the audio out: the user who tries a role for a moment and changes their mind would
-otherwise pay the minute again. The waveform disappears from the row, the audio stays, and putting the role back
+role away does **not** throw away what was read: the user who tries a role for a moment and changes their mind would
+otherwise pay the minute again. The waveform disappears from the row, what was read stays, and putting the role back
 draws it instantly.
 
-The main process holds that audio in a Map beside `chosen`, and empties it when another Recording is chosen — a
+The main process holds what was read in a Map beside `chosen` — `sourceTracksRead`, which since ADR-0021 holds each
+SourceTrack's chunk levels and waveform rather than its audio — and empties it when another Recording is chosen: a
 position in one Recording says nothing about the next.
 
 ## Schneiden stays pressable while a SourceTrack is being read
@@ -75,7 +79,8 @@ untested part (ADR-0012). They are worth recording because three of them are the
 project path was written before the read-ahead store existed and never joined it.
 
 - **Opening a project read the Recording twice.** `project:readAudio` filed its audio only into `lastCut`, while
-  `cut:run` reuses the `readAudio` store. Press Schneiden after opening and every SourceTrack was decoded again —
+  `cut:run` reuses the `readAudio` store (`sourceTracksRead` since ADR-0021). Press Schneiden after opening and every
+  SourceTrack was decoded again —
   breaking ADR-0004 on exactly the path this ADR added. It now files into the store, and `project:open` empties the
   store first, since audio from whatever was open before belongs to that Recording.
 - **No Recording-change guard on that path**, though `sourceTrack:read` has one. Audio decoded for the old project

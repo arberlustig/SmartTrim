@@ -127,5 +127,13 @@ _Avoid_: viewport, view range, selection
 **PeakEnvelope**:
 One height per slice of time, 0 to 1 — what a waveform is drawn from. Each slice reports its **loudest** sample
 rather than its average, so a bang far shorter than a slice keeps its full height (ADR-0019). It is made as soon as
-a SourceTrack is given a TrackRole, before any cut exists, and the cut then reuses that audio (ADR-0020).
+a SourceTrack is given a TrackRole, before any cut exists, and the cut then reuses what was read instead of reading
+the Recording again (ADR-0020).
 _Avoid_: waveform data, samples, levels
+
+**ChunkLevels**:
+How loud each 32 ms chunk of a SourceTrack is, in dBFS. Once a SourceTrack is read, its ChunkLevels and its
+PeakEnvelope are all SmartTrim keeps of it — never the decoded audio — because every later decision (another
+threshold, ContentEvents) reads only these (ADR-0021). Deciding by voice is the exception: Silero needs the audio,
+so that decision reads its SourceTracks again.
+_Avoid_: levels array, RMS buffer, audio cache

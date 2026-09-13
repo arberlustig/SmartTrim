@@ -4,6 +4,12 @@ import type { MonoPcm } from "../speech/detectSpeech.ts";
 const FULL_SCALE = 32768;
 
 /**
+ * How finely a waveform is drawn. Twenty a second is a peak every 50 ms: at the closest zoom that is two peaks per
+ * pixel, and over a 2.5-hour Recording it is 182 000 numbers — 728 KB, sent once per SourceTrack (ADR-0019).
+ */
+export const PEAKS_PER_SECOND = 20;
+
+/**
  * Turns decoded audio into one height per small slice of time — what the window draws the waveform from. Each
  * value is the loudest sample in its slice, 0 to 1, so a short bang keeps its full height instead of being
  * averaged away.

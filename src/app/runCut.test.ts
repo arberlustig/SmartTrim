@@ -133,16 +133,40 @@ describe("runCut", () => {
 
     // What showing the waveform would already have read.
     const readEarly = await runCut(request, tools);
-    const reused = await runCut(request, tools, readEarly.decoded);
+    const reused = await runCut(request, tools, readEarly.read);
     const readAgain = await runCut(request, tools);
 
     expect(reused.cutPlan).toEqual(readAgain.cutPlan);
     expect(reused.summary).toEqual(readAgain.summary);
-    // The audio really is the one handed in, not a fresh read of it.
-    expect(reused.decoded[0]?.pcm).toBe(readEarly.decoded[0]?.pcm);
+    // What was handed in really is what the cut used, not a fresh read of the same SourceTrack.
+    expect(reused.read[0]).toBe(readEarly.read[0]);
   }, 90_000);
 
-  // ADR-0004 promises this one: the decoded audio stays in memory, so moving the threshold decides again from
+  /**
+   * A finished cut keeps only what a later threshold and a waveform need, never the decoded audio itself. On the
+   * owner's 2.5-hour Recording the audio is 278 MB per SourceTrack, and six of them were held for the whole
+   * session; the loudness of each 32 ms chunk is all that any later decision reads.
+   */
+  test("a finished cut holds the loudness of the chunks, not the audio they came from", async () => {
+    const cut = await runCut(
+      {
+        recordingPath,
+        voiceSourceTracks: [0],
+        decideBy: { kind: "loudness", thresholdDbfs: -40 },
+        marginSeconds: 0.05,
+        minimumDeadZoneSeconds: 0.25,
+      },
+      tools,
+    );
+
+    // 12 s at 16 kHz is 192 000 samples, 384 000 bytes; one level per 512 samples is 375 of them.
+    const heldBytes = cut.listened.reduce((total, levels) => total + levels.levelsDbfs.byteLength, 0);
+    expect(heldBytes).toBeLessThan(8_000);
+    expect(cut.listened[0]?.levelsDbfs.length).toBeGreaterThan(300);
+  }, 60_000);
+
+  // ADR-0004 promises this one: what a threshold reads stays in memory — the chunk levels since ADR-0021 — so
+  // moving the threshold decides again from
   // memory instead of touching the file. Compared against the expensive path, like the replan above.
   test("deciding again at another threshold gives exactly what reading the Recording again would give", async () => {
     const settings = { marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 };
@@ -188,7 +212,7 @@ describe("replanCut with ContentEvents", () => {
     const cut = {
       recording: probed(600),
       listened: [],
-      decoded: [],
+      read: [],
       worthKeeping: [],
       contentEvents: [{ startSeconds: 5, endSeconds: 5.4 }],
       cutPlan: [],

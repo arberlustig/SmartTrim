@@ -54,8 +54,9 @@ export interface CutSession {
   /** The settings the cut on screen was made with, or null while there is none. */
   plannedWith: PlannedWith | null;
   /**
-   * Whether the audio behind the cut on screen is still decoded and in memory. It is after an analysis, and it is
-   * not after a saved project was reopened: a project holds what the analysis found, not the audio (ADR-0004).
+   * Whether what a new threshold is decided from is in memory — each Voice SourceTrack's chunk levels, not its audio
+   * (ADR-0021). It is after an analysis, and it is not after a saved project was reopened until its SourceTracks are
+   * read again: a project holds what the analysis found, not what it was found in (ADR-0004).
    */
   audioInMemory: boolean;
   /**
@@ -383,8 +384,9 @@ export function applyPreset(session: CutSession, preset: Preset): CutSession {
 }
 
 /**
- * Says that the decoded audio is back in memory — after a reopened project's SourceTracks were read again
- * (ADR-0020). It says nothing about the sliders: a slider moved while that read was running still needs the plan
+ * Says that what a new threshold is decided from is back in memory — the chunk levels (ADR-0021) — after a
+ * reopened project's SourceTracks were read again (ADR-0020). It says nothing about the sliders: a slider moved
+ * while that read was running still needs the plan
  * redone, which `cutFinished` would have swallowed by marking those settings as the ones the cut was made with.
  */
 export function audioBackInMemory(session: CutSession): CutSession {
