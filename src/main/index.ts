@@ -206,6 +206,16 @@ function registerHandlers(window: BrowserWindow): void {
     ),
   );
 
+  // "Alle Premiere-Dateien speichern" writes each Tab's Premiere file beside its Recording, asking nothing: a save
+  // dialog per Tab would be ten questions for ten Recordings (ADR-0026).
+  ipcMain.handle(
+    "cut:saveBeside",
+    answering(
+      ({ tabId, exportSourceTracks }: { tabId: number; exportSourceTracks: readonly number[] }): Promise<string> =>
+        tabs.savePremiereBeside(tabId, exportSourceTracks),
+    ),
+  );
+
   /**
    * Reads the audio of a reopened project in the background, so its waveform appears and a threshold can be tried
    * again without the user pressing Schneiden. The plan on screen is not touched: it was recomputed on opening.

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import type { RecordingInfo } from "../export/exportFcp7Xml";
+import { exportFcp7Xml, type RecordingInfo } from "../export/exportFcp7Xml";
 import { buildVoiceRecording } from "../testing/voiceRecording";
 import { openFile } from "./openFile";
 import { runCut, type CutResult } from "./runCut";
@@ -115,6 +115,30 @@ describe("tabStore", () => {
     const reopened = later.open({ ...(await openFile(saved, tools.ffprobe)), path: saved });
     expect(await later.saveProject(reopened.tabId, choices)).toBe(saved);
     expect(readdirSync(folder).sort()).toEqual(["Part1 (2).smarttrim", "Part1.mp4", "Part1.smarttrim"]);
+  }, 60_000);
+
+  // "Alle Premiere-Dateien speichern" asks nothing: one save dialog per Tab would be ten dialogs for ten Recordings
+  // (ADR-0026). It writes the Premiere file only, like the single Tab's "Premiere-Datei speichern".
+  test("a Tab saves its Premiere file beside its Recording, never over a file that is already there", async () => {
+    const folder = mkdtempSync(join(workDir, "all-"));
+    const recording = join(folder, "Part1.mp4");
+    copyFileSync(shortPath, recording);
+    const someoneElses = join(folder, "Part1.xml");
+    writeFileSync(someoneElses, "a Premiere file from another program");
+
+    const store = newTabStore(toolsReady);
+    const tab = store.open(await openFile(recording, tools.ffprobe));
+    await store.cut(tab.tabId, cutRequest(recording));
+    const first = await store.savePremiereBeside(tab.tabId, [0]);
+    const second = await store.savePremiereBeside(tab.tabId, [0]);
+
+    expect([first, second]).toEqual([join(folder, "Part1 (2).xml"), join(folder, "Part1 (3).xml")]);
+    expect(readFileSync(someoneElses, "utf8")).toBe("a Premiere file from another program");
+    // Nothing else is written: no project appears beside the Recording.
+    expect(readdirSync(folder).sort()).toEqual(["Part1 (2).xml", "Part1 (3).xml", "Part1.mp4", "Part1.xml"]);
+    // The truth: the same Recording cut on its own and exported, with no Tab and no saving by name involved.
+    const alone = await runCut(cutRequest(recording), tools);
+    expect(readFileSync(first, "utf8")).toBe(exportFcp7Xml(alone.recording, alone.cutPlan, [0]));
   }, 60_000);
 
   // Closing a Tab while its SourceTracks are still being read is an everyday move: the wrong file was dropped.

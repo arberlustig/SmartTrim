@@ -25,6 +25,7 @@ const api: SmartTrimApi = {
   redecide: (tabId, settings) => ipcRenderer.invoke("cut:redecide", { tabId, settings }),
   save: (tabId, exportSourceTracks) => ipcRenderer.invoke("cut:save", { tabId, exportSourceTracks }),
   saveProjectBeside: (tabId, choices) => ipcRenderer.invoke("project:saveBeside", { tabId, choices }),
+  savePremiereBeside: (tabId, exportSourceTracks) => ipcRenderer.invoke("cut:saveBeside", { tabId, exportSourceTracks }),
   openProject: () => ipcRenderer.invoke("project:open"),
   readProjectAudio: (tabId) => ipcRenderer.invoke("project:readAudio", tabId),
   loadPresets: () => ipcRenderer.invoke("presets:load"),

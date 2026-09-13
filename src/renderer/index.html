@@ -159,6 +159,27 @@
       .modal[hidden] {
         display: none;
       }
+      /* A Tab "Alle schneiden" passed over: its status line says why, the dot says where to look. */
+      .tab.skipped .tabLabel::before {
+        content: "●";
+        margin-right: 6px;
+        color: #e8b04a;
+        font-size: 9px;
+        vertical-align: middle;
+      }
+      .preset.takeOverRow {
+        padding: 12px 0 0;
+      }
+      /* `.actions` has a display of its own, which would beat the browser's rule for [hidden]. */
+      .actions[hidden] {
+        display: none;
+      }
+      .saveAllRow {
+        margin-top: 20px;
+      }
+      .saveAllRow span {
+        color: var(--muted);
+      }
       .dialog {
         width: min(520px, 100%);
         padding: 22px 24px 18px;
@@ -608,6 +629,18 @@
       </div>
     </div>
 
+    <div class="modal" id="takeOverAsking" hidden>
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="takeOverTitle" aria-describedby="takeOverQuestion">
+        <h3 id="takeOverTitle">Haben alle Aufnahmen dieselbe Tonspur-Aufteilung?</h3>
+        <p id="takeOverQuestion"></p>
+        <div class="dialogButtons">
+          <button id="takeOverRoles" class="primary" type="button">Regler und Tonspur-Rollen</button>
+          <button id="takeOverSliders" type="button">Nur Regler</button>
+          <button id="cancelTakeOver" type="button">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+
     <section>
       <h2>Aufnahme</h2>
       <div id="recordingInfo">Noch keine Aufnahme offen.</div>
@@ -698,14 +731,26 @@
           <output id="eventTailValue"></output>
         </div>
       </div>
+      <div class="preset takeOverRow" id="takeOverRow" hidden>
+        <label for="takeOver">Andere Tabs</label>
+        <div class="presetRow">
+          <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen">Für alle übernehmen</button>
+        </div>
+      </div>
     </section>
 
     <div class="actions">
       <button id="cut" class="primary" disabled>Schneiden</button>
+      <button id="cutAll" type="button" title="Jeden Tab mit seinen eigenen Einstellungen schneiden" hidden>Alle schneiden</button>
       <div id="status"></div>
     </div>
 
     <div id="result" hidden></div>
+
+    <div class="actions saveAllRow" id="saveAllRow" hidden>
+      <button id="saveAll" type="button">Alle Premiere-Dateien speichern</button>
+      <span>Legt jede Premiere-Datei neben ihre Aufnahme und überschreibt nichts.</span>
+    </div>
 
     <div class="dropOverlay" id="dropOverlay" hidden>
       <strong>Hier ablegen</strong>

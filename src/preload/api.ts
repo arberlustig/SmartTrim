@@ -110,6 +110,11 @@ export interface SmartTrimApi {
    */
   saveProjectBeside(tabId: number, choices: SavedChoices): Promise<Answer<string>>;
   /**
+   * Writes a Tab's Premiere file beside its Recording without asking, for "Alle Premiere-Dateien speichern", under a
+   * name no file has yet (ADR-0026). Returns where it landed.
+   */
+  savePremiereBeside(tabId: number, exportSourceTracks: readonly number[]): Promise<Answer<string>>;
+  /**
    * Reads the audio of a Tab's reopened project in the background, so its waveform appears and a threshold can be
    * tried again. A project holds what the analysis found, never the audio (ADR-0016).
    */

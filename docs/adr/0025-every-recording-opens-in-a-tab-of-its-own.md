@@ -113,7 +113,7 @@ status line. No project save dialog is left; the Premiere save dialog, which the
 ## Smaller consequences
 
 - **A new Tab starts on the owner's settings (Gaming)**, not on the sliders of the Tab on screen. Carrying settings
-  across is step 3's "Für alle übernehmen".
+  across is step 3's "Für alle übernehmen" (ADR-0026).
 - `CutSession.lockedRangesSaved` remembers what the last saved or opened project holds; `projectSaved` takes it from the
   choices that were **written**, so a stretch held while the save dialog stood open still counts as unsaved.
   `askBeforeClosing` asks when a held stretch lies inside none of the saved ones.

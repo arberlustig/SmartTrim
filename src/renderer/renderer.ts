@@ -51,6 +51,7 @@ import {
   type TabWork,
 } from "../app/tabs.ts";
 import type { Refusal } from "../app/openFile.ts";
+import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from "../app/allTabs.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
@@ -111,6 +112,16 @@ const view = {
   eventTail: element<HTMLInputElement>("eventTail"),
   eventTailValue: element("eventTailValue"),
   cut: element<HTMLButtonElement>("cut"),
+  cutAll: element<HTMLButtonElement>("cutAll"),
+  saveAllRow: element("saveAllRow"),
+  saveAll: element<HTMLButtonElement>("saveAll"),
+  takeOverRow: element("takeOverRow"),
+  takeOver: element<HTMLButtonElement>("takeOver"),
+  takeOverAsking: element("takeOverAsking"),
+  takeOverQuestion: element("takeOverQuestion"),
+  takeOverRoles: element<HTMLButtonElement>("takeOverRoles"),
+  takeOverSliders: element<HTMLButtonElement>("takeOverSliders"),
+  cancelTakeOver: element<HTMLButtonElement>("cancelTakeOver"),
   cutPicture: element("cutPicture"),
   overview: element<HTMLCanvasElement>("overview"),
   zoom: element<HTMLInputElement>("zoom"),
@@ -166,6 +177,8 @@ interface OpenTab extends Mutable<TabWork> {
   /** Waiting for the sliders to come to rest, so one drag is one job and not fifty. */
   redoTimer: ReturnType<typeof setTimeout> | undefined;
   redoing: boolean;
+  /** Passed over by the last "Alle schneiden" or "Alle Premiere-Dateien speichern"; the strip marks it until it is cut. */
+  skipped: boolean;
 }
 
 /** The open Tabs, in the order of the strip. */
@@ -176,6 +189,12 @@ let viewedId: number | null = null;
 let closeAsking: OpenTab | null = null;
 /** True while "Projekt speichern und schließen" waits for its save dialog, so the question cannot be answered twice. */
 let savingForClose = false;
+/** True while the question before "Für alle übernehmen" is on screen. */
+let takeOverAsking = false;
+/** How far "Alle schneiden" has got, or null while it is not running. */
+let cuttingAll: { done: number; total: number } | null = null;
+/** How far "Alle Premiere-Dateien speichern" has got, or null while it is not running. */
+let savingAll: { done: number; total: number } | null = null;
 
 /**
  * One thing opening files had to say, the way an exception reads: which file, what went wrong in the user's words,
@@ -192,6 +211,11 @@ interface OpenNote {
 
 /** What opening the last files had to say. Stays until the next opening or until dismissed. */
 let openNotes: OpenNote[] = [];
+/**
+ * A heading of its own for notes that are not about opening files — what "Alle schneiden" did. It belongs to the list
+ * it was written for and lapses as soon as anything else puts its own notes up.
+ */
+let notesHeading: { notes: OpenNote[]; text: string } | null = null;
 /** The status line while no Tab is open — the first-run download, say. */
 const windowStatus: Status = { text: "", bad: false };
 /** What the sliders show while no Tab is open: the settings a new Tab starts on. */
@@ -305,7 +329,7 @@ function drawTabs(): void {
     ...tabs.map((tab) => {
       const name = fileName(tab.session.recording?.path ?? "");
       const item = document.createElement("div");
-      item.className = tab.id === viewedId ? "tab viewed" : "tab";
+      item.className = ["tab", tab.id === viewedId ? "viewed" : "", tab.skipped ? "skipped" : ""].filter(Boolean).join(" ");
       const label = document.createElement("button");
       label.type = "button";
       label.className = "tabLabel";
@@ -326,11 +350,18 @@ function drawTabs(): void {
   );
 
   drawCloseQuestion();
+  drawTakeOverQuestion();
 
   view.openNotes.hidden = openNotes.length === 0;
   const refusedCount = openNotes.filter((note) => note.tone === "refused" && note.name).length;
   view.openNotesHeading.textContent =
-    refusedCount === 0 ? "" : refusedCount === 1 ? "Eine Datei ließ sich nicht öffnen" : `${refusedCount} Dateien ließen sich nicht öffnen`;
+    notesHeading?.notes === openNotes
+      ? notesHeading.text
+      : refusedCount === 0
+        ? ""
+        : refusedCount === 1
+          ? "Eine Datei ließ sich nicht öffnen"
+          : `${refusedCount} Dateien ließen sich nicht öffnen`;
   view.openNotesList.replaceChildren(
     ...openNotes.map((note) => {
       const line = document.createElement("li");
@@ -709,8 +740,27 @@ function draw(): void {
   view.deadZone.disabled = settingsLocked;
   view.eventLead.disabled = settingsLocked;
   view.eventTail.disabled = settingsLocked;
-  view.cut.disabled = !tab || tab.working || preparing || !canCut(tab.session);
+  // While all Tabs are cut or saved, a Tab cut by hand could be cut twice, or lose its cut just before it is saved.
+  const allRunning = cuttingAll !== null || savingAll !== null;
+  view.cut.disabled = !tab || tab.working || preparing || allRunning || !canCut(tab.session);
   view.cut.textContent = tab?.working ? "Arbeitet …" : "Schneiden";
+  const severalTabs = tabs.length > 1;
+  const anyWorking = tabs.some((each) => each.working);
+  const counted = (progress: { done: number; total: number }) =>
+    `${Math.min(progress.done + 1, progress.total)} von ${progress.total}`;
+  view.cutAll.hidden = !severalTabs && cuttingAll === null;
+  view.cutAll.disabled = preparing || anyWorking || allRunning;
+  view.cutAll.textContent = cuttingAll ? `Schneidet ${counted(cuttingAll)} …` : "Alle schneiden";
+  view.saveAllRow.hidden = !severalTabs && savingAll === null;
+  view.saveAll.disabled =
+    preparing ||
+    anyWorking ||
+    allRunning ||
+    !tabs.some((each) => savingAllDoes(each.session, each.finished !== null) === "save");
+  view.saveAll.textContent = savingAll ? `Speichert ${counted(savingAll)} …` : "Alle Premiere-Dateien speichern";
+  view.takeOverRow.hidden = !severalTabs;
+  // A Tab being cut or saved must not have its settings changed underneath (ADR-0026).
+  view.takeOver.disabled = !tab || anyWorking || allRunning;
 }
 
 /**
@@ -1747,6 +1797,7 @@ function openTabFrom(work: TabWork, finished: CutSummary | null): OpenTab {
     readingCount: { done: 0, total: 0 },
     redoTimer: undefined,
     redoing: false,
+    skipped: false,
   };
 }
 
@@ -1845,6 +1896,7 @@ view.tabAsking.addEventListener("click", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && closeAsking) cancelClosing();
+  if (event.key === "Escape" && takeOverAsking) closeTakeOver();
 });
 
 view.dismissNotes.addEventListener("click", () => {
@@ -2004,19 +2056,21 @@ window.addEventListener("pointermove", () => {
 
 /* ── Cutting ───────────────────────────────────────────────────────────────────────────────────────────────── */
 
-view.cut.addEventListener("click", async () => {
-  const tab = viewed();
-  if (!tab) return;
-  stopPlaying();
+/**
+ * Cuts one Tab on its settings as they stand. The answer, or null when the Tab was closed meanwhile; a refusal is
+ * already in the Tab's status line.
+ */
+async function cutTab(tab: OpenTab): Promise<Answer<CutSummary> | null> {
   tab.working = true;
   tab.finished = null;
+  tab.skipped = false;
   // The waveforms are kept: they belong to this Recording, and this analysis reuses what was read to draw them
   // (ADR-0020). They simply lose their colours until the new plan arrives.
   setStatus(tab, "Liest die Aufnahme …");
   draw();
   const answer = await window.smarttrim.cut(tab.id, analysisRequestFrom(tab.session));
   tab.working = false;
-  if (!isOpen(tab)) return;
+  if (!isOpen(tab)) return null;
   const summary = show(tab, answer, "Der Schnitt ging nicht");
   if (summary) {
     tab.finished = summary;
@@ -2026,6 +2080,212 @@ view.cut.addEventListener("click", async () => {
   }
   draw();
   if (summary) await loadWaveforms(tab);
+  return answer;
+}
+
+view.cut.addEventListener("click", async () => {
+  const tab = viewed();
+  if (!tab || cuttingAll || savingAll) return;
+  stopPlaying();
+  await cutTab(tab);
+});
+
+/* ── All Tabs at once ──────────────────────────────────────────────────────────────────────────────────────── */
+
+/** Why "Alle schneiden" or "Alle Premiere-Dateien speichern" passed a Tab over, in the user's words. */
+const SKIPPED_BECAUSE = {
+  skipNoVoice: "Übersprungen: Keine Tonspur steht auf „danach schneiden“.",
+  skipNotCut: "Übersprungen: Noch nicht nach den jetzigen Einstellungen geschnitten.",
+  skipNoExport: "Übersprungen: Keine Tonspur ist für Premiere angekreuzt.",
+} as const;
+
+/** "8 geschnitten, 2 übersprungen, 1 ging nicht" — the heading over what an action on all Tabs had to say. */
+function allTabsHeading(action: string, done: string, doneCount: number, passedOver: number, failed: number): string {
+  const parts = [`${doneCount} ${done}`];
+  if (passedOver > 0) parts.push(`${passedOver} übersprungen`);
+  if (failed > 0) parts.push(`${failed} ${failed === 1 ? "ging" : "gingen"} nicht`);
+  return `${action}: ${parts.join(", ")}`;
+}
+
+/**
+ * "Alle schneiden": every Tab in the order of the strip, one after another, each on its own settings as they stand at
+ * its turn. It only cuts, so each Tab's waveforms show its own cut; nothing is written (ADR-0026). A Tab that cannot be
+ * cut is passed over and marked; one that fails does not stop the others.
+ */
+async function cutAllTabs(): Promise<void> {
+  if (cuttingAll || savingAll || preparing || tabs.some((each) => each.working)) return;
+  stopPlaying();
+  const queue = [...tabs];
+  cuttingAll = { done: 0, total: queue.length };
+  let cutCount = 0;
+  const passedOver: OpenNote[] = [];
+  const failed: OpenNote[] = [];
+  draw();
+
+  for (const tab of queue) {
+    // A Tab closed while the ones before it were cut has nothing left to cut.
+    if (isOpen(tab)) {
+      const name = fileName(tab.session.recording?.path ?? "");
+      const step = cuttingAllDoes(tab.session, tab.finished !== null);
+      tab.skipped = step === "skipNoVoice";
+      if (step === "skipNoVoice") {
+        setStatus(tab, SKIPPED_BECAUSE[step]);
+        passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
+      } else if (step === "nothing") {
+        // Its cut already matches its settings.
+        cutCount += 1;
+      } else {
+        const cut = await cutTab(tab);
+        if (cut?.ok) cutCount += 1;
+        else if (cut) failed.push({ tone: "refused", name, text: "Der Schnitt ging nicht.", detail: `Grund: ${cut.message}` });
+      }
+    }
+    cuttingAll = { done: cuttingAll.done + 1, total: queue.length };
+    draw();
+  }
+
+  cuttingAll = null;
+  openNotes = [
+    ...(cutCount > 0
+      ? [{ tone: "info", name: "", text: "Gespeichert ist noch nichts: dafür „Alle Premiere-Dateien speichern“ ganz unten." } as const]
+      : []),
+    ...failed,
+    ...passedOver,
+  ];
+  notesHeading = {
+    notes: openNotes,
+    text: allTabsHeading("Alle schneiden", "geschnitten", cutCount, passedOver.length, failed.length),
+  };
+  draw();
+  void pump();
+}
+
+view.cutAll.addEventListener("click", () => void cutAllTabs());
+
+/**
+ * "Alle Premiere-Dateien speichern": every Tab whose cut matches its settings writes its Premiere file beside its
+ * Recording, without a dialog and never over a file already there (ADR-0026). It never cuts; a Tab without a current
+ * cut, or with nothing ticked for Premiere, is passed over and marked.
+ */
+async function saveAllTabs(): Promise<void> {
+  if (cuttingAll || savingAll || preparing || tabs.some((each) => each.working)) return;
+  const queue = [...tabs];
+  savingAll = { done: 0, total: queue.length };
+  const saved: OpenNote[] = [];
+  const passedOver: OpenNote[] = [];
+  const failed: OpenNote[] = [];
+  draw();
+
+  for (const tab of queue) {
+    if (isOpen(tab)) {
+      const name = fileName(tab.session.recording?.path ?? "");
+      // Taken at its turn: the Tabs stay usable while the files before it are written.
+      const step = savingAllDoes(tab.session, tab.finished !== null);
+      tab.skipped = step !== "save";
+      if (step !== "save") {
+        setStatus(tab, SKIPPED_BECAUSE[step]);
+        passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
+      } else {
+        const answer = await window.smarttrim.savePremiereBeside(tab.id, tab.session.exportSourceTracks);
+        if (isOpen(tab)) {
+          if (answer.ok) {
+            setStatus(tab, `Gespeichert: ${answer.value}`);
+            const file = fileName(answer.value);
+            saved.push({ tone: "info", name: file, text: "Gespeichert.", detail: `Ordner: ${answer.value.slice(0, -file.length - 1)}` });
+          } else {
+            say(tab, `Speichern ging nicht: ${answer.message}`);
+            failed.push({ tone: "refused", name, text: "Nicht gespeichert.", detail: `Grund: ${answer.message}` });
+          }
+        }
+      }
+    }
+    savingAll = { done: savingAll.done + 1, total: queue.length };
+    draw();
+  }
+
+  savingAll = null;
+  openNotes = [...failed, ...passedOver, ...saved];
+  notesHeading = {
+    notes: openNotes,
+    text: allTabsHeading("Alle Premiere-Dateien speichern", "gespeichert", saved.length, passedOver.length, failed.length),
+  };
+  draw();
+}
+
+view.saveAll.addEventListener("click", () => void saveAllTabs());
+
+/** The question before "Für alle übernehmen": whether every Recording has the same SourceTracks. */
+function drawTakeOverQuestion(): void {
+  const from = viewed();
+  view.takeOverAsking.hidden = !takeOverAsking || !from;
+  if (!takeOverAsking || !from) return;
+  const others = tabs.length - 1;
+  view.takeOverQuestion.textContent =
+    `Die Regler von „${fileName(from.session.recording?.path ?? "")}“ gehen an ` +
+    `${others === 1 ? "den anderen Tab" : `die ${others} anderen Tabs`}. ` +
+    "Nur wenn die Tonspuren überall gleich belegt sind, sollen auch die Tonspur-Rollen und die Premiere-Häkchen mit. " +
+    "Aufnahmen mit einer anderen Zahl an Tonspuren bekommen so oder so nur die Regler. Festgehaltene Stellen bleiben, wo sie sind.";
+}
+
+function closeTakeOver(): void {
+  takeOverAsking = false;
+  draw();
+  view.takeOver.focus();
+}
+
+/** Takes the settings of the Tab on screen over into every other Tab (ADR-0026). */
+function takeOverInto(what: TakenOver): void {
+  const from = viewed();
+  takeOverAsking = false;
+  if (!from || cuttingAll || tabs.some((each) => each.working)) {
+    draw();
+    return;
+  }
+  const others = tabs.filter((tab) => tab !== from);
+  const leftOut: OpenNote[] = [];
+  for (const tab of others) {
+    const { session, rolesLeftOut } = settingsCopied(from.session, tab.session, what);
+    // Roles taken over ask for their SourceTracks' waveforms, so a Tab whose read was refused tries again (ADR-0025).
+    if (what === "slidersAndRoles" && !rolesLeftOut) Object.assign(tab, roleGiven(tab, session));
+    else tab.session = session;
+    // A finished cut in that Tab is planned again, decided again, or stops being offered — as if moved by hand.
+    afterSettingChange(tab);
+    if (rolesLeftOut) {
+      const sourceTracks = (count: number) => (count === 1 ? "eine Tonspur" : `${count} Tonspuren`);
+      leftOut.push({
+        tone: "info",
+        name: fileName(tab.session.recording?.path ?? ""),
+        text:
+          `Nur die Regler übernommen: Diese Aufnahme hat ${sourceTracks(session.recording?.sourceTracks.length ?? 0)}, ` +
+          `„${fileName(from.session.recording?.path ?? "")}“ hat ${sourceTracks(from.session.recording?.sourceTracks.length ?? 0)}.`,
+      });
+    }
+  }
+  const taken = what === "slidersAndRoles" ? "Regler und Tonspur-Rollen" : "Regler";
+  openNotes = [
+    {
+      tone: "info",
+      name: "",
+      text: `${taken} von „${fileName(from.session.recording?.path ?? "")}“ in ${others.length === 1 ? "den anderen Tab" : `${others.length} Tabs`} übernommen. Festgehaltene Stellen sind geblieben.`,
+    },
+    ...leftOut,
+  ];
+  draw();
+  void pump();
+}
+
+view.takeOver.addEventListener("click", () => {
+  if (!viewed() || tabs.length < 2) return;
+  takeOverAsking = true;
+  draw();
+  // Enter cancels: taking over overwrites the sliders of every other Tab.
+  view.cancelTakeOver.focus();
+});
+view.takeOverRoles.addEventListener("click", () => takeOverInto("slidersAndRoles"));
+view.takeOverSliders.addEventListener("click", () => takeOverInto("sliders"));
+view.cancelTakeOver.addEventListener("click", closeTakeOver);
+view.takeOverAsking.addEventListener("click", (event) => {
+  if (event.target === view.takeOverAsking) closeTakeOver();
 });
 
 draw();

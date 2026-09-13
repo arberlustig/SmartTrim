@@ -16,6 +16,7 @@ import {
   redecideCut,
   replanCut,
   runCut,
+  saveCutPlan,
   waveformOf,
   type CutResult,
   type CutSummary,
@@ -81,6 +82,12 @@ export interface TabStore {
    * its Recording under a name no file has yet. Returns where it landed.
    */
   saveProject(tabId: number, choices: SavedChoices): Promise<string>;
+  /**
+   * What "Alle Premiere-Dateien speichern" writes for a Tab, asking nothing (ADR-0026): its Premiere file beside its
+   * Recording, with TimelineTracks for `exportSourceTracks`, under a name no file has yet — SmartTrim never opens one
+   * again, so none is ever written over. Returns where it landed.
+   */
+  savePremiereBeside(tabId: number, exportSourceTracks: readonly number[]): Promise<string>;
   /** Lets go of everything the Tab held. A job still running for it is refused when it finishes. */
   close(tabId: number): void;
   /** The Tab's Recording as probed. */
@@ -176,6 +183,13 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
     async saveProject(tabId, choices) {
       const tab = tabOf(tabId);
       return saveProjectAs(tabId, choices, tab.projectPath ?? (await freePathBeside(tab.recording.path, ".smarttrim")));
+    },
+
+    async savePremiereBeside(tabId, exportSourceTracks) {
+      const { recording, cutPlan } = cutOf(tabId);
+      const premierePath = await freePathBeside(recording.path, ".xml");
+      await saveCutPlan(premierePath, recording, cutPlan, exportSourceTracks);
+      return premierePath;
     },
 
     close(tabId) {
