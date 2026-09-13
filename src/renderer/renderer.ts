@@ -55,7 +55,9 @@ import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from ".
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
-import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Playback } from "../playback/playback.ts";
+import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Join, type Playback } from "../playback/playback.ts";
+import { videoAddressOf } from "../video/address.ts";
+import { pictureFor } from "../video/picture.ts";
 import type { Answer, OpenedInWindow, SmartTrimApi } from "../preload/api.ts";
 
 declare global {
@@ -123,6 +125,12 @@ const view = {
   takeOverSliders: element<HTMLButtonElement>("takeOverSliders"),
   cancelTakeOver: element<HTMLButtonElement>("cancelTakeOver"),
   cutPicture: element("cutPicture"),
+  picture: element("picture"),
+  pictureFrame: element("pictureFrame"),
+  pictureA: element<HTMLVideoElement>("pictureA"),
+  pictureB: element<HTMLVideoElement>("pictureB"),
+  pictureNote: element("pictureNote"),
+  pictureToggle: element<HTMLButtonElement>("pictureToggle"),
   overview: element<HTMLCanvasElement>("overview"),
   zoom: element<HTMLInputElement>("zoom"),
   zoomValue: element("zoomValue"),
@@ -739,6 +747,7 @@ function draw(): void {
   forgetSettledPassOvers();
   drawTabs();
   drawRecording(tab);
+  drawPicture(tab);
   drawSourceTracks(tab);
   drawSettings(tab);
   drawResult(tab);
@@ -1462,6 +1471,8 @@ function stopPlaying(): void {
   cancelAnimationFrame(playheadFrame);
   const was = playing;
   playing = null;
+  // The picture stops with the sound; the next draw puts the still frame where the sound stopped.
+  pausePicture();
   if (!was) return;
   // The Playhead stays where the sound stopped, so the next press goes on from there.
   was.tab.playheadSeconds = heardIn(was);
@@ -1486,6 +1497,7 @@ function followPlayhead(): void {
   if (!now) return;
   const { tab } = now;
   const heard = heardIn(now);
+  followPicture(now, now.context.currentTime - now.startedAt);
   const seconds = recordingSeconds(tab);
   const wasInView = lastHeard !== null && lastHeard >= tab.zoom.fromSeconds && lastHeard <= tab.zoom.toSeconds;
   lastHeard = heard;
@@ -1515,8 +1527,11 @@ function placePlayhead(tab: OpenTab, canvas: HTMLCanvasElement, clientX: number)
   // Stopping leaves the Playhead where the sound was, so the click is put back after it.
   stopPlaying();
   tab.playheadSeconds = clicked;
-  if (position === null) drawWaveforms();
-  else void play(position);
+  if (position === null) {
+    drawWaveforms();
+    // Nothing plays, so the still frame goes to where the Playhead now is.
+    drawPicture(tab);
+  } else void play(position);
 }
 
 /**
@@ -1662,6 +1677,138 @@ view.overview.addEventListener("pointerdown", (event) => {
 });
 
 /* ── Held stretches ────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── The picture ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+/** The highest the picture is drawn, in CSS pixels — a little more than the 360 first proposed, at the owner's word. */
+const PICTURE_HEIGHT_PX = 450;
+/** Where the window remembers whether the picture is unfolded, across starts. */
+const PICTURE_OPEN_KEY = "smarttrim.pictureOpen";
+
+/** Whether the picture is unfolded: one choice for every Tab, kept when SmartTrim starts again (ADR-0027). */
+let pictureOpen = (() => {
+  try {
+    return localStorage.getItem(PICTURE_OPEN_KEY) !== "false";
+  } catch {
+    return true;
+  }
+})();
+/**
+ * The two <video> elements take turns. `front` is on screen; `back` already waits at the moment the next Join jumps
+ * to, so the picture follows a Join within a frame or two of the sound instead of freezing while one element seeks
+ * (ADR-0027).
+ */
+let front = view.pictureA;
+let back = view.pictureB;
+/** The Tab whose Recording both elements hold. */
+let pictureTabId: number | null = null;
+/** The Join `back` has been made ready for, while a sound plays. */
+let backReadyFor: Join | null = null;
+/** Where the still frame was last put, so a redraw does not seek again to where the picture already is. */
+let stillAt: number | null = null;
+/** Why the picture cannot be shown, when the window could not play the Recording. */
+let pictureFailed: string | null = null;
+
+/** Stops both elements and forgets what `back` was made ready for. */
+function pausePicture(): void {
+  front.pause();
+  back.pause();
+  backReadyFor = null;
+  stillAt = null;
+}
+
+/**
+ * The picture of the Tab on screen: its Recording loaded, folded or not, and — while nothing plays — the still frame
+ * under the Playhead, or the first frame while there is none. Zooming and dragging the view leave it where it is.
+ */
+function drawPicture(tab: OpenTab | null): void {
+  const recording = tab?.session.recording ?? null;
+  view.picture.hidden = !tab || !recording;
+  if (!tab || !recording) {
+    // No Tab left: let go of the Recording, so a closed Tab's file is not held open by the window.
+    if (pictureTabId !== null) {
+      pictureTabId = null;
+      pausePicture();
+      for (const element of [front, back]) {
+        element.removeAttribute("src");
+        element.load();
+      }
+    }
+    return;
+  }
+  if (pictureTabId !== tab.id) {
+    pictureTabId = tab.id;
+    pictureFailed = null;
+    pausePicture();
+    for (const element of [front, back]) element.src = videoAddressOf(tab.id);
+  }
+  view.pictureToggle.textContent = pictureOpen ? "Bild ausblenden" : "Bild zeigen";
+  view.pictureFrame.hidden = !pictureOpen;
+  view.pictureNote.hidden = pictureFailed === null;
+  view.pictureNote.textContent = pictureFailed ?? "";
+  // As wide as the waveforms and no higher than PICTURE_HEIGHT_PX, in the Recording's own shape.
+  view.pictureFrame.style.aspectRatio = `${recording.width} / ${recording.height}`;
+  view.pictureFrame.style.maxWidth = `${(PICTURE_HEIGHT_PX * recording.width) / recording.height}px`;
+  if (!pictureOpen || playing?.tab === tab) return;
+  const wanted = tab.playheadSeconds ?? 0;
+  if (stillAt !== wanted) {
+    stillAt = wanted;
+    front.pause();
+    front.currentTime = wanted;
+  }
+}
+
+/** Keeps the picture with the sound, once per frame while a SourceTrack plays. The sound is the clock. */
+function followPicture(sound: NonNullable<typeof playing>, playedSeconds: number): void {
+  if (!pictureOpen || pictureTabId !== sound.tab.id) return;
+  stillAt = null;
+  // The Join `back` waits for has been reached: it takes over where the sound went on, and the other one stops.
+  if (backReadyFor && playedSeconds >= backReadyFor.playedSeconds) {
+    [front, back] = [back, front];
+    front.classList.add("front");
+    back.classList.remove("front");
+    back.pause();
+    backReadyFor = null;
+  }
+  // A picture that took over before its seek ended is left to finish it: seeking it again every frame never lets it
+  // arrive, and the abandoned seeks pile up on the graphics chip (ADR-0027).
+  const step = pictureFor(sound.playback, Math.max(playedSeconds, 0), { seconds: front.currentTime, seeking: front.seeking });
+  if (step.seek) front.currentTime = step.wantedSeconds;
+  // The sound starts a moment after it is scheduled; the picture starts with it, not before.
+  if (front.paused && playedSeconds > 0) void front.play().catch(() => undefined);
+  if (step.nextJoin && backReadyFor !== step.nextJoin) {
+    backReadyFor = step.nextJoin;
+    back.pause();
+    back.currentTime = step.nextJoin.removedToSeconds;
+  }
+}
+
+view.pictureToggle.addEventListener("click", () => {
+  pictureOpen = !pictureOpen;
+  try {
+    localStorage.setItem(PICTURE_OPEN_KEY, String(pictureOpen));
+  } catch {
+    // Not remembered, then; the choice still holds until SmartTrim is closed.
+  }
+  pausePicture();
+  draw();
+});
+
+// A Recording the window cannot decode — a codec this PC lacks, say — says so instead of showing a black box.
+for (const element of [view.pictureA, view.pictureB]) {
+  element.addEventListener("error", () => {
+    if (!element.getAttribute("src")) return;
+    pictureFailed = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen${element.error?.message ? ` (${element.error.message})` : ""}.`;
+    drawPicture(viewed());
+  });
+  // Chromium raises no error for a video it cannot decode as long as it can play the sound: it loads the Recording as
+  // sound only and stays black. Found with an MPEG-4 Part 2 Recording, whose AAC SourceTracks it read.
+  element.addEventListener("loadedmetadata", () => {
+    if (!element.getAttribute("src") || element.videoWidth > 0) return;
+    pictureFailed = "Das Bild dieser Aufnahme lässt sich hier nicht zeigen: Das Fenster kann ihr Videoformat nicht lesen.";
+    drawPicture(viewed());
+  });
+}
 
 /** The moment "Anfang/Ende festhalten" mark: where the sound is while it plays, else where the Playhead waits. */
 function playheadNow(tab: OpenTab): number | null {

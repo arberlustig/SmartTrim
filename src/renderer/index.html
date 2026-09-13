@@ -2,7 +2,7 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src smarttrim-video:" />
     <title>SmartTrim</title>
     <style>
       :root {
@@ -169,6 +169,34 @@
       }
       .preset.takeOverRow {
         padding: 12px 0 0;
+      }
+      .picture {
+        margin: 0 0 14px;
+      }
+      .pictureFrame {
+        position: relative;
+        width: 100%;
+        background: #000;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .pictureFrame[hidden] {
+        display: none;
+      }
+      .pictureFrame video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        visibility: hidden;
+      }
+      .pictureFrame video.front {
+        visibility: visible;
+      }
+      .pictureNote {
+        margin: 6px 0 0;
+        color: var(--bad);
       }
       /* `.actions` has a display of its own, which would beat the browser's rule for [hidden]. */
       .actions[hidden] {
@@ -648,6 +676,15 @@
 
     <section>
       <h2>Tonspuren</h2>
+      <div class="picture" id="picture" hidden>
+        <div class="pictureFrame" id="pictureFrame">
+          <!-- Two elements take turns at every Join: the one behind already waits where the sound goes on (ADR-0027). -->
+          <video id="pictureA" class="front" muted preload="auto"></video>
+          <video id="pictureB" muted preload="auto"></video>
+        </div>
+        <p class="pictureNote" id="pictureNote" hidden></p>
+        <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
+      </div>
       <div id="cutPicture" hidden>
         <canvas id="overview" class="overview" height="34"></canvas>
         <div class="zoomRow">
