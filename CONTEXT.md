@@ -137,3 +137,13 @@ PeakEnvelope are all SmartTrim keeps of it — never the decoded audio — becau
 threshold, ContentEvents) reads only these (ADR-0021). Deciding by voice is the exception: Silero needs the audio,
 so that decision reads its SourceTracks again.
 _Avoid_: levels array, RMS buffer, audio cache
+
+**Excerpt**:
+The sound of one SourceTrack over a stretch of the Recording, read so it can be listened to: both Channels, at the
+SourceTrack's own sample rate, at most three minutes. Unlike ChunkLevels it is never kept once it has been played.
+_Avoid_: clip, snippet, preview, sample
+
+**Join**:
+A place in what is played where a removed stretch was skipped and two kept stretches meet — where the Premiere
+sequence will have a cut. The window marks each one while it plays.
+_Avoid_: cut point, splice, seam, transition

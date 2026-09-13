@@ -38,6 +38,7 @@ import { allPresets, presetFromSliders } from "../app/presets.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
+import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Playback } from "../playback/playback.ts";
 import type { Answer, SmartTrimApi } from "../preload/api.ts";
 
 declare global {
@@ -86,6 +87,8 @@ const view = {
   overview: element<HTMLCanvasElement>("overview"),
   zoom: element<HTMLInputElement>("zoom"),
   zoomValue: element("zoomValue"),
+  skipRow: element("skipRow"),
+  skipRemoved: element<HTMLInputElement>("skipRemoved"),
   status: element("status"),
   result: element("result"),
 };
@@ -247,6 +250,8 @@ function drawSourceTracks(): void {
     }
     role.value = roleOf(session, index);
     role.addEventListener("change", () => {
+      // An ignored SourceTrack loses its row's waveform and with it the only button that could stop its sound.
+      if (role.value === "ignored" && playing?.position === index) stopPlaying();
       session = setSourceTrackRole(session, index, role.value as TrackRole);
       afterSettingChange();
       draw();
@@ -274,7 +279,17 @@ function drawSourceTracks(): void {
     if (!waveform) return;
     const holder = document.createElement("div");
     holder.className = "waveform";
-    holder.append(waveformCanvas(index));
+    // One SourceTrack plays at a time; its own button stops it, and the button of another row switches to that one.
+    const isPlaying = playing?.position === index;
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = isPlaying ? "play playing" : "play";
+    playButton.textContent = isPlaying ? "■" : fetchingFor === index ? "…" : "▶";
+    playButton.title = isPlaying
+      ? `Tonspur ${index + 1} anhalten`
+      : `Tonspur ${index + 1} im gezeigten Ausschnitt anhören (höchstens 3 Minuten)`;
+    playButton.addEventListener("click", () => void play(index));
+    holder.append(playButton, waveformCanvas(index));
     row.append(holder);
   });
   view.sourceTracksHint.replaceChildren();
@@ -544,6 +559,9 @@ const KEPT_WAVE = "#7fd6b4";
 const PLAIN_BAND = "#1c1f25";
 const PLAIN_WAVE = "#8b96a3";
 const REMOVED_WAVE = "#7a4046";
+/** Over a stretch the playing sound jumps across, so a Join is seen as it is heard. Neither green nor red. */
+const JOIN_MARK = "#e8b04a";
+const PLAYHEAD = "#e8eaed";
 
 /** Draws one canvas at the screen's own pixel density, and hands back its context and size in CSS pixels. */
 function canvasBrush(canvas: HTMLCanvasElement, cssHeight: number): { paint: CanvasRenderingContext2D; width: number } {
@@ -676,6 +694,25 @@ function drawWaveform(canvas: HTMLCanvasElement, waveform: SourceTrackWaveform):
     paint.fillStyle = !finished ? PLAIN_WAVE : (bands[band] as CutBand).kept ? KEPT_WAVE : REMOVED_WAVE;
     paint.fillRect(column, middle - half, 1, half * 2);
   }
+
+  // While this SourceTrack plays: a bar over every stretch the sound jumps across, and the playhead at the moment
+  // being heard, read off the clock the sound itself runs on (ADR-0022).
+  const now = playing;
+  if (!now || now.position !== waveform.position) return;
+  paint.fillStyle = JOIN_MARK;
+  for (const join of now.playback.joins) {
+    const from = xOf(join.removedFromSeconds);
+    const to = xOf(join.removedToSeconds);
+    if (to < 0 || from > width) continue;
+    paint.fillRect(from, 0, Math.max(to - from, 1), 3);
+    paint.fillRect(from, height - 3, Math.max(to - from, 1), 3);
+  }
+  const heard = recordingSecondsAt(now.playback, Math.max(now.context.currentTime - now.startedAt, 0));
+  const x = xOf(heard);
+  if (x >= 0 && x <= width) {
+    paint.fillStyle = PLAYHEAD;
+    paint.fillRect(x - 1, 0, 2, height);
+  }
 }
 
 /** Rebuilds one row per SourceTrack the analysis read, and draws them all. */
@@ -719,6 +756,8 @@ function drawWaveforms(): void {
   const span = zoom.toSeconds - zoom.fromSeconds;
   view.zoom.value = String(Math.round((Math.log(widest / span) / Math.log(widest / closest)) * 1000));
   view.zoomValue.textContent = duration(span);
+  // Before a cut there is nothing removed to skip, so the switch would promise something it cannot do.
+  view.skipRow.hidden = finished === null;
 
   for (const waveform of waveforms) {
     const canvas = waveformCanvases.get(waveform.position);
@@ -920,6 +959,122 @@ view.zoom.addEventListener("input", () => {
   showWindow(zoomedTo(zoom, seconds, seconds * (closest / seconds) ** along));
 });
 
+/* ── Playback ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The SourceTrack that is playing, if any — one at a time (ADR-0022). `startedAt` is the audio clock's time of the
+ * first sample, so the playhead is read off the clock the sound runs on rather than off a timer that drifts from it.
+ */
+let playing: {
+  position: number;
+  playback: Playback;
+  context: AudioContext;
+  source: AudioBufferSourceNode;
+  startedAt: number;
+} | null = null;
+/** The SourceTrack whose Excerpt is on its way, so its button says so and a second press cancels instead. */
+let fetchingFor: number | null = null;
+/** Counts presses, so an Excerpt arriving after the user pressed something else is dropped instead of played. */
+let playRequest = 0;
+let playheadFrame = 0;
+
+/** Stops the sound and forgets an Excerpt still on its way. */
+function stopPlaying(): void {
+  playRequest += 1;
+  fetchingFor = null;
+  cancelAnimationFrame(playheadFrame);
+  const was = playing;
+  playing = null;
+  if (!was) return;
+  was.source.onended = null;
+  was.source.stop();
+  void was.context.close();
+}
+
+/** Redraws the playing SourceTrack's waveform every frame, so the playhead moves. Only that one canvas. */
+function followPlayhead(): void {
+  const now = playing;
+  if (!now) return;
+  const waveform = waveforms.find((each) => each.position === now.position);
+  const canvas = waveformCanvases.get(now.position);
+  if (waveform && canvas?.isConnected) drawWaveform(canvas, waveform);
+  playheadFrame = requestAnimationFrame(followPlayhead);
+}
+
+/**
+ * Plays one SourceTrack over what the waveforms show — or the first three minutes of it, zoomed out further than
+ * that — skipping what the cut removes when the switch says so. Pressing the row that plays, or waits, stops it.
+ */
+async function play(position: number): Promise<void> {
+  const busyWith = playing?.position ?? fetchingFor;
+  stopPlaying();
+  const seconds = recordingSeconds();
+  if (busyWith === position || !seconds) {
+    draw();
+    return;
+  }
+
+  const request = playRequest;
+  const fromSeconds = zoom.fromSeconds;
+  const toSeconds = Math.min(zoom.toSeconds, fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
+  // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
+  const kept = finished?.keptRanges ?? null;
+  const skipping = view.skipRemoved.checked && kept !== null;
+  fetchingFor = position;
+  clearStatus();
+  draw();
+
+  const answer = await window.smarttrim.readExcerpt({ position, fromSeconds, toSeconds });
+  // Something else was pressed, or the Recording changed, while the Excerpt was on its way.
+  if (request !== playRequest) return;
+  fetchingFor = null;
+  const excerpt = show(answer, "Der Ton ließ sich nicht abspielen");
+  if (!excerpt) {
+    draw();
+    return;
+  }
+
+  let playback: Playback;
+  try {
+    playback = playbackOf(excerpt, kept ?? [], skipping);
+  } catch {
+    say("Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten.");
+    draw();
+    return;
+  }
+
+  const context = new AudioContext();
+  const frames = playback.samples.length / playback.channelCount;
+  const buffer = context.createBuffer(playback.channelCount, frames, playback.sampleRate);
+  for (let channel = 0; channel < playback.channelCount; channel += 1) {
+    const out = buffer.getChannelData(channel);
+    for (let frame = 0; frame < frames; frame += 1) {
+      out[frame] = (playback.samples[frame * playback.channelCount + channel] as number) / 32768;
+    }
+  }
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  source.onended = () => {
+    if (playing?.source !== source) return;
+    stopPlaying();
+    draw();
+  };
+  const startedAt = context.currentTime + 0.05;
+  source.start(startedAt);
+  playing = { position, playback, context, source, startedAt };
+  draw();
+  followPlayhead();
+}
+
+// Switching while it plays starts the same SourceTrack again the new way, rather than leaving the old sound running.
+view.skipRemoved.addEventListener("change", () => {
+  const position = playing?.position;
+  if (position === undefined) return;
+  stopPlaying();
+  void play(position);
+});
+
 /**
  * The white frame in the overview strip is dragged, not only clicked. Grabbing inside it keeps the spot you took
  * hold of; grabbing outside it jumps there first and then drags on. Either way the frame follows the pointer while
@@ -999,6 +1154,7 @@ view.sourceTracks.addEventListener(
 window.addEventListener("resize", () => drawWaveforms());
 
 view.chooseRecording.addEventListener("click", async () => {
+  stopPlaying();
   clearStatus();
   const recording = show(await window.smarttrim.chooseRecording(), "Die Aufnahme ließ sich nicht lesen");
   // undefined is a refusal, null means the user closed the dialog.
@@ -1030,6 +1186,7 @@ view.chooseRecording.addEventListener("click", async () => {
 });
 
 view.openProject.addEventListener("click", async () => {
+  stopPlaying();
   clearStatus();
   const opened = show(await window.smarttrim.openProject(), "Das Projekt ließ sich nicht öffnen");
   // undefined is a refusal, null means the user closed the dialog.
@@ -1058,6 +1215,7 @@ view.openProject.addEventListener("click", async () => {
 });
 
 view.cut.addEventListener("click", async () => {
+  stopPlaying();
   clearStatus();
   working = true;
   finished = null;

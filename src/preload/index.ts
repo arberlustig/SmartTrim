@@ -10,6 +10,7 @@ const api: SmartTrimApi = {
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
   scan: () => ipcRenderer.invoke("recording:scan"),
   readSourceTracks: (positions) => ipcRenderer.invoke("sourceTrack:read", positions),
+  readExcerpt: (request) => ipcRenderer.invoke("sourceTrack:excerpt", request),
   onReadProgress: (listen) => {
     ipcRenderer.on("sourceTrack:progress", (_event, progress: ReadProgress) => listen(progress));
   },

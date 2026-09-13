@@ -1,6 +1,7 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { Preset } from "../app/cutSession.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { CutSummary, PlanSettings, SourceTrackWaveform } from "../app/runCut.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
@@ -11,6 +12,13 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
  * IPC exception. `null` means the user closed the dialog.
  */
 export type Answer<Value> = { ok: true; value: Value } | { ok: false; message: string };
+
+/** Which SourceTrack to play, and over which stretch of the Recording (ADR-0022). */
+export interface ExcerptRequest {
+  position: number;
+  fromSeconds: number;
+  toSeconds: number;
+}
 
 /** How far reading the SourceTracks of a Recording has got. */
 export interface ReadProgress {
@@ -41,6 +49,11 @@ export interface SmartTrimApi {
    * for the rest of the Recording, so the cut below does not read it a second time (ADR-0020).
    */
   readSourceTracks(positions: readonly number[]): Promise<Answer<SourceTrackWaveform[]>>;
+  /**
+   * Reads one SourceTrack of the chosen Recording over a stretch of at most three minutes, both Channels at its own
+   * sample rate, for the window to play. Nothing of it is kept (ADR-0022).
+   */
+  readExcerpt(request: ExcerptRequest): Promise<Answer<Excerpt>>;
   /** Called as each SourceTrack finishes being read, so the window can say how far it has got. */
   onReadProgress(listen: (progress: ReadProgress) => void): void;
   /** Analyses the Recording and plans the cuts. The plan stays in the main process until it is saved. */

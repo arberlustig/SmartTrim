@@ -24,7 +24,8 @@ import type { Preset } from "../app/cutSession.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
-import type { Answer } from "../preload/api.ts";
+import type { Answer, ExcerptRequest } from "../preload/api.ts";
+import { readExcerpt, type Excerpt } from "../playback/readExcerpt.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
 import {
   openTrimProject,
@@ -177,6 +178,22 @@ function registerHandlers(window: BrowserWindow): void {
         for (const one of read) sourceTracksRead.set(one.position, one);
       }
       return waveformsRead(positions);
+    }),
+  );
+
+  /**
+   * Reads one SourceTrack of the chosen Recording over a stretch, for the window to play (ADR-0022). Nothing of it
+   * stays here: it is a few megabytes for the ear, read afresh for every press of a play button.
+   */
+  ipcMain.handle(
+    "sourceTrack:excerpt",
+    answering(async ({ position, fromSeconds, toSeconds }: ExcerptRequest): Promise<Excerpt> => {
+      if (!chosen) throw new Error("No Recording is chosen, so there is nothing to play.");
+      const readingFor = chosen;
+      const excerpt = await readExcerpt(readingFor, position, fromSeconds, toSeconds, (await analysisTools(window)).ffmpeg);
+      // Sound of the Recording that was open before would be played over the waveform of this one.
+      if (chosen !== readingFor) throw new Error("Es wurde eine andere Aufnahme gewählt.");
+      return excerpt;
     }),
   );
 

@@ -168,14 +168,43 @@
          own. A row with no role has none: SmartTrim never read that SourceTrack. */
       #sourceTracks .waveform {
         grid-column: 1 / -1;
+        display: flex;
+        gap: 8px;
+        align-items: center;
         padding: 4px 0 2px;
       }
       #sourceTracks .waveform canvas {
         display: block;
-        width: 100%;
+        flex: 1 1 0;
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 6px;
         cursor: grab;
+      }
+      #sourceTracks .waveform button.play {
+        flex: none;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border-radius: 50%;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #sourceTracks .waveform button.play.playing {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .skipRow {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 2px 0 4px;
+        color: var(--muted);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .skipRow[hidden] {
+        display: none;
       }
       #sourceTracks .waveform canvas.dragging {
         cursor: grabbing;
@@ -310,9 +339,13 @@
           <input id="zoom" type="range" />
           <output id="zoomValue"></output>
         </div>
+        <label class="skipRow" id="skipRow" hidden>
+          <input id="skipRemoved" type="checkbox" checked />
+          Beim Abspielen überspringen, was herausgeschnitten wird
+        </label>
         <p class="hint">
           Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
-          um woanders hinzuschauen.
+          um woanders hinzuschauen. ▶ spielt die Spur im gezeigten Ausschnitt ab, höchstens 3 Minuten.
         </p>
       </div>
       <div id="sourceTracks"></div>
