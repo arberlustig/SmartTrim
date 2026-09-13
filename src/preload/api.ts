@@ -13,6 +13,14 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
  */
 export type Answer<Value> = { ok: true; value: Value } | { ok: false; message: string };
 
+/**
+ * What the window is told about a file it opened, whether through a dialog or by dropping it. A project arrives with
+ * its CutSummary; its CutPlan stays in the main process like every other (ADR-0012).
+ */
+export type OpenedInWindow =
+  | { kind: "recording"; recording: RecordingInfo }
+  | { kind: "project"; project: TrimProject; summary: CutSummary };
+
 /** Which SourceTrack to play, and over which stretch of the Recording (ADR-0022). */
 export interface ExcerptRequest {
   position: number;
@@ -40,8 +48,12 @@ export interface SmartTrimApi {
   ensureTools(): Promise<Answer<null>>;
   /** Called while the first-run download runs. */
   onToolsProgress(listen: (progress: ToolsProgress) => void): void;
-  /** Opens the file dialog and probes what the user picked. */
-  chooseRecording(): Promise<Answer<RecordingInfo | null>>;
+  /** Opens the file dialog and opens what the user picked: a Recording, or a project picked under "Alle Dateien". */
+  chooseRecording(): Promise<Answer<OpenedInWindow | null>>;
+  /** Where a file dropped on the window lives on disk; empty for something dropped that is no file on disk. */
+  pathOf(file: File): string;
+  /** Opens one file by its path, as the Recording or the `.smarttrim` project it is. */
+  openFile(path: string): Promise<Answer<OpenedInWindow>>;
   /** Listens to a few slices of every SourceTrack of the chosen Recording, to find the ones carrying nothing. */
   scan(): Promise<Answer<SourceTrackScan[]>>;
   /**
@@ -80,7 +92,7 @@ export interface SmartTrimApi {
    */
   readProjectAudio(): Promise<Answer<SourceTrackWaveform[]>>;
   /** Opens a `.smarttrim` project, checking that the Recording it names is still the one it was cut from. */
-  openProject(): Promise<Answer<{ project: TrimProject; summary: CutSummary } | null>>;
+  openProject(): Promise<Answer<OpenedInWindow | null>>;
   /** The Presets the user saved themselves, read from their folder. Built-in Presets are not in here. */
   loadPresets(): Promise<Answer<readonly Preset[]>>;
   /** Saves a Preset under its name, replacing one of that name. Returns the user's own Presets as they now are. */

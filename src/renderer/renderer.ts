@@ -41,8 +41,10 @@ import { allPresets, presetFromSliders } from "../app/presets.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
+import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Playback } from "../playback/playback.ts";
-import type { Answer, SmartTrimApi } from "../preload/api.ts";
+import type { Answer, OpenedInWindow, SmartTrimApi } from "../preload/api.ts";
+import type { TrimProject } from "../project/trimProject.ts";
 
 declare global {
   interface Window {
@@ -99,6 +101,7 @@ const view = {
   heldList: element("heldList"),
   status: element("status"),
   result: element("result"),
+  dropOverlay: element("dropOverlay"),
 };
 
 // Said once, from the same number `readExcerpt` refuses by, so the hint cannot promise a length the app refuses.
@@ -1406,12 +1409,13 @@ view.sourceTracks.addEventListener(
 // The canvases are sized in percent, so their pixel width changes with the window and they have to be redrawn.
 window.addEventListener("resize", () => drawWaveforms());
 
-view.chooseRecording.addEventListener("click", async () => {
-  stopPlaying();
-  clearStatus();
-  const recording = show(await window.smarttrim.chooseRecording(), "Die Aufnahme ließ sich nicht lesen");
-  // undefined is a refusal, null means the user closed the dialog.
-  if (!recording) return;
+/** Puts whatever a button or a drop opened on screen. */
+async function showOpened(opened: OpenedInWindow): Promise<void> {
+  if (opened.kind === "recording") await showRecording(opened.recording);
+  else await showProject(opened.project, opened.summary);
+}
+
+async function showRecording(recording: RecordingInfo): Promise<void> {
   session = chooseRecording(session, recording);
   finished = null;
   // The waveforms and the read-ahead list belong to the Recording that was open before this one.
@@ -1438,16 +1442,11 @@ view.chooseRecording.addEventListener("click", async () => {
   await readWaveforms(
     scan.flatMap((sourceTrack, position) => (sourceTrack.carriesSound ? [position] : [])),
   );
-});
+}
 
-view.openProject.addEventListener("click", async () => {
-  stopPlaying();
-  clearStatus();
-  const opened = show(await window.smarttrim.openProject(), "Das Projekt ließ sich nicht öffnen");
-  // undefined is a refusal, null means the user closed the dialog.
-  if (!opened) return;
-  session = projectOpened(session, opened.project);
-  finished = opened.summary;
+async function showProject(project: TrimProject, summary: CutSummary): Promise<void> {
+  session = projectOpened(session, project);
+  finished = summary;
   waveforms = [];
   playheadSeconds = null;
   clearStatus();
@@ -1459,7 +1458,7 @@ view.openProject.addEventListener("click", async () => {
   const drawn = show(await window.smarttrim.readProjectAudio(), "Der Ton ließ sich nicht nachlesen");
   if (drawn) {
     waveforms = drawn;
-    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: opened.summary.recordingSeconds };
+    if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: summary.recordingSeconds };
     // What a threshold is decided from is back in memory, so moving it decides again instead of asking for a whole
     // new cut.
     // Not `cutFinished`: that would also claim the sliders as they stand now are what this cut was planned with,
@@ -1468,6 +1467,71 @@ view.openProject.addEventListener("click", async () => {
     if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
   }
   draw();
+}
+
+view.chooseRecording.addEventListener("click", async () => {
+  stopPlaying();
+  clearStatus();
+  const opened = show(await window.smarttrim.chooseRecording(), "Die Aufnahme ließ sich nicht lesen");
+  // undefined is a refusal, null means the user closed the dialog.
+  if (opened) await showOpened(opened);
+});
+
+view.openProject.addEventListener("click", async () => {
+  stopPlaying();
+  clearStatus();
+  const opened = show(await window.smarttrim.openProject(), "Das Projekt ließ sich nicht öffnen");
+  // undefined is a refusal, null means the user closed the dialog.
+  if (opened) await showOpened(opened);
+});
+
+/** Whether a drop may open something now: the same moments the two buttons above are enabled. */
+const mayOpen = () => !working && !preparing;
+const carriesFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+/** dragenter and dragleave fire for every element the pointer crosses, so only their balance says it has left. */
+let dragDepth = 0;
+
+window.addEventListener("dragenter", (event) => {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  view.dropOverlay.hidden = !mayOpen();
+});
+
+window.addEventListener("dragover", (event) => {
+  if (!carriesFiles(event)) return;
+  // Without this the drop below never fires and Chromium opens the file itself, in place of SmartTrim.
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = mayOpen() ? "copy" : "none";
+});
+
+window.addEventListener("dragleave", (event) => {
+  if (!carriesFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) view.dropOverlay.hidden = true;
+});
+
+window.addEventListener("drop", async (event) => {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  view.dropOverlay.hidden = true;
+  const files = [...(event.dataTransfer?.files ?? [])];
+  const [file] = files;
+  if (!file || !mayOpen()) return;
+  if (files.length > 1) {
+    say("Bitte nur eine Datei ablegen – mehrere auf einmal kommen mit den Tabs.");
+    return;
+  }
+  const path = window.smarttrim.pathOf(file);
+  if (!path) {
+    say("Das lässt sich nicht öffnen: Es ist keine Datei auf diesem Rechner.");
+    return;
+  }
+  stopPlaying();
+  clearStatus();
+  const opened = show(await window.smarttrim.openFile(path), "Die Datei ließ sich nicht öffnen");
+  if (opened) await showOpened(opened);
 });
 
 view.cut.addEventListener("click", async () => {

@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
@@ -21,19 +20,13 @@ import {
   type SourceTrackWaveform,
 } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
+import { openFile } from "../app/openFile.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
-import type { Answer, ExcerptRequest } from "../preload/api.ts";
+import type { Answer, ExcerptRequest, OpenedInWindow } from "../preload/api.ts";
 import { readExcerpt, type Excerpt } from "../playback/readExcerpt.ts";
-import { probeRecording } from "../probe/probeRecording.ts";
-import {
-  openTrimProject,
-  saveTrimProject,
-  trimProjectOf,
-  type SavedChoices,
-} from "../project/openTrimProject.ts";
-import type { TrimProject } from "../project/trimProject.ts";
+import { saveTrimProject, trimProjectOf, type SavedChoices } from "../project/openTrimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
 import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
@@ -118,9 +111,35 @@ function registerHandlers(window: BrowserWindow): void {
     }),
   );
 
+  /**
+   * Opens one file as whatever it is and makes it the one on screen. Every way into the window comes through here —
+   * both dialogs and a drop — so none of them can forget to let go of what belonged to the file open before.
+   */
+  async function openInWindow(path: string): Promise<OpenedInWindow> {
+    // Probing reads only the stream descriptions, so this stays instant even on a 20 GB Recording.
+    const opened = await openFile(path, (await analysisTools(window)).ffprobe);
+    // What was read of whatever was open before belongs to that Recording, not to this one.
+    sourceTracksRead.clear();
+    if (opened.kind === "recording") {
+      lastCut = null;
+      chosen = opened.recording;
+      return opened;
+    }
+    lastCut = opened.cut;
+    chosen = opened.cut.recording;
+    // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
+    // found, never the audio (ADR-0016), so this is the only record of what was listened to.
+    reopenedVoice = opened.project.listenTo;
+    reopenedSourceTracks = [...new Set([...reopenedVoice, ...(opened.project.contentSourceTracks ?? [])])];
+    return { kind: "project", project: opened.project, summary: opened.cut.summary };
+  }
+
+  // A file dropped on the window: the window only knows its path.
+  ipcMain.handle("file:open", answering(openInWindow));
+
   ipcMain.handle(
     "recording:choose",
-    answering(async (): Promise<RecordingInfo | null> => {
+    answering(async (): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
         title: "Aufnahme wählen",
         properties: ["openFile"],
@@ -132,13 +151,7 @@ function registerHandlers(window: BrowserWindow): void {
       });
       const chosenPath = filePaths[0];
       if (canceled || !chosenPath) return null;
-      // Probing reads only the stream descriptions, so this stays instant even on a 20 GB Recording.
-      const recording = await probeRecording(chosenPath, (await analysisTools(window)).ffprobe);
-      lastCut = null;
-      chosen = recording;
-      // What was read of the old Recording says nothing about this one.
-      sourceTracksRead.clear();
-      return recording;
+      return openInWindow(chosenPath);
     }),
   );
 
@@ -262,7 +275,7 @@ function registerHandlers(window: BrowserWindow): void {
 
   ipcMain.handle(
     "project:open",
-    answering(async (): Promise<{ project: TrimProject; summary: CutSummary } | null> => {
+    answering(async (): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
         title: "SmartTrim-Projekt öffnen",
         properties: ["openFile"],
@@ -270,18 +283,8 @@ function registerHandlers(window: BrowserWindow): void {
       });
       const chosenPath = filePaths[0];
       if (canceled || !chosenPath) return null;
-      const text = await readFile(chosenPath, "utf8");
       // Only the stream descriptions are read, to make sure it is still the Recording the project was cut from.
-      const opened = await openTrimProject(text, (await analysisTools(window)).ffprobe);
-      lastCut = opened.cut;
-      chosen = opened.cut.recording;
-      // What was read of whatever was open before belongs to that Recording, not to this project's one.
-      sourceTracksRead.clear();
-      // Which SourceTracks to read again for the waveform, once the window asks. A project holds what the analysis
-      // found, never the audio (ADR-0016), so this is the only record of what was listened to.
-      reopenedVoice = opened.project.listenTo;
-      reopenedSourceTracks = [...new Set([...reopenedVoice, ...(opened.project.contentSourceTracks ?? [])])];
-      return { project: opened.project, summary: opened.cut.summary };
+      return openInWindow(chosenPath);
     }),
   );
 
@@ -391,6 +394,11 @@ function createWindow(): void {
     },
   });
   window.once("ready-to-show", () => window.show());
+  // Chromium's answer to a file or link dropped where the window does not take it is to open that instead of
+  // SmartTrim. The window takes file drops itself; this catches anything that still slips past. A reload keeps the URL.
+  window.webContents.on("will-navigate", (details) => {
+    if (details.url !== window.webContents.getURL()) details.preventDefault();
+  });
   window.setMenuBarVisibility(false);
   registerHandlers(window);
 

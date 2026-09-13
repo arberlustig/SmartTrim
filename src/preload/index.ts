@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { ReadProgress, SmartTrimApi, ToolsProgress } from "./api.ts";
 
 // The window runs without Node (contextIsolation), so this is the whole surface it can reach.
@@ -8,6 +8,9 @@ const api: SmartTrimApi = {
     ipcRenderer.on("tools:progress", (_event, progress: ToolsProgress) => listen(progress));
   },
   chooseRecording: () => ipcRenderer.invoke("recording:choose"),
+  // A dropped File no longer carries its path (Electron 32 removed File.path); only this call can still ask for it.
+  pathOf: (file) => webUtils.getPathForFile(file),
+  openFile: (path) => ipcRenderer.invoke("file:open", path),
   scan: () => ipcRenderer.invoke("recording:scan"),
   readSourceTracks: (positions) => ipcRenderer.invoke("sourceTrack:read", positions),
   readExcerpt: (request) => ipcRenderer.invoke("sourceTrack:excerpt", request),

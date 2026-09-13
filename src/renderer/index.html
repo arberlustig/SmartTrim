@@ -359,6 +359,32 @@
         color: var(--muted);
         font-variant-numeric: tabular-nums;
       }
+      /* Lies over the whole window while a file is dragged across it. It takes no pointer events, so the drag keeps
+         reaching the window underneath, which is where the drop is handled. */
+      .dropOverlay {
+        position: fixed;
+        inset: 10px;
+        z-index: 10;
+        display: grid;
+        place-content: center;
+        gap: 4px;
+        border: 2px dashed var(--accent);
+        border-radius: 12px;
+        background: rgba(20, 22, 26, 0.88);
+        text-align: center;
+        pointer-events: none;
+      }
+      .dropOverlay[hidden] {
+        display: none;
+      }
+      .dropOverlay strong {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--accent);
+      }
+      .dropOverlay span {
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -467,6 +493,11 @@
     </div>
 
     <div id="result" hidden></div>
+
+    <div class="dropOverlay" id="dropOverlay" hidden>
+      <strong>Hier ablegen</strong>
+      <span>Eine Aufnahme oder ein SmartTrim-Projekt</span>
+    </div>
 
     <script type="module" src="./renderer.ts"></script>
   </body>

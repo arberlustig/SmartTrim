@@ -6,6 +6,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["electron-vite", "dev", "--rendererOnly"],
       "port": 5173
+    },
+    {
+      "name": "electron-debug",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["electron-vite", "dev", "--remoteDebuggingPort", "9222"],
+      "port": 5173
     }
   ]
 }
