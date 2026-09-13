@@ -1,30 +1,15 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { runCut } from "../app/runCut";
+import { buildVoiceRecording } from "../testing/voiceRecording";
 import { openTrimProject, saveTrimProject, trimProjectOf } from "./openTrimProject";
 import { trimProjectText } from "./trimProject";
 
 const vendor = (name: string) => fileURLToPath(new URL(`../../vendor/${name}`, import.meta.url));
 const tools = { ffprobe: vendor("ffprobe.exe"), ffmpeg: vendor("ffmpeg.exe"), sileroModel: vendor("silero_vad.onnx") };
-const speechFixture = fileURLToPath(new URL("../../fixtures/speech/synthetic-speech-16k.pcm", import.meta.url));
-
-const FRAMES_PER_SECOND = 30;
-
-/** Builds a Recording of `frames` frames with the synthesized voice as its only SourceTrack. */
-function buildRecording(path: string, frames: number): void {
-  execFileSync(vendor("ffmpeg.exe"), [
-    ...["-v", "error", "-y"],
-    ...["-f", "lavfi", "-i", `testsrc2=size=320x240:rate=${FRAMES_PER_SECOND}`],
-    ...["-f", "s16le", "-ar", "16000", "-ac", "1", "-i", speechFixture],
-    ...["-filter_complex", "[1:a]aresample=48000,aformat=channel_layouts=stereo[voice]"],
-    ...["-map", "0:v", "-map", "[voice]", "-frames:v", String(frames)],
-    ...["-c:v", "mpeg4", "-c:a", "aac", "-b:a", "128k", path],
-  ]);
-}
 
 describe("openTrimProject", () => {
   let workDir: string;
@@ -40,7 +25,7 @@ describe("openTrimProject", () => {
   beforeAll(() => {
     workDir = mkdtempSync(join(tmpdir(), "smarttrim-project-"));
     recordingPath = join(workDir, "voice.mp4");
-    buildRecording(recordingPath, 362);
+    buildVoiceRecording(recordingPath, 362);
   });
   afterAll(() => {
     rmSync(workDir, { recursive: true, force: true });
@@ -85,7 +70,7 @@ describe("openTrimProject", () => {
     // Half as long: what happens when a Recording is re-exported or trimmed after the session. Written next to the
     // original rather than over it, so the other tests still have theirs.
     const shorterPath = join(workDir, "shorter.mp4");
-    buildRecording(shorterPath, 181);
+    buildVoiceRecording(shorterPath, 181);
     const shorter = saved.replace(JSON.stringify(recordingPath).slice(1, -1), JSON.stringify(shorterPath).slice(1, -1));
 
     await expect(openTrimProject(shorter, tools.ffprobe)).rejects.toThrow(/no longer the Recording/);

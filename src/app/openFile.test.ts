@@ -1,29 +1,16 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { saveTrimProject, trimProjectOf } from "../project/openTrimProject";
+import { buildVoiceRecording } from "../testing/voiceRecording";
 import { openFile } from "./openFile";
 import { runCut } from "./runCut";
 
 // These tests run the real binaries in vendor/, which is git-ignored and must be present.
 const vendor = (name: string) => fileURLToPath(new URL(`../../vendor/${name}`, import.meta.url));
 const tools = { ffprobe: vendor("ffprobe.exe"), ffmpeg: vendor("ffmpeg.exe"), sileroModel: vendor("silero_vad.onnx") };
-const speechFixture = fileURLToPath(new URL("../../fixtures/speech/synthetic-speech-16k.pcm", import.meta.url));
-
-/** Builds a Recording of 362 frames at 30 fps with the synthesized voice as its only, stereo SourceTrack. */
-function buildRecording(path: string): void {
-  execFileSync(vendor("ffmpeg.exe"), [
-    ...["-v", "error", "-y"],
-    ...["-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30"],
-    ...["-f", "s16le", "-ar", "16000", "-ac", "1", "-i", speechFixture],
-    ...["-filter_complex", "[1:a]aresample=48000,aformat=channel_layouts=stereo[voice]"],
-    ...["-map", "0:v", "-map", "[voice]", "-frames:v", "362"],
-    ...["-c:v", "mpeg4", "-c:a", "aac", "-b:a", "128k", path],
-  ]);
-}
 
 // A file dropped on the window arrives as nothing but a path; what it is decides how it opens.
 describe("openFile", () => {
@@ -33,7 +20,8 @@ describe("openFile", () => {
   beforeAll(() => {
     workDir = mkdtempSync(join(tmpdir(), "smarttrim-open-"));
     recordingPath = join(workDir, "voice.mp4");
-    buildRecording(recordingPath);
+    // 362 frames at 30 fps, one stereo SourceTrack: the values the first test expects.
+    buildVoiceRecording(recordingPath, 362);
   });
   afterAll(() => {
     rmSync(workDir, { recursive: true, force: true });

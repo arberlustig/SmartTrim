@@ -177,6 +177,19 @@ export function chooseRecording(
 }
 
 /**
+ * What a scan found, arriving after its Recording is already on screen. The rows are shown while the slices are
+ * measured, so only the scan's own consequences follow: SourceTracks it found nothing on are hidden and leave the
+ * export. Roles and ticks the user set meanwhile stay as they are.
+ */
+export function scanFinished(session: CutSession, scan: readonly SourceTrackScan[]): CutSession {
+  return {
+    ...session,
+    scan,
+    exportSourceTracks: session.exportSourceTracks.filter((position) => scan[position]?.carriesSound !== false),
+  };
+}
+
+/**
  * The SourceTracks the window draws, by position. EmptyTracks are left out (CONTEXT.md) — but only where a scan
  * actually looked: without one, nothing is known and nothing may be hidden.
  */

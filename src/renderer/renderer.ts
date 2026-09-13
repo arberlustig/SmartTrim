@@ -27,6 +27,7 @@ import {
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   revealEmptySourceTracks,
+  scanFinished,
   setEventLeadSeconds,
   setEventTailSeconds,
   setSourceTrackRole,
@@ -878,8 +879,17 @@ async function readWaveforms(ahead: readonly number[] = []): Promise<void> {
   reading = true;
   readingCount = { done: 0, total: missing.length };
   drawReading();
-  const drawn = show(await window.smarttrim.readSourceTracks(missing), "Die Tonspur ließ sich nicht lesen");
+  const shownThen = filesShown;
+  const answer = await window.smarttrim.readSourceTracks(missing);
   reading = false;
+  if (shownThen !== filesShown) {
+    // This read belonged to the file open before, so its refusal is no error. `readAhead` already lists what the file
+    // now on screen needs; its read, held back while this one ran, starts here instead of being lost.
+    if (view.status.textContent?.startsWith("Liest den Ton")) clearStatus();
+    await readWaveforms();
+    return;
+  }
+  const drawn = show(answer, "Die Tonspur ließ sich nicht lesen");
   if (!drawn) {
     // A refusal leaves `missing` exactly as it was, so trying again would ask for the same thing for ever — one
     // ffmpeg on a 23 GB file per turn. The user retries by giving a role again or choosing the Recording again.
@@ -1409,8 +1419,16 @@ view.sourceTracks.addEventListener(
 // The canvases are sized in percent, so their pixel width changes with the window and they have to be redrawn.
 window.addEventListener("resize", () => drawWaveforms());
 
+/**
+ * How many files have been put on screen. Opening one takes seconds of scanning and reading after it appears, and
+ * another can be opened meanwhile; an answer asked for under an older count belongs to a file no longer shown and is
+ * dropped without a word, since the user switched on purpose.
+ */
+let filesShown = 0;
+
 /** Puts whatever a button or a drop opened on screen. */
 async function showOpened(opened: OpenedInWindow): Promise<void> {
+  filesShown += 1;
   if (opened.kind === "recording") await showRecording(opened.recording);
   else await showProject(opened.project, opened.summary);
 }
@@ -1428,9 +1446,14 @@ async function showRecording(recording: RecordingInfo): Promise<void> {
 
   // The slices take a few seconds on a long Recording, so the Recording is on screen before they are measured.
   view.status.textContent = "Prüft die Tonspuren …";
-  const scan = show(await window.smarttrim.scan(), "Die Tonspuren ließen sich nicht prüfen");
+  const shownThen = filesShown;
+  const answer = await window.smarttrim.scan();
+  // Another file was opened while the slices were measured: this scan describes the one before it.
+  if (shownThen !== filesShown) return;
+  const scan = show(answer, "Die Tonspuren ließen sich nicht prüfen");
   if (scan) {
-    session = chooseRecording(session, recording, scan);
+    // Not `chooseRecording` again: the rows were on screen during the scan, and a role given meanwhile is the user's.
+    session = scanFinished(session, scan);
     clearStatus();
   }
   draw();
@@ -1455,7 +1478,12 @@ async function showProject(project: TrimProject, summary: CutSummary): Promise<v
   // The project holds what the analysis found, not the audio, so the waveform has to be read again. It runs in the
   // background: the sliders and the numbers are already usable, and the waveform appears when it arrives.
   view.status.textContent = "Liest den Ton für die Wellenform …";
-  const drawn = show(await window.smarttrim.readProjectAudio(), "Der Ton ließ sich nicht nachlesen");
+  const shownThen = filesShown;
+  const answer = await window.smarttrim.readProjectAudio();
+  // Another file was opened meanwhile. The main process refuses this read, and showing that in red would call the
+  // user's own switch an error.
+  if (shownThen !== filesShown) return;
+  const drawn = show(answer, "Der Ton ließ sich nicht nachlesen");
   if (drawn) {
     waveforms = drawn;
     if (zoom.toSeconds <= 1) zoom = { fromSeconds: 0, toSeconds: summary.recordingSeconds };
@@ -1469,21 +1497,20 @@ async function showProject(project: TrimProject, summary: CutSummary): Promise<v
   draw();
 }
 
-view.chooseRecording.addEventListener("click", async () => {
+/**
+ * The one way a file reaches the screen, whether picked in a dialog or dropped. The refusal names no kind of file:
+ * either dialog can open both kinds, and nothing is known about a file before it has opened.
+ */
+async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>): Promise<void> {
   stopPlaying();
   clearStatus();
-  const opened = show(await window.smarttrim.chooseRecording(), "Die Aufnahme ließ sich nicht lesen");
+  const opened = show(await opening(), "Die Datei ließ sich nicht öffnen");
   // undefined is a refusal, null means the user closed the dialog.
   if (opened) await showOpened(opened);
-});
+}
 
-view.openProject.addEventListener("click", async () => {
-  stopPlaying();
-  clearStatus();
-  const opened = show(await window.smarttrim.openProject(), "Das Projekt ließ sich nicht öffnen");
-  // undefined is a refusal, null means the user closed the dialog.
-  if (opened) await showOpened(opened);
-});
+view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
+view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
 
 /** Whether a drop may open something now: the same moments the two buttons above are enabled. */
 const mayOpen = () => !working && !preparing;
@@ -1528,10 +1555,15 @@ window.addEventListener("drop", async (event) => {
     say("Das lässt sich nicht öffnen: Es ist keine Datei auf diesem Rechner.");
     return;
   }
-  stopPlaying();
-  clearStatus();
-  const opened = show(await window.smarttrim.openFile(path), "Die Datei ließ sich nicht öffnen");
-  if (opened) await showOpened(opened);
+  await openAndShow(() => window.smarttrim.openFile(path));
+});
+
+// A drag over the window delivers no pointer events, so one arriving means no drag is going on. Should a leave ever be
+// missed (the DevTools protocol's cancel sends none), the overlay goes as soon as the pointer moves again.
+window.addEventListener("pointermove", () => {
+  if (view.dropOverlay.hidden) return;
+  dragDepth = 0;
+  view.dropOverlay.hidden = true;
 });
 
 view.cut.addEventListener("click", async () => {

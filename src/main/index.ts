@@ -1,4 +1,4 @@
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
 import {
@@ -160,7 +160,11 @@ function registerHandlers(window: BrowserWindow): void {
     "recording:scan",
     answering(async (): Promise<SourceTrackScan[]> => {
       if (!chosen) throw new Error("No Recording is chosen, so there are no SourceTracks to listen to.");
-      return scanSourceTracks(chosen, (await analysisTools(window)).ffmpeg);
+      const scanning = chosen;
+      const scan = await scanSourceTracks(scanning, (await analysisTools(window)).ffmpeg);
+      // Another Recording may have been opened while the slices were measured; this scan describes the one before.
+      if (chosen !== scanning) throw new Error("Es wurde eine andere Aufnahme gewählt.");
+      return scan;
     }),
   );
 
@@ -214,11 +218,14 @@ function registerHandlers(window: BrowserWindow): void {
     "cut:run",
     answering(async (request: AnalysisRequest): Promise<CutSummary> => {
       lastCut = null;
+      // What was read belongs to `chosen`, and is matched to a request by position alone. A request naming any other
+      // file reads its own, or one Recording would be cut from another's levels.
+      const readForThis = chosen !== null && resolve(chosen.path) === resolve(request.recordingPath);
       // Whatever the waveforms already read is handed over, so the Recording is read once and not twice.
-      const result = await runCut(request, await analysisTools(window), [...sourceTracksRead.values()]);
+      const result = await runCut(request, await analysisTools(window), readForThis ? [...sourceTracksRead.values()] : []);
       lastCut = result;
       // An analysis may have read more SourceTracks than the waveforms did; keep those too.
-      for (const read of result.read) {
+      for (const read of readForThis ? result.read : []) {
         if (!sourceTracksRead.has(read.position)) sourceTracksRead.set(read.position, read);
       }
       return result.summary;

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +6,7 @@ import { DOMParser } from "@xmldom/xmldom";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { CutPlan } from "../cutting/planCuts";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
+import { buildVoiceRecording } from "../testing/voiceRecording";
 import { redecideCut, replanCut, runCut, saveCutPlan, summariseCutPlan } from "./runCut";
 
 // The real binaries in vendor/, which is git-ignored and must be present.
@@ -68,14 +68,7 @@ describe("runCut", () => {
   beforeAll(() => {
     workDir = mkdtempSync(join(tmpdir(), "smarttrim-runcut-"));
     recordingPath = join(workDir, "voice.mp4");
-    execFileSync(vendor("ffmpeg.exe"), [
-      ...["-v", "error"],
-      ...["-f", "lavfi", "-i", `testsrc2=size=320x240:rate=${FRAMES_PER_SECOND}`],
-      ...["-f", "s16le", "-ar", "16000", "-ac", "1", "-i", speechFixture("synthetic-speech-16k.pcm")],
-      ...["-filter_complex", "[1:a]aresample=48000,aformat=channel_layouts=stereo[voice]"],
-      ...["-map", "0:v", "-map", "[voice]", "-frames:v", "362"],
-      ...["-c:v", "mpeg4", "-c:a", "aac", "-b:a", "128k", recordingPath],
-    ]);
+    buildVoiceRecording(recordingPath, 362);
   });
   afterAll(() => {
     rmSync(workDir, { recursive: true, force: true });

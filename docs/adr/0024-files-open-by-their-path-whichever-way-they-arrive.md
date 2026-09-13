@@ -34,6 +34,35 @@ three.
   their balance to know when the drag has left. The overlay itself takes no pointer events, or it would produce its
   own pairs.
 
+## What a review found
+
+A review on 2026-09-13 found nine points, all fixed the same day. Most were older than dropping, but dropping turns
+opening a second file while the first is still being scanned or read into an everyday move.
+
+- **A late scan could put the previous Recording back on screen**, and Schneiden would then have cut that Recording
+  from the other one's levels. Every answer that arrives after a file appeared — the scan, reading ahead, a project's
+  audio — is now dropped when another file has been put on screen since (`filesShown` in the window). `recording:scan`
+  refuses like the reads already did, and `cut:run` hands over what was read only when the request names the
+  Recording it was read from: matched by position alone, it fitted any file.
+- **The new Recording's read-ahead was lost**: the old read's refusal cleared the list the new Recording had just
+  set. That read now starts as soon as the old one returns.
+- **A role given during the scan was wiped**, because the scan's answer ran `chooseRecording` a second time.
+  `scanFinished` in `cutSession.ts` only hides the EmptyTracks it found and takes them out of the export.
+- **Switching was reported in red** ("Es wurde eine andere Aufnahme gewählt.") and blocked the new read's progress line.
+- **Refusals named the wrong kind of file**, since either dialog now opens both kinds. All three ways go through one
+  `openAndShow` and say "Die Datei ließ sich nicht öffnen".
+- **A missed `dragleave` would have left the overlay up.** A drag over the window delivers no pointer events, so the
+  next pointer move takes the overlay away.
+- The voice Recording several tests generate is written once, by `src/testing/voiceRecording.ts`.
+
+Checked over CDP on the built app (`electron.exe . --remote-debugging-port=9223`, because a dev server held port
+5173): the 25-minute capture dropped while the long Recording's SourceTracks were being read gave no red message, kept the 25-minute capture on screen and drew a role
+given to the 25-minute capture at once, without reading; the 25-minute capture dropped while a project read its audio gave no red message; a pointer move
+after a cancelled drag hid the overlay. the long Recording's scan finished before a role could be set during it, so that case rests
+on the test in `cutSession.test.ts`. The owner confirmed with a real mouse the same day that the overlay stays up
+while a file is moved about over the window (so a real drag sends no pointer moves), and that dropping the 25-minute capture while
+the long Recording was being read gave no red message, kept the 25-minute capture on screen and drew a role given to the 25-minute capture at once.
+
 ## Tested, and not
 
 - `src/app/openFile.test.ts`, with the real ffprobe on a generated Recording: a video opens as a Recording, a project

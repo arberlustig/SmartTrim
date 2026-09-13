@@ -15,6 +15,7 @@ import {
   planSettingsFrom,
   redoNeeded,
   revealEmptySourceTracks,
+  scanFinished,
   setMarginSeconds,
   setMinimumDeadZoneSeconds,
   setThresholdDbfs,
@@ -228,6 +229,20 @@ describe("cutSession", () => {
     const session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
 
     expect(session.exportSourceTracks).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // The rows are on screen before the scan has listened to its slices, which takes seconds on a long Recording. A
+  // role given or an export tick taken away in that time is the user's; the scan only adds what it found.
+  test("a scan arriving after a role was given keeps the role and drops only the empty SourceTracks from export", () => {
+    let session = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6));
+    session = toggleExportSourceTrack(setSourceTrackRole(session, 4, "voice"), 0);
+
+    const scannedNow = scanFinished(session, scanned([true, false, true, false, true, true]));
+
+    expect(scannedNow.listenTo).toEqual([4]);
+    expect(visibleSourceTracks(scannedNow)).toEqual([0, 2, 4, 5]);
+    // SourceTrack 1 stays unticked as the user left it; 2 and 4 go the way a scan at choosing would have sent them.
+    expect(scannedNow.exportSourceTracks).toEqual([2, 4, 5]);
   });
 
   // ADR-0004: the Recording is read once. Luft and Pause only decide how the cuts are planned around what was
