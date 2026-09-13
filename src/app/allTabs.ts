@@ -71,14 +71,14 @@ export function settingsCopied(
   const contentSourceTracks = [...from.contentSourceTracks];
   // A SourceTrack with a role decides what is kept, so it must not stay hidden as an EmptyTrack in this Tab.
   const roleOnHidden = [...listenTo, ...contentSourceTracks].some((position) => to.scan?.[position]?.carriesSound === false);
+  const emptySourceTracksShown = to.emptySourceTracksShown || roleOnHidden;
+  // A tick only comes over where this Tab shows the SourceTrack: one still hidden as an EmptyTrack would reach the
+  // Premiere sequence with a tick nobody can see (ADR-0014).
+  const exportSourceTracks = from.exportSourceTracks.filter(
+    (position) => emptySourceTracksShown || to.scan?.[position]?.carriesSound !== false,
+  );
   return {
-    session: {
-      ...sliders,
-      listenTo,
-      contentSourceTracks,
-      exportSourceTracks: [...from.exportSourceTracks],
-      emptySourceTracksShown: to.emptySourceTracksShown || roleOnHidden,
-    },
+    session: { ...sliders, listenTo, contentSourceTracks, exportSourceTracks, emptySourceTracksShown },
     rolesLeftOut: false,
   };
 }

@@ -105,8 +105,9 @@ To remove a DeadZone. Note that in Premiere "cut" means splitting a clip *withou
 
 **Tab**:
 One Recording open in the window, with everything the window keeps about it: its CutSession, its cut, what was read
-of its SourceTracks, its Playhead. Nothing passes from one Tab to another, a Recording is open in at most one Tab, and
-Tabs are not restored when SmartTrim starts again (ADR-0025).
+of its SourceTracks, its Playhead. Nothing passes from one Tab to another unless the user takes settings over ("Für
+alle übernehmen", ADR-0026) — held stretches never —, a Recording is open in at most one Tab, and Tabs are not restored
+when SmartTrim starts again (ADR-0025).
 _Avoid_: document, workspace, session, window
 
 **CutSession**:

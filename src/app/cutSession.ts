@@ -380,11 +380,13 @@ export function cutFinished(session: CutSession): CutSession {
 }
 
 /**
- * After a replan or a new decision from the audio already in memory: the plan caught up with the settings. Neither
- * decodes anything, so whether the audio is in memory is left exactly as it was.
+ * After a replan or a new decision from the audio already in memory: the plan caught up with the settings it was
+ * asked for, `askedWith` — by default the settings as they stand. When the sliders moved on while it ran, the plan
+ * belongs to where they were, so `redoNeeded` still asks for the next one. Neither decodes anything, so whether the
+ * audio is in memory is left exactly as it was.
  */
-export function planFinished(session: CutSession): CutSession {
-  return { ...session, plannedWith: settingsNow(session) };
+export function planFinished(session: CutSession, askedWith: CutSession = session): CutSession {
+  return { ...session, plannedWith: settingsNow(askedWith) };
 }
 
 /**

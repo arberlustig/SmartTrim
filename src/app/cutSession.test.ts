@@ -326,6 +326,17 @@ describe("cutSession", () => {
     expect(redoNeeded(setThresholdDbfs(replanned, -45))).toBe("redecide");
   });
 
+  // A slider pulled back while its replan runs: the plan that arrives is for where the slider was, not where it is, and
+  // saved as it stands it would put an edit into the Premiere file that the sliders no longer describe.
+  test("a plan that arrives for settings the sliders have since left still needs planning again", () => {
+    const cut = cutFinished(setSourceTrackRole(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\obs.mp4`, 6)), 4, "voice"));
+    const askedWith = setMarginSeconds(cut, 0.3);
+    const pulledBack = setMarginSeconds(askedWith, 0.05);
+
+    expect(redoNeeded(planFinished(pulledBack, askedWith))).toBe("replan");
+    expect(redoNeeded(planFinished(askedWith, askedWith))).toBe("nothing");
+  });
+
   // Saving has to describe the cut that is on screen: the SourceTracks it listened to and the settings it was made
   // with, plus the export ticks, which the file remembers even though they had no say in the plan (ADR-0014).
   test("what gets saved is what the cut on screen was made of", () => {

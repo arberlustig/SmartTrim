@@ -19,8 +19,8 @@ cutting every Tab at once, a video preview). What was agreed:
   owner chose sequential over parallel.
 - **Tabs are not restored** when SmartTrim starts again.
 - Proposed with the seams and not objected to: SmartTrim's own `.xml` files inside a dropped folder are passed over
-  without a word — once "Alle schneiden" writes one next to every Recording, a folder dropped again would otherwise
-  list a refusal per Recording — and other Tabs stay usable while one cuts.
+  without a word — once "Alle Premiere-Dateien speichern" writes one next to every Recording (ADR-0026), a folder
+  dropped again would otherwise list a refusal per Recording — and other Tabs stay usable while one cuts.
 
 ## The main process keeps each Tab apart
 
@@ -104,8 +104,8 @@ likely opened behind the window or on another screen — and SmartTrim's own dia
 waiting for it. The owner said a save dialog was not needed there at all. So `saveProject` in the TabStore writes
 without asking: back into the project the Tab was opened from or last saved to (`projectPath`, set by opening a project
 and by every save), else beside the Recording as `Name.smarttrim` — or `Name (2).smarttrim` and on, when a file of that
-name is already there (`freePathBeside`), so an older project nobody opened is never written over. That is the rule
-agreed for "Alle schneiden" as well. Where it landed is reported in the box under the buttons, since the Tab is gone.
+name is already there (`freePathBeside`), so an older project nobody opened is never written over. "Alle
+Premiere-Dateien speichern" names its files by the same rule (ADR-0026). Where it landed is reported in the box under the buttons, since the Tab is gone.
 "Projekt speichern" under a finished cut followed the same day: its save dialog did not come into view for the owner
 either ("nicht schlimm"), which left the button disabled for good, so it saves the same way and says where in the
 status line. No project save dialog is left; the Premiere save dialog, which the owner has used, is unchanged.

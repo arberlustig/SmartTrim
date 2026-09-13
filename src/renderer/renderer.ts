@@ -176,9 +176,13 @@ interface OpenTab extends Mutable<TabWork> {
   readingCount: { done: number; total: number };
   /** Waiting for the sliders to come to rest, so one drag is one job and not fifty. */
   redoTimer: ReturnType<typeof setTimeout> | undefined;
-  redoing: boolean;
-  /** Passed over by the last "Alle schneiden" or "Alle Premiere-Dateien speichern"; the strip marks it until it is cut. */
-  skipped: boolean;
+  /** The replan or new decision on its way to the main process, so a cut or a save can let it arrive first. */
+  redoing: Promise<void> | null;
+  /**
+   * Which action on all Tabs last passed this Tab over. The strip marks it for as long as the reason still holds
+   * (`stillPassedOver`), so setting what was missing takes the mark away without another run.
+   */
+  skippedBy: "cutAll" | "saveAll" | null;
 }
 
 /** The open Tabs, in the order of the strip. */
@@ -212,8 +216,8 @@ interface OpenNote {
 /** What opening the last files had to say. Stays until the next opening or until dismissed. */
 let openNotes: OpenNote[] = [];
 /**
- * A heading of its own for notes that are not about opening files — what "Alle schneiden" did. It belongs to the list
- * it was written for and lapses as soon as anything else puts its own notes up.
+ * A heading of its own for notes that are not about opening files — what an action on all Tabs did. It belongs to the
+ * list it was written for (compared by identity) and lapses as soon as anything else puts its own notes up.
  */
 let notesHeading: { notes: OpenNote[]; text: string } | null = null;
 /** The status line while no Tab is open — the first-run download, say. */
@@ -320,6 +324,16 @@ function fileName(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
 
+/** The folder a file lies in, the way the notes name it. */
+function folderOf(path: string): string {
+  return path.slice(0, path.length - fileName(path).length - 1);
+}
+
+/** Whether an action on all Tabs runs or any Tab is being cut: then nothing may start that cuts or changes a Tab. */
+function allTabsBusy(): boolean {
+  return cuttingAll !== null || savingAll !== null || tabs.some((each) => each.working);
+}
+
 /* ── Drawing the Tab on screen ─────────────────────────────────────────────────────────────────────────────── */
 
 /** The strip of Tabs, the question before closing one, and what opening the last files had to say. */
@@ -329,7 +343,7 @@ function drawTabs(): void {
     ...tabs.map((tab) => {
       const name = fileName(tab.session.recording?.path ?? "");
       const item = document.createElement("div");
-      item.className = ["tab", tab.id === viewedId ? "viewed" : "", tab.skipped ? "skipped" : ""].filter(Boolean).join(" ");
+      item.className = ["tab", tab.id === viewedId ? "viewed" : "", tab.skippedBy ? "skipped" : ""].filter(Boolean).join(" ");
       const label = document.createElement("button");
       label.type = "button";
       label.className = "tabLabel";
@@ -722,6 +736,7 @@ async function saveProjectOf(tab: OpenTab): Promise<string | undefined> {
 
 function draw(): void {
   const tab = viewed();
+  forgetSettledPassOvers();
   drawTabs();
   drawRecording(tab);
   drawSourceTracks(tab);
@@ -745,22 +760,18 @@ function draw(): void {
   view.cut.disabled = !tab || tab.working || preparing || allRunning || !canCut(tab.session);
   view.cut.textContent = tab?.working ? "Arbeitet …" : "Schneiden";
   const severalTabs = tabs.length > 1;
-  const anyWorking = tabs.some((each) => each.working);
   const counted = (progress: { done: number; total: number }) =>
     `${Math.min(progress.done + 1, progress.total)} von ${progress.total}`;
   view.cutAll.hidden = !severalTabs && cuttingAll === null;
-  view.cutAll.disabled = preparing || anyWorking || allRunning;
+  view.cutAll.disabled = preparing || allTabsBusy();
   view.cutAll.textContent = cuttingAll ? `Schneidet ${counted(cuttingAll)} …` : "Alle schneiden";
   view.saveAllRow.hidden = !severalTabs && savingAll === null;
   view.saveAll.disabled =
-    preparing ||
-    anyWorking ||
-    allRunning ||
-    !tabs.some((each) => savingAllDoes(each.session, each.finished !== null) === "save");
+    preparing || allTabsBusy() || !tabs.some((each) => savingAllDoes(each.session, each.finished !== null) === "save");
   view.saveAll.textContent = savingAll ? `Speichert ${counted(savingAll)} …` : "Alle Premiere-Dateien speichern";
   view.takeOverRow.hidden = !severalTabs;
   // A Tab being cut or saved must not have its settings changed underneath (ADR-0026).
-  view.takeOver.disabled = !tab || anyWorking || allRunning;
+  view.takeOver.disabled = !tab || allTabsBusy();
 }
 
 /**
@@ -789,42 +800,58 @@ function scheduleRedo(tab: OpenTab, redo: "replan" | "redecide"): void {
 /** The settings a redo was asked for, so numbers from a slider position the user has left behind are not called current. */
 const settingsNow = (tab: OpenTab) => ({ thresholdDbfs: tab.session.thresholdDbfs, ...planSettingsFrom(tab.session) });
 
-async function redoNow(tab: OpenTab): Promise<void> {
+/**
+ * Plans or decides a Tab's cut again, if its settings ask for that. A redo already on its way is not asked twice: its
+ * promise is handed back, so a cut or a save can wait for it to arrive.
+ */
+function redoNow(tab: OpenTab): Promise<void> {
+  if (tab.redoing) return tab.redoing;
   const redo = redoNeeded(tab.session);
-  if (tab.redoing || !isOpen(tab) || (redo !== "replan" && redo !== "redecide")) return;
-  tab.redoing = true;
+  if (!isOpen(tab) || !tab.finished || (redo !== "replan" && redo !== "redecide")) return Promise.resolve();
+  const running = redoAs(tab, redo).finally(() => {
+    tab.redoing = null;
+  });
+  tab.redoing = running;
+  return running;
+}
+
+async function redoAs(tab: OpenTab, redo: "replan" | "redecide"): Promise<void> {
+  // What the plan will belong to: the settings as they are when it is asked for, wherever the sliders go meanwhile.
+  const askedWith = tab.session;
   const used = settingsNow(tab);
   const answer =
     redo === "replan" ? await window.smarttrim.replan(tab.id, used) : await window.smarttrim.redecide(tab.id, used);
-  tab.redoing = false;
   if (!isOpen(tab)) return;
   const summary = show(tab, answer, redo === "replan" ? "Das Neuplanen ging nicht" : "Das Neurechnen ging nicht");
   if (summary) {
-    tab.finished = summary;
-    // A sound that skips what the cut removes was built from the cut before this one: heard on, it would jump over a
-    // stretch just held, under a band that now says kept. It starts again from where it is, on the new cut. So does
-    // one still on its way, which was asked for with the old cut. Only the Tab on screen can have a sound.
-    const stale =
-      viewed() !== tab
-        ? null
-        : playing
-          ? playing.skipping
-            ? playing.position
-            : null
-          : fetchingFor !== null && view.skipRemoved.checked
-            ? fetchingFor
-            : null;
-    if (stale !== null) {
-      stopPlaying();
-      void play(stale);
-    }
-    const now = settingsNow(tab);
-    // The sliders may have moved on while this ran; then these numbers are already one step behind.
-    // Every setting a plan is made with counts, held stretches and the event sliders included; comparing only some
-    // would call a plan current that was made before a stretch was held.
-    if (JSON.stringify(now) === JSON.stringify(used)) {
-      tab.session = planFinished(tab.session);
-      clearStatus(tab);
+    // A slider pulled back while this ran leaves these numbers one step behind; the plan is marked as made for where
+    // the sliders were, so the next redo is asked for rather than a plan the sliders no longer describe being saved.
+    tab.session = planFinished(tab.session, askedWith);
+    if (redoNeeded(tab.session) === "analyse") {
+      // A role changed while this ran — taken over from another Tab, say: these numbers belong to SourceTracks no
+      // longer chosen, and the cut has to be made again.
+      tab.finished = null;
+      setStatus(tab, "Einstellung geändert – noch einmal schneiden.");
+    } else {
+      tab.finished = summary;
+      // A sound that skips what the cut removes was built from the cut before this one: heard on, it would jump over a
+      // stretch just held, under a band that now says kept. It starts again from where it is, on the new cut. So does
+      // one still on its way, which was asked for with the old cut. Only the Tab on screen can have a sound.
+      const stale =
+        viewed() !== tab
+          ? null
+          : playing
+            ? playing.skipping
+              ? playing.position
+              : null
+            : fetchingFor !== null && view.skipRemoved.checked
+              ? fetchingFor
+              : null;
+      if (stale !== null) {
+        stopPlaying();
+        void play(stale);
+      }
+      if (redoNeeded(tab.session) === "nothing") clearStatus(tab);
     }
   }
   draw();
@@ -1796,8 +1823,8 @@ function openTabFrom(work: TabWork, finished: CutSummary | null): OpenTab {
     status: { text: "", bad: false },
     readingCount: { done: 0, total: 0 },
     redoTimer: undefined,
-    redoing: false,
-    skipped: false,
+    redoing: null,
+    skippedBy: null,
   };
 }
 
@@ -1877,7 +1904,7 @@ view.saveClose.addEventListener("click", async () => {
     return;
   }
   // The Tab is about to go, so where its project landed is said where opening files reports.
-  openNotes = [{ tone: "info", name: fileName(saved), text: "Als Projekt gespeichert.", detail: `Ordner: ${saved.slice(0, saved.length - fileName(saved).length - 1)}` }];
+  openNotes = [{ tone: "info", name: fileName(saved), text: "Als Projekt gespeichert.", detail: `Ordner: ${folderOf(saved)}` }];
   if (closeAsking === tab) closeTab(tab);
   else draw();
 });
@@ -2062,8 +2089,20 @@ window.addEventListener("pointermove", () => {
  */
 async function cutTab(tab: OpenTab): Promise<Answer<CutSummary> | null> {
   tab.working = true;
+  tab.skippedBy = null;
+  // A sound skipping by the cut about to be replaced would go on skipping by it. Only the Tab on screen has one.
+  if (viewed() === tab) stopPlaying();
+  // A replan still waiting would reach the main process after the cut is taken away and come back refused; one on its
+  // way is let arrive first, so its numbers do not land on top of the new cut.
+  clearTimeout(tab.redoTimer);
+  draw();
+  if (tab.redoing) await tab.redoing;
+  clearTimeout(tab.redoTimer);
+  if (!isOpen(tab)) {
+    tab.working = false;
+    return null;
+  }
   tab.finished = null;
-  tab.skipped = false;
   // The waveforms are kept: they belong to this Recording, and this analysis reuses what was read to draw them
   // (ADR-0020). They simply lose their colours until the new plan arrives.
   setStatus(tab, "Liest die Aufnahme …");
@@ -2085,8 +2124,7 @@ async function cutTab(tab: OpenTab): Promise<Answer<CutSummary> | null> {
 
 view.cut.addEventListener("click", async () => {
   const tab = viewed();
-  if (!tab || cuttingAll || savingAll) return;
-  stopPlaying();
+  if (!tab || tab.working || cuttingAll || savingAll) return;
   await cutTab(tab);
 });
 
@@ -2099,12 +2137,51 @@ const SKIPPED_BECAUSE = {
   skipNoExport: "Übersprungen: Keine Tonspur ist für Premiere angekreuzt.",
 } as const;
 
-/** "8 geschnitten, 2 übersprungen, 1 ging nicht" — the heading over what an action on all Tabs had to say. */
-function allTabsHeading(action: string, done: string, doneCount: number, passedOver: number, failed: number): string {
-  const parts = [`${doneCount} ${done}`];
-  if (passedOver > 0) parts.push(`${passedOver} übersprungen`);
-  if (failed > 0) parts.push(`${failed} ${failed === 1 ? "ging" : "gingen"} nicht`);
-  return `${action}: ${parts.join(", ")}`;
+/** "Alle schneiden: 8 geschnitten, 2 übersprungen" — each count with its words, the ones at nought left out. */
+function allTabsHeading(action: string, counts: readonly (readonly [number, string])[]): string {
+  const said = counts.filter(([count]) => count > 0).map(([count, words]) => `${count} ${words}`);
+  return `${action}: ${said.length > 0 ? said.join(", ") : "nichts zu tun"}`;
+}
+
+/**
+ * Puts up what an action on all Tabs had to say, under its heading. What something else put up while it ran — files
+ * opened meanwhile — stays beneath instead of being replaced.
+ */
+function showAllTabsNotes(notes: readonly OpenNote[], heading: string, upBefore: OpenNote[]): void {
+  openNotes = [...notes, ...(openNotes !== upBefore ? openNotes : [])];
+  notesHeading = { notes: openNotes, text: heading };
+}
+
+/**
+ * Whether the reason a Tab was last passed over still holds. It follows the rules that passed it over, so a role given
+ * or a tick set counts at once.
+ */
+function stillPassedOver(tab: OpenTab): boolean {
+  const hasCut = tab.finished !== null;
+  if (tab.skippedBy === "cutAll") return cuttingAllDoes(tab.session, hasCut) === "skipNoVoice";
+  if (tab.skippedBy === "saveAll") return savingAllDoes(tab.session, hasCut) !== "save";
+  return false;
+}
+
+/** Takes the mark, and the status line saying why, off every Tab whose reason for being passed over is gone. */
+function forgetSettledPassOvers(): void {
+  for (const tab of tabs) {
+    if (!tab.skippedBy || stillPassedOver(tab)) continue;
+    tab.skippedBy = null;
+    if (!tab.status.bad && tab.status.text.startsWith("Übersprungen")) {
+      tab.status.text = "";
+    }
+  }
+}
+
+/**
+ * Lets a replan waiting for this Tab run now, or one on its way arrive, so the Tab is judged on the cut it is about to
+ * have — not passed over as not cut while it is only planning again, nor cut underneath a replan.
+ */
+async function settleRedo(tab: OpenTab): Promise<void> {
+  clearTimeout(tab.redoTimer);
+  tab.redoTimer = undefined;
+  await redoNow(tab);
 }
 
 /**
@@ -2113,27 +2190,29 @@ function allTabsHeading(action: string, done: string, doneCount: number, passedO
  * cut is passed over and marked; one that fails does not stop the others.
  */
 async function cutAllTabs(): Promise<void> {
-  if (cuttingAll || savingAll || preparing || tabs.some((each) => each.working)) return;
-  stopPlaying();
+  if (preparing || allTabsBusy()) return;
+  const notesBefore = openNotes;
   const queue = [...tabs];
   cuttingAll = { done: 0, total: queue.length };
   let cutCount = 0;
+  let alreadyCurrent = 0;
   const passedOver: OpenNote[] = [];
   const failed: OpenNote[] = [];
   draw();
 
   for (const tab of queue) {
     // A Tab closed while the ones before it were cut has nothing left to cut.
+    if (isOpen(tab)) await settleRedo(tab);
     if (isOpen(tab)) {
       const name = fileName(tab.session.recording?.path ?? "");
       const step = cuttingAllDoes(tab.session, tab.finished !== null);
-      tab.skipped = step === "skipNoVoice";
+      tab.skippedBy = step === "skipNoVoice" ? "cutAll" : null;
       if (step === "skipNoVoice") {
         setStatus(tab, SKIPPED_BECAUSE[step]);
         passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
       } else if (step === "nothing") {
-        // Its cut already matches its settings.
-        cutCount += 1;
+        // Its cut already matches its settings: nothing was done, and the heading does not claim otherwise.
+        alreadyCurrent += 1;
       } else {
         const cut = await cutTab(tab);
         if (cut?.ok) cutCount += 1;
@@ -2145,17 +2224,22 @@ async function cutAllTabs(): Promise<void> {
   }
 
   cuttingAll = null;
-  openNotes = [
-    ...(cutCount > 0
-      ? [{ tone: "info", name: "", text: "Gespeichert ist noch nichts: dafür „Alle Premiere-Dateien speichern“ ganz unten." } as const]
-      : []),
-    ...failed,
-    ...passedOver,
-  ];
-  notesHeading = {
-    notes: openNotes,
-    text: allTabsHeading("Alle schneiden", "geschnitten", cutCount, passedOver.length, failed.length),
-  };
+  showAllTabsNotes(
+    [
+      ...(cutCount + alreadyCurrent > 0
+        ? [{ tone: "info", name: "", text: "Gespeichert ist noch nichts: dafür „Alle Premiere-Dateien speichern“ ganz unten." } as const]
+        : []),
+      ...failed,
+      ...passedOver,
+    ],
+    allTabsHeading("Alle schneiden", [
+      [cutCount, "geschnitten"],
+      [alreadyCurrent, alreadyCurrent === 1 ? "war schon geschnitten" : "waren schon geschnitten"],
+      [passedOver.length, "übersprungen"],
+      [failed.length, failed.length === 1 ? "ging nicht" : "gingen nicht"],
+    ]),
+    notesBefore,
+  );
   draw();
   void pump();
 }
@@ -2168,7 +2252,8 @@ view.cutAll.addEventListener("click", () => void cutAllTabs());
  * cut, or with nothing ticked for Premiere, is passed over and marked.
  */
 async function saveAllTabs(): Promise<void> {
-  if (cuttingAll || savingAll || preparing || tabs.some((each) => each.working)) return;
+  if (preparing || allTabsBusy()) return;
+  const notesBefore = openNotes;
   const queue = [...tabs];
   savingAll = { done: 0, total: queue.length };
   const saved: OpenNote[] = [];
@@ -2177,26 +2262,27 @@ async function saveAllTabs(): Promise<void> {
   draw();
 
   for (const tab of queue) {
+    // A replan still on its way for this Tab arrives first: it is planning, not uncut.
+    if (isOpen(tab)) await settleRedo(tab);
     if (isOpen(tab)) {
       const name = fileName(tab.session.recording?.path ?? "");
       // Taken at its turn: the Tabs stay usable while the files before it are written.
       const step = savingAllDoes(tab.session, tab.finished !== null);
-      tab.skipped = step !== "save";
+      tab.skippedBy = step === "save" ? null : "saveAll";
       if (step !== "save") {
         setStatus(tab, SKIPPED_BECAUSE[step]);
         passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
       } else {
         const answer = await window.smarttrim.savePremiereBeside(tab.id, tab.session.exportSourceTracks);
-        if (isOpen(tab)) {
-          if (answer.ok) {
-            setStatus(tab, `Gespeichert: ${answer.value}`);
-            const file = fileName(answer.value);
-            saved.push({ tone: "info", name: file, text: "Gespeichert.", detail: `Ordner: ${answer.value.slice(0, -file.length - 1)}` });
-          } else {
-            say(tab, `Speichern ging nicht: ${answer.message}`);
-            failed.push({ tone: "refused", name, text: "Nicht gespeichert.", detail: `Grund: ${answer.message}` });
-          }
+        if (answer.ok) {
+          // Written is written, whether or not the Tab was closed while it was: the file is there and is counted.
+          if (isOpen(tab)) setStatus(tab, `Gespeichert: ${answer.value}`);
+          saved.push({ tone: "info", name: fileName(answer.value), text: "Gespeichert.", detail: `Ordner: ${folderOf(answer.value)}` });
+        } else if (isOpen(tab)) {
+          say(tab, `Speichern ging nicht: ${answer.message}`);
+          failed.push({ tone: "refused", name, text: "Nicht gespeichert.", detail: `Grund: ${answer.message}` });
         }
+        // A refusal for a Tab closed meanwhile wrote nothing, and closing it was the user's call: nothing to report.
       }
     }
     savingAll = { done: savingAll.done + 1, total: queue.length };
@@ -2204,11 +2290,15 @@ async function saveAllTabs(): Promise<void> {
   }
 
   savingAll = null;
-  openNotes = [...failed, ...passedOver, ...saved];
-  notesHeading = {
-    notes: openNotes,
-    text: allTabsHeading("Alle Premiere-Dateien speichern", "gespeichert", saved.length, passedOver.length, failed.length),
-  };
+  showAllTabsNotes(
+    [...failed, ...passedOver, ...saved],
+    allTabsHeading("Alle Premiere-Dateien speichern", [
+      [saved.length, "gespeichert"],
+      [passedOver.length, "übersprungen"],
+      [failed.length, failed.length === 1 ? "ging nicht" : "gingen nicht"],
+    ]),
+    notesBefore,
+  );
   draw();
 }
 
@@ -2237,7 +2327,7 @@ function closeTakeOver(): void {
 function takeOverInto(what: TakenOver): void {
   const from = viewed();
   takeOverAsking = false;
-  if (!from || cuttingAll || tabs.some((each) => each.working)) {
+  if (!from || allTabsBusy()) {
     draw();
     return;
   }

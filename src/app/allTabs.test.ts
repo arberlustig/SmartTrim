@@ -90,9 +90,11 @@ describe("all Tabs", () => {
     expect(session.lockedRanges).toEqual([{ startSeconds: 10, endSeconds: 20 }]);
     // SourceTrack 3 now decides what is kept, and nothing that decides may be out of sight.
     expect(session.emptySourceTracksShown).toBe(true);
-    // Where no role lands on a hidden SourceTrack, they stay hidden.
+    // Where no role lands on a hidden SourceTrack, they stay hidden — and out of Premiere, which no tick taken over may
+    // change: a hidden SourceTrack must not arrive in the sequence with a tick nobody can see (ADR-0014).
     const voiceOnly = settingsCopied(setSourceTrackRole(from, 2, "ignored"), to, "slidersAndRoles").session;
     expect(voiceOnly.emptySourceTracksShown).toBe(false);
+    expect(voiceOnly.exportSourceTracks).toEqual([0, 4]);
   });
 
   test("a Recording with another number of SourceTracks takes over the sliders only, and says so", () => {

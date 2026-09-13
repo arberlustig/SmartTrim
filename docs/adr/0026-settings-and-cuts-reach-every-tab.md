@@ -22,7 +22,8 @@ The owner asked for the first two on 2026-09-13 as the third of four agreed step
 Proposed with the seams and approved together with them ("Passt, bau es."):
 
 - **The Premiere ticks come with the roles.** Which SourceTrack goes to Premiere belongs to the same OBS layout as which one
-  carries the voice.
+  carries the voice — except a tick for a SourceTrack the receiving Tab still hides as an EmptyTrack (see "What a
+  review found").
 - **A role that lands on a SourceTrack the Tab hides as an EmptyTrack shows that Tab's EmptyTracks.** Otherwise a
   SourceTrack out of sight would decide the cut.
 - **A cut that already matches its settings is not cut again.**
@@ -60,6 +61,40 @@ Tab's "Premiere-Datei speichern"; a project stays with the single Tab's "Projekt
 `TabStore.savePremiereBeside(tabId, exportSourceTracks)` writes through `freePathBeside(recording, ".xml")`, and IPC
 `cut:saveBeside` carries it. The two loops live in the window (`cutAllTabs`, `saveAllTabs`): each reads a Tab's settings
 at that Tab's turn, not when the button was pressed, and `cutAllTabs` reuses the Schneiden button's own `cutTab`.
+
+## What a review found
+
+A review of the commit on 2026-09-13 (standards and spec, side by side) found these, all fixed the same day at the
+owner's word ("Ja, behebe alles so"):
+
+- **Premiere ticks reached SourceTracks nobody could see.** Taking over the roles copied every tick, so a SourceTrack the
+  receiving Tab hides as an EmptyTrack went to Premiere unseen — what the owner had already had corrected once for a
+  single Recording (ADR-0013, ADR-0014). `settingsCopied` now drops a tick for a SourceTrack that stays hidden; where a
+  role reveals the EmptyTracks, their ticks come along, since they can be seen.
+- **A saved Premiere file could describe other sliders than the ones on screen.** This was older than the commit:
+  moving a slider and pulling it back while its replan ran left the replan's numbers in place and called them current,
+  because the window compared the settings before and after and, finding them equal, marked the plan as made for them.
+  `planFinished(session, askedWith)` now marks a plan as made for the settings it was asked with, so `redoNeeded` asks
+  for the next one. A replan that arrives after a role changed (taken over from another Tab, say) no longer brings back
+  a cut that had just been withdrawn.
+- **A replan waiting at a Tab's turn.** "Alle schneiden" cut the Tab underneath it (the replan then came back refused,
+  in red), and saving all passed the Tab over as not cut. Both loops, and every cut, now let a replan waiting or on its
+  way arrive first (`settleRedo`; the Tab's `redoing` is a promise instead of a flag).
+- **A sound started during "Alle schneiden"** went on skipping by the old cut. `cutTab` stops the sound of the Tab it
+  cuts.
+- **The notes did not always tell the truth.** A Premiere file written for a Tab closed during the write was left out of
+  the count; a Tab whose cut was already current was counted as "geschnitten" (now "war schon geschnitten"); notes put up
+  by files opened during a run were replaced (now kept beneath).
+- **The skipped mark outlived its reason.** `skippedBy` remembers which action passed a Tab over, and the mark and its
+  status line go as soon as that action's rule would no longer pass it over.
+- Taking over, cutting all and saving all check one `allTabsBusy()`; taking over had missed a running save. CONTEXT.md's
+  Tab entry and ADR-0025 still described settings that never pass between Tabs and "Alle schneiden" writing files.
+
+Checked over CDP on the built app: PartB kept SourceTrack 2 hidden and out of Premiere although PartA exported it;
+Handy's mark and status line went when it got a role; "Alle schneiden" straight after moving a slider in PartB showed
+no red line and said "1 geschnitten, 2 waren schon geschnitten"; saving all straight after moving a slider in PartA
+saved PartA. The pulled-back slider rests on `cutSession.test.ts`: a replan answers in milliseconds, too fast to stage
+by hand.
 
 ## Tested, and not
 
