@@ -88,6 +88,15 @@ const view = {
   discardClose: element<HTMLButtonElement>("discardClose"),
   cancelClose: element<HTMLButtonElement>("cancelClose"),
   recordingInfo: element("recordingInfo"),
+  emptyDrop: element("emptyDrop"),
+  emptyChoose: element<HTMLButtonElement>("emptyChoose"),
+  emptyOpen: element<HTMLButtonElement>("emptyOpen"),
+  reading: element("reading"),
+  readingBars: element("readingBars"),
+  readingText: element("readingText"),
+  cutting: element("cutting"),
+  cuttingBars: element("cuttingBars"),
+  cuttingText: element("cuttingText"),
   sourceTracks: element("sourceTracks"),
   sourceTracksHint: element("sourceTracksHint"),
   threshold: element<HTMLInputElement>("threshold"),
@@ -312,9 +321,51 @@ function show<Value>(tab: OpenTab | null, answer: Answer<Value>, ifRefused: stri
 }
 
 function drawStatus(): void {
-  const status = statusOf(viewed());
-  view.status.textContent = status.text;
+  const tab = viewed();
+  const status = statusOf(tab);
+  // PROTOTYPE: a wait is shown where its outcome will land (docs/design/ui-direction.md). Reading fills the bars
+  // above the SourceTracks; a cut pulses them where the result will appear. Refusals stay next to Schneiden.
+  const cutting = tab !== null && tab.working;
+  const reading =
+    tab !== null && !cutting && !status.bad && (status.text.startsWith("Liest") || status.text.startsWith("Prüft"));
+  view.reading.hidden = !reading;
+  view.cutting.hidden = !cutting;
+  if (reading && tab) {
+    const { done, total } = tab.readingCount;
+    fillSoundBars(view.readingBars, status.text.includes(" von ") && total > 0 ? done / total : 0);
+    view.readingText.textContent = status.text;
+  }
+  if (cutting) {
+    fillSoundBars(view.cuttingBars, 0);
+    // The cut's own line, never one left over from reading the SourceTracks.
+    view.cuttingText.textContent = status.text.startsWith("Liest die Aufnahme") ? status.text : "Schneidet …";
+  }
+  view.status.textContent = reading || cutting ? "" : status.text;
   view.status.classList.toggle("bad", status.bad);
+}
+
+/** The heights of the mark's five bars, repeated across the width; a pattern, never real audio. */
+const SOUND_BAR_HEIGHTS = [40, 85, 60, 85, 40];
+
+/** As many 4 px bars, 3 px apart, as the block is wide — made once the block is on screen, since hidden it has no width. */
+function makeSoundBars(into: HTMLElement): void {
+  const count = Math.max(20, Math.floor((into.clientWidth + 3) / 7));
+  if (into.children.length === count) return;
+  into.replaceChildren(
+    ...Array.from({ length: count }, (_, index) => {
+      const bar = document.createElement("i");
+      bar.style.setProperty("--h", String(SOUND_BAR_HEIGHTS[index % SOUND_BAR_HEIGHTS.length]));
+      bar.style.setProperty("--i", String(index));
+      return bar;
+    }),
+  );
+}
+
+/** Lights the bars up to a share of them; the rest keep pulsing (the CSS does that) so the wait never looks stuck. */
+function fillSoundBars(bars: HTMLElement, share: number): void {
+  makeSoundBars(bars);
+  const lit = Math.round(share * bars.children.length);
+  [...bars.children].forEach((bar, index) => bar.classList.toggle("on", index < lit));
 }
 
 /**
@@ -356,7 +407,13 @@ function drawTabs(): void {
       label.className = "tabLabel";
       // A Tab busy in the background says so, since its status line is only on screen while it is.
       const busy = tab.working || job?.tabId === tab.id;
-      label.textContent = busy ? `${name} …` : name;
+      if (busy) {
+        const mark = document.createElement("span");
+        mark.className = "busyMark";
+        mark.append(...[0, 1, 2].map(() => document.createElement("i")));
+        label.append(mark);
+      }
+      label.append(document.createTextNode(name));
       label.title = tab.session.recording?.path ?? name;
       label.addEventListener("click", () => viewTab(tab.id));
       const close = document.createElement("button");
@@ -444,9 +501,11 @@ function drawCloseQuestion(): void {
 
 function drawRecording(tab: OpenTab | null): void {
   const recording = tab?.session.recording;
+  // The drop area stands in for the sentence while nothing is open; the header's buttons step aside for its own.
+  view.emptyDrop.hidden = Boolean(recording);
+  document.body.classList.toggle("empty", !recording);
   if (!recording) {
-    view.recordingInfo.textContent =
-      "Noch keine Aufnahme offen. Wähle Aufnahmen oder zieh Dateien oder einen ganzen Ordner ins Fenster – jede Datei bekommt einen Tab.";
+    view.recordingInfo.textContent = "Noch keine Aufnahme offen.";
     return;
   }
   const seconds = (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
@@ -758,6 +817,8 @@ function draw(): void {
   const settingsLocked = !tab || tab.working;
   view.chooseRecording.disabled = preparing;
   view.openProject.disabled = preparing;
+  view.emptyChoose.disabled = preparing;
+  view.emptyOpen.disabled = preparing;
   view.threshold.disabled = settingsLocked;
   view.margin.disabled = settingsLocked;
   view.deadZone.disabled = settingsLocked;
@@ -909,8 +970,9 @@ const KEPT_BAND = "#1f3a2e";
 const REMOVED_BAND = "#2a1416";
 const KEPT_WAVE = "#7fd6b4";
 /** Before anything is cut there is nothing to colour, so the waveform is drawn plain (ADR-0020). */
-const PLAIN_BAND = "#1c1f25";
-const PLAIN_WAVE = "#8b96a3";
+// PROTOTYPE: the plain waveform before any cut tinted to sit on the navy ground (docs/design/ui-direction.md).
+const PLAIN_BAND = "#11121c";
+const PLAIN_WAVE = "#9c9fb6";
 const REMOVED_WAVE = "#7a4046";
 /** Over a stretch the playing sound jumps across, so a Join is seen as it is heard. Neither green nor red. */
 const JOIN_MARK = "#e8b04a";
@@ -2309,6 +2371,37 @@ async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>
 
 view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
 view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
+// The drop area's own pair of buttons, shown while nothing is open, do the same as the header's.
+view.emptyChoose.addEventListener("click", () => view.chooseRecording.click());
+view.emptyOpen.addEventListener("click", () => view.openProject.click());
+// A window made wider or narrower while a wait is shown gets its bars remade to the new width.
+window.addEventListener("resize", () => {
+  if (!view.reading.hidden) fillSoundBars(view.readingBars, [...view.readingBars.children].filter((bar) => bar.classList.contains("on")).length / Math.max(1, view.readingBars.children.length));
+  if (!view.cutting.hidden) fillSoundBars(view.cuttingBars, 0);
+});
+
+// PROTOTYPE: which of the two layout drafts the window shows, remembered like the picture's fold.
+const DRAFT_KEY = "smarttrim.draft";
+const draftButtons = [...document.querySelectorAll<HTMLButtonElement>("#draftSwitch button")];
+function showDraft(draft: string): void {
+  document.documentElement.dataset["draft"] = draft;
+  for (const button of draftButtons) button.classList.toggle("on", button.dataset["draft"] === draft);
+  try {
+    localStorage.setItem(DRAFT_KEY, draft);
+  } catch {
+    // Not remembered, then: the switch still works for this window.
+  }
+}
+for (const button of draftButtons) button.addEventListener("click", () => showDraft(button.dataset["draft"] ?? "1"));
+showDraft(
+  (() => {
+    try {
+      return localStorage.getItem(DRAFT_KEY) ?? "1";
+    } catch {
+      return "1";
+    }
+  })(),
+);
 
 /* ── Dropping files ────────────────────────────────────────────────────────────────────────────────────────── */
 

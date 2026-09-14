@@ -1,87 +1,197 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" data-draft="1">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
     <title>SmartTrim</title>
+    <!--
+      PROTOTYPE (branch prototype/ui-drafts, never merged): two layout drafts of the window after
+      docs/design/ui-direction.md, switched top right and remembered in localStorage — draft 1 is one centred column,
+      draft 2 two columns with the settings sticking on the right. Every id renderer.ts looks up is unchanged.
+    -->
     <style>
       :root {
         color-scheme: dark;
-        --ground: #14161a;
-        --raised: #1c1f25;
-        --line: #2b3038;
-        --text: #e8eaed;
-        --muted: #9aa3ae;
-        --accent: #5ac8a8;
+        /* The logo's palette (docs/design/ui-direction.md). */
+        --ground: #161826;
+        --raised: #1b1d2c;
+        --well: #11121c;
+        --line: #2a2e48;
+        --text: #e9e9ed;
+        --muted: #9c9fb6;
+        --accent: #9184d9;
+        --accent-bright: #b5abfc;
         --bad: #f08a7a;
+        --held: #5aa9e6;
       }
       * {
         box-sizing: border-box;
       }
       body {
         margin: 0;
-        padding: 28px 32px 36px;
         background: var(--ground);
         color: var(--text);
         font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
       }
-      h1 {
-        margin: 0;
-        font-size: 20px;
-        font-weight: 600;
-        letter-spacing: 0.01em;
+
+      /* ── The top of the window: brand, the buttons that add Tabs, the Tabs ────────────────────────────────── */
+      .top {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        padding: 12px 32px;
+        border-bottom: 1px solid var(--line);
       }
-      h1 + p {
-        margin: 4px 0 26px;
-        color: var(--muted);
+      .brand {
+        display: flex;
+        gap: 10px;
+        align-items: center;
       }
-      section {
-        border-top: 1px solid var(--line);
-        padding: 20px 0;
+      .brandMark {
+        display: block;
+        width: 28px;
+        height: 28px;
       }
-      h2 {
-        margin: 0 0 12px;
-        font-size: 12px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-      button {
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 8px 15px;
-        background: var(--raised);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-      }
-      button:hover:enabled {
-        border-color: #3c434e;
-      }
-      button:disabled {
-        opacity: 0.42;
-        cursor: default;
-      }
-      button.primary {
-        border-color: transparent;
-        background: var(--accent);
-        color: #0d1714;
-        font-weight: 600;
+      .brandWord {
+        display: block;
+        height: 19px;
+        width: auto;
       }
       .opening {
         display: flex;
         gap: 10px;
         align-items: center;
-        margin-bottom: 14px;
+        margin-left: auto;
       }
-      /* What opening files had to say: one line per file, what went wrong in plain words, the report's core below. */
+      /* While no Tab is open the drop area offers the same two buttons; one pair on screen is enough. */
+      body.empty .opening {
+        display: none;
+      }
+      /* PROTOTYPE: the draft switch. High contrast on purpose: it is not part of what is being judged. */
+      .draftSwitch {
+        display: flex;
+        gap: 2px;
+        align-items: center;
+        margin-left: auto;
+        padding: 3px 4px 3px 12px;
+        border-radius: 999px;
+        background: #f2f2f6;
+        color: #161826;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      body:not(.empty) .draftSwitch {
+        margin-left: 0;
+      }
+      .draftSwitch button {
+        border: none;
+        border-radius: 999px;
+        padding: 3px 10px;
+        background: transparent;
+        color: inherit;
+        font-weight: 500;
+      }
+      .draftSwitch button.on {
+        background: #161826;
+        color: #fff;
+      }
+      /* One Tab per Recording. A long row of them scrolls sideways rather than wrapping into a second strip. */
+      .tabStrip {
+        display: flex;
+        gap: 2px;
+        padding: 8px 32px 0;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+      }
+      .tabStrip[hidden] {
+        display: none;
+      }
+      .tab {
+        display: flex;
+        flex: none;
+        align-items: center;
+        border-radius: 8px 8px 0 0;
+        color: var(--muted);
+      }
+      .tab:hover {
+        color: var(--text);
+      }
+      .tab.viewed {
+        background: var(--raised);
+        color: var(--text);
+        box-shadow: inset 0 2px 0 var(--accent);
+      }
+      .tab button {
+        border: none;
+        border-radius: 0;
+        background: none;
+        color: inherit;
+      }
+      .tab .tabLabel {
+        display: flex;
+        gap: 0;
+        align-items: center;
+        max-width: 260px;
+        padding: 8px 4px 8px 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tab .tabClose {
+        padding: 4px 10px 4px 6px;
+        font-size: 15px;
+        line-height: 1;
+      }
+      .tab .tabClose:hover {
+        color: var(--bad);
+      }
+      /* A Tab an action on all Tabs passed over: its status line says why, the dot says where to look. */
+      .tab.skipped .tabLabel::before {
+        content: "●";
+        margin-right: 6px;
+        color: #e8b04a;
+        font-size: 9px;
+      }
+      /* A Tab being read or cut in the background: three bars in the mark's rhythm, rising in turn. */
+      .busyMark {
+        display: inline-flex;
+        gap: 2px;
+        align-items: flex-end;
+        height: 11px;
+        margin-right: 8px;
+      }
+      .busyMark i {
+        display: block;
+        width: 2px;
+        border-radius: 1px;
+        background: var(--accent);
+        transform-origin: bottom;
+        animation: rise 0.9s ease-in-out infinite;
+      }
+      .busyMark i:nth-child(1) {
+        height: 5px;
+      }
+      .busyMark i:nth-child(2) {
+        height: 11px;
+        animation-delay: 0.15s;
+      }
+      .busyMark i:nth-child(3) {
+        height: 7px;
+        animation-delay: 0.3s;
+      }
+      @keyframes rise {
+        50% {
+          transform: scaleY(0.35);
+        }
+      }
+
+      /* ── What opening files had to say: one line per file, what went wrong in plain words, the report's core below. */
       .openNotes {
         position: relative;
-        margin: 0 0 14px;
+        margin: 16px 32px 0;
         padding: 10px 40px 10px 14px;
         border: 1px solid var(--line);
-        border-radius: 9px;
+        border-radius: 10px;
         background: var(--raised);
       }
       .openNotes[hidden] {
@@ -146,7 +256,180 @@
       .notesClose:hover:enabled {
         color: var(--text);
       }
-      /* The question before closing a Tab: a dialog over a dimmed window, so it cannot be overlooked or clicked past. */
+
+      /* ── The two layouts ──────────────────────────────────────────────────────────────────────────────────── */
+      /* Draft 1: one column, centred, with a width the eye can span. */
+      .layout {
+        max-width: 1104px;
+        margin: 0 auto;
+        padding: 0 32px 40px;
+      }
+      .column > section:first-child {
+        border-top: none;
+      }
+      /* Draft 2: from 1200 px on, the picture and the waveforms take the width on the left; the settings, Schneiden and
+         the result stay in view on the right while the left scrolls. Narrower, it stacks back into draft 1's order. */
+      @media (min-width: 1200px) {
+        html[data-draft="2"] .layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 400px;
+          column-gap: 40px;
+          max-width: none;
+        }
+        html[data-draft="2"] .emptyDrop {
+          grid-column: 1 / -1;
+        }
+        html[data-draft="2"] .column.right {
+          position: sticky;
+          top: 0;
+          align-self: start;
+          max-height: 100vh;
+          overflow-y: auto;
+          padding-left: 32px;
+          border-left: 1px solid var(--line);
+        }
+        html[data-draft="2"] .column.right > section:first-child {
+          padding-top: 24px;
+        }
+      }
+
+      /* ── The empty window: the drop area the window could always handle and never announced ──────────────── */
+      .emptyDrop {
+        display: grid;
+        gap: 6px;
+        justify-items: center;
+        margin: 32px 0 8px;
+        padding: 52px 24px 44px;
+        border: 2px dashed var(--accent);
+        border-radius: 16px;
+        background: var(--raised);
+        text-align: center;
+      }
+      .emptyDrop[hidden] {
+        display: none;
+      }
+      .emptyDrop img {
+        display: block;
+        width: 96px;
+        height: 96px;
+        margin-bottom: 14px;
+      }
+      .emptyDrop strong {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .emptyDrop span {
+        color: var(--muted);
+      }
+      .emptyButtons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+        margin-top: 18px;
+      }
+
+      /* ── Sections and text ────────────────────────────────────────────────────────────────────────────────── */
+      section {
+        border-top: 1px solid var(--line);
+        padding: 24px 0;
+      }
+      h2 {
+        margin: 0 0 12px;
+        font-family: "Segoe UI Variable Small", "Segoe UI", system-ui, sans-serif;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .hint {
+        max-width: 72ch;
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      #recordingInfo {
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+      #recordingInfo strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ── Controls ─────────────────────────────────────────────────────────────────────────────────────────── */
+      button {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 15px;
+        background: var(--raised);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+        transition:
+          border-color 150ms,
+          background-color 150ms,
+          color 150ms;
+      }
+      button:hover:enabled {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button.primary {
+        border-color: transparent;
+        background: var(--accent);
+        color: var(--ground);
+        font-weight: 600;
+      }
+      button.primary:hover:enabled {
+        border-color: transparent;
+        background: var(--accent-bright);
+      }
+      button.danger {
+        border-color: #6b3a36;
+        color: var(--bad);
+      }
+      button.danger:hover:enabled {
+        border-color: var(--bad);
+      }
+      button.link {
+        margin-top: 8px;
+        border: none;
+        padding: 0;
+        background: none;
+        color: var(--accent);
+        font-size: 13px;
+        text-decoration: underline;
+      }
+      button.link:hover:enabled {
+        color: var(--accent-bright);
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent-bright);
+        outline-offset: 2px;
+      }
+      select,
+      input[type="text"] {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 5px 8px;
+        background: var(--well);
+        color: var(--text);
+        font: inherit;
+      }
+      select {
+        cursor: pointer;
+      }
+      input[type="range"],
+      input[type="checkbox"] {
+        accent-color: var(--accent);
+      }
+
+      /* ── The question before closing a Tab: a dialog over a dimmed window, so it cannot be overlooked or clicked past. */
       .modal {
         position: fixed;
         inset: 0;
@@ -154,65 +437,22 @@
         display: grid;
         place-items: center;
         padding: 20px;
-        background: rgba(8, 9, 11, 0.64);
+        background: rgba(8, 9, 16, 0.66);
       }
       .modal[hidden] {
         display: none;
       }
-      /* A Tab an action on all Tabs passed over: its status line says why, the dot says where to look. */
-      .tab.skipped .tabLabel::before {
-        content: "●";
-        margin-right: 6px;
-        color: #e8b04a;
-        font-size: 9px;
-        vertical-align: middle;
-      }
-      .preset.takeOverRow {
-        padding: 12px 0 0;
-      }
-      .picture {
-        margin: 0 0 14px;
-      }
-      .pictureFrame {
-        position: relative;
-        width: 100%;
-        background: #000;
-        border-radius: 6px;
-        overflow: hidden;
-      }
-      .pictureFrame[hidden] {
-        display: none;
-      }
-      .pictureFrame canvas {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-      }
-      .pictureNote {
-        margin: 6px 0 0;
-        color: var(--bad);
-      }
-      /* `.actions` has a display of its own, which would beat the browser's rule for [hidden]. */
-      .actions[hidden] {
-        display: none;
-      }
-      .saveAllRow {
-        margin-top: 20px;
-      }
-      .saveAllRow span {
-        color: var(--muted);
-      }
       .dialog {
         width: min(520px, 100%);
         padding: 22px 24px 18px;
-        border: 1px solid #3a414b;
+        border: 1px solid var(--line);
         border-radius: 12px;
         background: var(--raised);
         box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
       }
       .dialog h3 {
         margin: 0 0 8px;
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
         font-size: 17px;
         font-weight: 600;
       }
@@ -226,7 +466,7 @@
         margin: 0;
         padding: 10px 12px;
         border-radius: 8px;
-        background: var(--ground);
+        background: var(--well);
         list-style: none;
         font-variant-numeric: tabular-nums;
       }
@@ -240,7 +480,7 @@
         width: 10px;
         height: 10px;
         border-radius: 2px;
-        background: #5aa9e6;
+        background: var(--held);
       }
       .heldPreview li.more::before {
         visibility: hidden;
@@ -258,65 +498,137 @@
       .dialogButtons button[hidden] {
         display: none;
       }
-      button.danger {
-        border-color: #6b3a36;
-        color: var(--bad);
+
+      /* ── The picture, centred, in the Recording's own shape (ADR-0028) ────────────────────────────────────── */
+      .picture {
+        margin: 0 0 14px;
       }
-      button.danger:hover:enabled {
-        border-color: var(--bad);
+      .pictureFrame {
+        position: relative;
+        width: 100%;
+        margin: 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #000;
+        overflow: hidden;
       }
-      /* One Tab per Recording. A long row of them scrolls sideways rather than wrapping into a second strip. */
-      .tabStrip {
-        display: flex;
-        gap: 2px;
-        overflow-x: auto;
-        border-bottom: 1px solid var(--line);
-      }
-      .tabStrip[hidden] {
+      .pictureFrame[hidden] {
         display: none;
       }
-      .tab {
-        display: flex;
-        flex: none;
-        align-items: center;
-        border: 1px solid transparent;
-        border-bottom: none;
-        border-radius: 7px 7px 0 0;
-        color: var(--muted);
+      .pictureFrame canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
       }
-      .tab.viewed {
-        border-color: var(--line);
-        background: var(--raised);
-        color: var(--text);
-      }
-      .tab button {
-        border: none;
-        border-radius: 0;
-        background: none;
-        color: inherit;
-      }
-      .tab .tabLabel {
-        max-width: 240px;
-        padding: 7px 4px 7px 12px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .tab .tabClose {
-        padding: 4px 10px 4px 6px;
-        font-size: 15px;
-        line-height: 1;
-      }
-      .tab .tabClose:hover {
+      .pictureNote {
+        margin: 6px 0 0;
         color: var(--bad);
       }
-      #recordingInfo {
-        color: var(--muted);
-        overflow-wrap: anywhere;
+      .picture .link {
+        display: block;
+        margin: 6px 0 0 auto;
       }
-      #recordingInfo strong {
-        color: var(--text);
-        font-weight: 600;
+
+      /* ── The wait, shown where its outcome will land: the logo's bars filling in as the sound arrives ─────── */
+      .soundArrives {
+        padding: 6px 0 14px;
+      }
+      .soundArrives[hidden] {
+        display: none;
+      }
+      .soundBars {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+        height: 44px;
+        overflow: hidden;
+      }
+      .soundBars i {
+        display: block;
+        flex: none;
+        width: 4px;
+        height: calc(var(--h) * 1%);
+        border-radius: 2px;
+        background: var(--line);
+        transition: background-color 150ms;
+      }
+      .soundBars i.on {
+        background: var(--accent);
+      }
+      /* The bars still to come carry a soft pulse travelling along them, so a count that stands still — all
+         SourceTracks are read at once (ADR-0011), so it stays at 0 until they finish — still shows work going on. */
+      .soundBars i:not(.on) {
+        animation: sweep 1.8s linear infinite;
+        animation-delay: calc(var(--i) * 12ms);
+      }
+      @keyframes sweep {
+        0%,
+        26%,
+        100% {
+          background: var(--line);
+        }
+        8% {
+          background: var(--accent);
+        }
+      }
+      .soundArrives p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .soundBars i:not(.on) {
+          animation: none;
+        }
+        .busyMark i {
+          animation: none;
+        }
+      }
+
+      /* ── The overview strip, the zoom, the SourceTracks ───────────────────────────────────────────────────── */
+      #cutPicture[hidden] {
+        display: none;
+      }
+      #cutPicture {
+        padding-bottom: 18px;
+      }
+      .overview {
+        display: block;
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .overview.dragging {
+        cursor: grabbing;
+      }
+      .zoomRow {
+        display: grid;
+        grid-template-columns: 200px 1fr 90px;
+        gap: 14px;
+        align-items: center;
+        padding: 10px 0 4px;
+      }
+      .zoomRow[hidden] {
+        display: none;
+      }
+      .zoomRow output {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .skipRow {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 2px 0 4px;
+        color: var(--muted);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .skipRow[hidden] {
+        display: none;
       }
       #sourceTracks {
         display: grid;
@@ -329,10 +641,11 @@
         gap: 10px;
         align-items: center;
         padding: 6px 8px;
-        border-radius: 6px;
+        border-radius: 8px;
       }
       #sourceTracks .head {
         padding-bottom: 2px;
+        font-family: "Segoe UI Variable Small", "Segoe UI", system-ui, sans-serif;
         color: var(--muted);
         font-size: 11px;
         letter-spacing: 0.06em;
@@ -341,9 +654,7 @@
       #sourceTracks .row:hover {
         background: var(--raised);
       }
-      #sourceTracks .row label {
-        cursor: pointer;
-      }
+      #sourceTracks .row label,
       #sourceTracks .row input {
         cursor: pointer;
       }
@@ -352,53 +663,6 @@
       }
       #sourceTracks .row select {
         width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 4px 6px;
-        background: var(--ground);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-      }
-      button.link {
-        margin-top: 8px;
-        border: none;
-        padding: 0;
-        background: none;
-        color: var(--accent);
-        font-size: 13px;
-        text-decoration: underline;
-      }
-      .hint {
-        margin: 10px 0 0;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .overview {
-        display: block;
-        width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        cursor: pointer;
-      }
-      .zoomRow {
-        display: grid;
-        grid-template-columns: 200px 1fr 90px;
-        gap: 14px;
-        align-items: center;
-        padding: 10px 0 4px;
-      }
-      .zoomRow[hidden] {
-        display: none;
-      }
-      .overview.dragging {
-        cursor: grabbing;
-      }
-      #cutPicture[hidden] {
-        display: none;
-      }
-      #cutPicture {
-        padding-bottom: 18px;
       }
       /* The waveform belongs to the SourceTrack above it, so it sits inside that row rather than in a list of its
          own. A row with no role has none: SmartTrim never read that SourceTrack. */
@@ -417,6 +681,9 @@
         border-radius: 6px;
         cursor: grab;
       }
+      #sourceTracks .waveform canvas.dragging {
+        cursor: grabbing;
+      }
       #sourceTracks .waveform button.play {
         flex: none;
         width: 34px;
@@ -429,18 +696,6 @@
       #sourceTracks .waveform button.play.playing {
         border-color: var(--accent);
         color: var(--accent);
-      }
-      .skipRow {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        padding: 2px 0 4px;
-        color: var(--muted);
-        font-size: 13px;
-        cursor: pointer;
-      }
-      .skipRow[hidden] {
-        display: none;
       }
       .held {
         padding: 10px 8px 0;
@@ -481,14 +736,13 @@
         width: 10px;
         height: 10px;
         border-radius: 2px;
-        background: #5aa9e6;
+        background: var(--held);
       }
       #heldList button.link {
         margin-top: 0;
       }
-      #sourceTracks .waveform canvas.dragging {
-        cursor: grabbing;
-      }
+
+      /* ── Settings ─────────────────────────────────────────────────────────────────────────────────────────── */
       /* `display: grid` below would otherwise beat the browser's own rule for [hidden], leaving the name field and
          the question row on screen for good. Every element with a display of its own needs this. */
       .preset[hidden] {
@@ -526,22 +780,12 @@
       .presetNaming input {
         flex: 1 1 160px;
         max-width: 220px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 5px 7px;
-        background: var(--ground);
-        color: var(--text);
-        font: inherit;
       }
       .preset select {
         max-width: 220px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 5px 7px;
-        background: var(--ground);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
+      }
+      .preset.takeOverRow {
+        padding: 12px 0 0;
       }
       .slider {
         display: grid;
@@ -552,7 +796,6 @@
       }
       .slider input {
         width: 100%;
-        accent-color: var(--accent);
       }
       .slider output {
         text-align: right;
@@ -562,12 +805,39 @@
         display: block;
         color: var(--muted);
       }
+      /* In the narrow right column of draft 2 the labels take the whole first line. */
+      @media (min-width: 1200px) {
+        html[data-draft="2"] .slider,
+        html[data-draft="2"] .preset,
+        html[data-draft="2"] .zoomRow {
+          grid-template-columns: 1fr 90px;
+        }
+        html[data-draft="2"] .slider label,
+        html[data-draft="2"] .preset label,
+        html[data-draft="2"] .zoomRow label {
+          grid-column: 1 / -1;
+        }
+        html[data-draft="2"] .preset .presetRow,
+        html[data-draft="2"] .presetNaming .presetRow {
+          grid-column: 1 / -1;
+        }
+        html[data-draft="2"] .slider {
+          padding: 8px 0;
+        }
+      }
+
+      /* ── Cutting and the result ───────────────────────────────────────────────────────────────────────────── */
       .actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
         align-items: center;
         border-top: 1px solid var(--line);
         padding-top: 20px;
+      }
+      /* `.actions` has a display of its own, which would beat the browser's rule for [hidden]. */
+      .actions[hidden] {
+        display: none;
       }
       #status {
         color: var(--muted);
@@ -575,15 +845,26 @@
       #status.bad {
         color: var(--bad);
       }
+      #status:empty {
+        display: none;
+      }
+      .soundArrives.cutting {
+        padding-top: 16px;
+      }
       #result {
         margin: 16px 0 0;
         padding: 16px 18px;
         border: 1px solid var(--line);
-        border-radius: 9px;
+        border-radius: 10px;
         background: var(--raised);
       }
       #result p {
         margin: 0 0 12px;
+      }
+      #result p:first-child {
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+        font-size: 16px;
+        font-weight: 600;
       }
       #result .buttons {
         display: flex;
@@ -595,6 +876,13 @@
         color: var(--muted);
         font-variant-numeric: tabular-nums;
       }
+      .saveAllRow {
+        margin-top: 20px;
+      }
+      .saveAllRow span {
+        color: var(--muted);
+      }
+
       /* Lies over the whole window while a file is dragged across it. It takes no pointer events, so the drag keeps
          reaching the window underneath, which is where the drop is handled. */
       .dropOverlay {
@@ -604,9 +892,9 @@
         display: grid;
         place-content: center;
         gap: 4px;
-        border: 2px dashed var(--accent);
-        border-radius: 12px;
-        background: rgba(20, 22, 26, 0.88);
+        border: 2px dashed var(--accent-bright);
+        border-radius: 16px;
+        background: rgba(22, 24, 38, 0.9);
         text-align: center;
         pointer-events: none;
       }
@@ -616,27 +904,35 @@
       .dropOverlay strong {
         font-size: 20px;
         font-weight: 600;
-        color: var(--accent);
+        color: var(--accent-bright);
       }
       .dropOverlay span {
         color: var(--muted);
       }
     </style>
   </head>
-  <body>
-    <h1>SmartTrim</h1>
-    <p>Findet die Stellen, an denen nichts passiert, und baut daraus ein Premiere-Projekt.</p>
-
-    <div class="opening">
-      <button id="chooseRecording">Aufnahmen wählen …</button>
-      <button id="openProject">Projekt öffnen …</button>
-    </div>
+  <body class="empty">
+    <header class="top">
+      <div class="brand">
+        <img class="brandMark" src="./assets/smarttrim-icon.svg" alt="" width="28" height="28" />
+        <img class="brandWord" src="./assets/wordmark.png" alt="SmartTrim" />
+      </div>
+      <div class="opening">
+        <button id="chooseRecording">Aufnahmen wählen …</button>
+        <button id="openProject">Projekt öffnen …</button>
+      </div>
+      <div class="draftSwitch" id="draftSwitch" title="Nur im Prototyp: Entwurf umschalten">
+        <span>Entwurf</span>
+        <button type="button" data-draft="1">1 Spalte</button>
+        <button type="button" data-draft="2">2 Spalten</button>
+      </div>
+    </header>
+    <nav class="tabStrip" id="tabStrip" hidden></nav>
     <div class="openNotes" id="openNotes" hidden>
       <p class="notesHeading" id="openNotesHeading"></p>
       <ul id="openNotesList"></ul>
       <button class="notesClose" id="dismissNotes" type="button" title="Ausblenden">×</button>
     </div>
-    <nav class="tabStrip" id="tabStrip" hidden></nav>
 
     <!-- Asked inside the window, never with confirm(): a Windows popup leaves the window without focus (ADR-0018). -->
     <div class="modal" id="tabAsking" hidden>
@@ -664,124 +960,151 @@
       </div>
     </div>
 
-    <section>
-      <h2>Aufnahme</h2>
-      <div id="recordingInfo">Noch keine Aufnahme offen.</div>
-    </section>
+    <main class="layout">
+      <div class="emptyDrop" id="emptyDrop">
+        <img src="./assets/smarttrim-icon.svg" alt="" width="96" height="96" />
+        <strong>Aufnahme hierher ziehen</strong>
+        <span>eine Aufnahme, mehrere, oder ein ganzer Ordner</span>
+        <div class="emptyButtons">
+          <button id="emptyChoose" type="button">Aufnahmen wählen …</button>
+          <button id="emptyOpen" type="button">Projekt öffnen …</button>
+        </div>
+      </div>
 
-    <section>
-      <h2>Tonspuren</h2>
-      <div class="picture" id="picture" hidden>
-        <div class="pictureFrame" id="pictureFrame">
-          <!-- Drawn from frames ffmpeg makes ahead: the one due at the moment heard (ADR-0028). -->
-          <canvas id="pictureCanvas"></canvas>
-        </div>
-        <p class="pictureNote" id="pictureNote" hidden></p>
-        <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
-      </div>
-      <div id="cutPicture" hidden>
-        <canvas id="overview" class="overview" height="34"></canvas>
-        <div class="zoomRow">
-          <label for="zoom">Ausschnitt</label>
-          <input id="zoom" type="range" />
-          <output id="zoomValue"></output>
-        </div>
-        <label class="skipRow" id="skipRow" hidden>
-          <input id="skipRemoved" type="checkbox" checked />
-          Beim Abspielen überspringen, was herausgeschnitten wird
-        </label>
-        <p class="hint">
-          Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
-          um woanders hinzuschauen. Ein Klick in die Wellenform setzt den weißen Strich, ▶ spielt die Spur ab dort,
-          höchstens <span id="longestExcerpt"></span>.
-        </p>
-      </div>
-      <div id="sourceTracks"></div>
-      <div class="held" id="held" hidden>
-        <div class="holdButtons">
-          <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
-          <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
-          <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
-        </div>
-        <ul id="heldList"></ul>
-      </div>
-      <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
-    </section>
+      <div class="column left">
+        <section>
+          <h2>Aufnahme</h2>
+          <div id="recordingInfo">Noch keine Aufnahme offen.</div>
+        </section>
 
-    <section>
-      <h2>Einstellungen</h2>
-      <div class="preset">
-        <label for="preset">Voreinstellung</label>
-        <div class="presetRow">
-          <select id="preset"></select>
-          <button id="savePreset" type="button" title="Die Änderungen in diese Voreinstellung übernehmen">sichern</button>
-          <button id="newPreset" class="icon" type="button" title="Eigene Voreinstellung aus den jetzigen Reglern anlegen">+</button>
-          <button id="deletePreset" type="button">löschen</button>
-        </div>
+        <section>
+          <h2>Tonspuren</h2>
+          <div class="picture" id="picture" hidden>
+            <div class="pictureFrame" id="pictureFrame">
+              <!-- Drawn from frames ffmpeg makes ahead: the one due at the moment heard (ADR-0028). -->
+              <canvas id="pictureCanvas"></canvas>
+            </div>
+            <p class="pictureNote" id="pictureNote" hidden></p>
+            <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
+          </div>
+          <!-- While the SourceTracks are read: the bars fill in where the overview strip and the waveforms will appear. -->
+          <div class="soundArrives" id="reading" hidden>
+            <div class="soundBars" id="readingBars"></div>
+            <p id="readingText"></p>
+          </div>
+          <div id="cutPicture" hidden>
+            <canvas id="overview" class="overview" height="34"></canvas>
+            <div class="zoomRow">
+              <label for="zoom">Ausschnitt</label>
+              <input id="zoom" type="range" />
+              <output id="zoomValue"></output>
+            </div>
+            <label class="skipRow" id="skipRow" hidden>
+              <input id="skipRemoved" type="checkbox" checked />
+              Beim Abspielen überspringen, was herausgeschnitten wird
+            </label>
+            <p class="hint">
+              Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
+              um woanders hinzuschauen. Ein Klick in die Wellenform setzt den weißen Strich, ▶ spielt die Spur ab dort,
+              höchstens <span id="longestExcerpt"></span>.
+            </p>
+          </div>
+          <div id="sourceTracks"></div>
+          <div class="held" id="held" hidden>
+            <div class="holdButtons">
+              <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
+              <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
+              <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
+            </div>
+            <ul id="heldList"></ul>
+          </div>
+          <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
+        </section>
       </div>
-      <div class="preset presetNaming" id="presetNaming" hidden>
-        <label for="presetName">Name</label>
-        <div class="presetRow">
-          <input id="presetName" type="text" maxlength="40" placeholder="z. B. Abend" />
-          <button id="confirmPreset" type="button">Hinzufügen</button>
-          <button id="cancelPreset" type="button">Abbrechen</button>
-        </div>
-      </div>
-      <div class="preset presetNaming" id="presetAsking" hidden>
-        <label></label>
-        <div class="presetRow">
-          <span id="presetQuestion"></span>
-          <button id="confirmAsk" type="button">Ja</button>
-          <button id="cancelAsk" type="button">Abbrechen</button>
-        </div>
-      </div>
-      <div class="slider">
-        <label for="threshold">Lautstärke ab<small>Leiseres gilt als Pause</small></label>
-        <input id="threshold" type="range" />
-        <output id="thresholdValue"></output>
-      </div>
-      <div class="slider">
-        <label for="margin">Luft an den Schnitten<small>Bleibt vor und nach dem Ton stehen</small></label>
-        <input id="margin" type="range" />
-        <output id="marginValue"></output>
-      </div>
-      <div class="slider">
-        <label for="deadZone">Pausen entfernen ab<small>Kürzere Pausen bleiben drin</small></label>
-        <input id="deadZone" type="range" />
-        <output id="deadZoneValue"></output>
-      </div>
-      <div id="eventSliders" hidden>
-        <div class="slider">
-          <label for="eventLead">Vorlauf bei Momenten<small>Bleibt vor einem Knall stehen</small></label>
-          <input id="eventLead" type="range" />
-          <output id="eventLeadValue"></output>
-        </div>
-        <div class="slider">
-          <label for="eventTail">Nachlauf bei Momenten<small>Bleibt danach stehen</small></label>
-          <input id="eventTail" type="range" />
-          <output id="eventTailValue"></output>
-        </div>
-      </div>
-      <div class="preset takeOverRow" id="takeOverRow" hidden>
-        <label for="takeOver">Andere Tabs</label>
-        <div class="presetRow">
-          <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen">Für alle übernehmen</button>
-        </div>
-      </div>
-    </section>
 
-    <div class="actions">
-      <button id="cut" class="primary" disabled>Schneiden</button>
-      <button id="cutAll" type="button" title="Jeden Tab mit seinen eigenen Einstellungen schneiden" hidden>Alle schneiden</button>
-      <div id="status"></div>
-    </div>
+      <div class="column right">
+        <section>
+          <h2>Einstellungen</h2>
+          <div class="preset">
+            <label for="preset">Voreinstellung</label>
+            <div class="presetRow">
+              <select id="preset"></select>
+              <button id="savePreset" type="button" title="Die Änderungen in diese Voreinstellung übernehmen">sichern</button>
+              <button id="newPreset" class="icon" type="button" title="Eigene Voreinstellung aus den jetzigen Reglern anlegen">+</button>
+              <button id="deletePreset" type="button">löschen</button>
+            </div>
+          </div>
+          <div class="preset presetNaming" id="presetNaming" hidden>
+            <label for="presetName">Name</label>
+            <div class="presetRow">
+              <input id="presetName" type="text" maxlength="40" placeholder="z. B. Abend" />
+              <button id="confirmPreset" type="button">Hinzufügen</button>
+              <button id="cancelPreset" type="button">Abbrechen</button>
+            </div>
+          </div>
+          <div class="preset presetNaming" id="presetAsking" hidden>
+            <label></label>
+            <div class="presetRow">
+              <span id="presetQuestion"></span>
+              <button id="confirmAsk" type="button">Ja</button>
+              <button id="cancelAsk" type="button">Abbrechen</button>
+            </div>
+          </div>
+          <div class="slider">
+            <label for="threshold">Lautstärke ab<small>Leiseres gilt als Pause</small></label>
+            <input id="threshold" type="range" />
+            <output id="thresholdValue"></output>
+          </div>
+          <div class="slider">
+            <label for="margin">Luft an den Schnitten<small>Bleibt vor und nach dem Ton stehen</small></label>
+            <input id="margin" type="range" />
+            <output id="marginValue"></output>
+          </div>
+          <div class="slider">
+            <label for="deadZone">Pausen entfernen ab<small>Kürzere Pausen bleiben drin</small></label>
+            <input id="deadZone" type="range" />
+            <output id="deadZoneValue"></output>
+          </div>
+          <div id="eventSliders" hidden>
+            <div class="slider">
+              <label for="eventLead">Vorlauf bei Momenten<small>Bleibt vor einem Knall stehen</small></label>
+              <input id="eventLead" type="range" />
+              <output id="eventLeadValue"></output>
+            </div>
+            <div class="slider">
+              <label for="eventTail">Nachlauf bei Momenten<small>Bleibt danach stehen</small></label>
+              <input id="eventTail" type="range" />
+              <output id="eventTailValue"></output>
+            </div>
+          </div>
+          <div class="preset takeOverRow" id="takeOverRow" hidden>
+            <label for="takeOver">Andere Tabs</label>
+            <div class="presetRow">
+              <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen">Für alle übernehmen</button>
+            </div>
+          </div>
+        </section>
 
-    <div id="result" hidden></div>
+        <div class="actions">
+          <button id="cut" class="primary" disabled>Schneiden</button>
+          <button id="cutAll" type="button" title="Jeden Tab mit seinen eigenen Einstellungen schneiden" hidden>Alle schneiden</button>
+          <div id="status"></div>
+        </div>
 
-    <div class="actions saveAllRow" id="saveAllRow" hidden>
-      <button id="saveAll" type="button">Alle Premiere-Dateien speichern</button>
-      <span>Legt jede Premiere-Datei neben ihre Aufnahme und überschreibt nichts.</span>
-    </div>
+        <!-- While a cut runs: the same bars where the result will appear, pulsing, since cutting reports no steps. -->
+        <div class="soundArrives cutting" id="cutting" hidden>
+          <div class="soundBars" id="cuttingBars"></div>
+          <p id="cuttingText"></p>
+        </div>
+
+        <div id="result" hidden></div>
+
+        <div class="actions saveAllRow" id="saveAllRow" hidden>
+          <button id="saveAll" type="button">Alle Premiere-Dateien speichern</button>
+          <span>Legt jede Premiere-Datei neben ihre Aufnahme und überschreibt nichts.</span>
+        </div>
+      </div>
+    </main>
 
     <div class="dropOverlay" id="dropOverlay" hidden>
       <strong>Hier ablegen</strong>

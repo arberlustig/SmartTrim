@@ -1,6 +1,7 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from "electron";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
 import { saveCutPlan, type CutSummary, type PlanSettings, type SourceTrackWaveform } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
@@ -331,14 +332,30 @@ function registerHandlers(window: BrowserWindow): void {
   );
 }
 
+/** PROTOTYPE: where the window last stood, beside presets.json (ADR-0018); maximised on the very first start. */
+function windowBoundsFile(): string {
+  return join(app.getPath("userData"), "window.json");
+}
+
+type SavedWindow = { x: number; y: number; width: number; height: number; maximized: boolean };
+
+function savedWindow(): SavedWindow | null {
+  try {
+    const saved = JSON.parse(readFileSync(windowBoundsFile(), "utf8")) as SavedWindow;
+    return typeof saved.width === "number" && typeof saved.height === "number" ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
 function createWindow(): void {
+  const saved = savedWindow();
   const window = new BrowserWindow({
-    width: 820,
-    height: 760,
+    ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : { width: 820, height: 760 }),
     minWidth: 560,
     minHeight: 560,
     title: "SmartTrim",
-    backgroundColor: "#14161a",
+    backgroundColor: "#161826",
     show: false,
     // Installed, the window takes the logo from SmartTrim.exe; in a checkout the window would otherwise show Electron's.
     ...(app.isPackaged ? {} : { icon: join(app.getAppPath(), "build", "icon.ico") }),
@@ -351,7 +368,19 @@ function createWindow(): void {
       sandbox: false,
     },
   });
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    // maximize() shows a hidden window itself; the very first start and a start after a maximised close both begin big.
+    if (!saved || saved.maximized) window.maximize();
+    else window.show();
+    window.focus();
+  });
+  window.on("close", () => {
+    try {
+      writeFileSync(windowBoundsFile(), JSON.stringify({ ...window.getNormalBounds(), maximized: window.isMaximized() }));
+    } catch {
+      // Not remembering where the window stood costs nothing but the next start's position.
+    }
+  });
   // Chromium's answer to a file or link dropped where the window does not take it is to open that instead of
   // SmartTrim. The window takes file drops itself; this catches anything that still slips past. A reload keeps the URL.
   window.webContents.on("will-navigate", (details) => {
@@ -369,6 +398,8 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  // The Windows title bar follows this, so it is dark like the window under it.
+  nativeTheme.themeSource = "dark";
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -18,6 +18,8 @@ export default defineConfig({
   },
   renderer: {
     root: "src/renderer",
-    build: { rollupOptions: { input: entry("src/renderer/index.html") } },
+    // Images stay files: the window's Content-Security-Policy allows nothing but 'self', so an image inlined as a
+    // data: URI would not show.
+    build: { assetsInlineLimit: 0, rollupOptions: { input: entry("src/renderer/index.html") } },
   },
 });
