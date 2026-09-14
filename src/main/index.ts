@@ -340,6 +340,8 @@ function createWindow(): void {
     title: "SmartTrim",
     backgroundColor: "#14161a",
     show: false,
+    // Installed, the window takes the logo from SmartTrim.exe; in a checkout the window would otherwise show Electron's.
+    ...(app.isPackaged ? {} : { icon: join(app.getAppPath(), "build", "icon.ico") }),
     webPreferences: {
       preload: fileURLToPath(new URL("../preload/index.mjs", import.meta.url)),
       contextIsolation: true,

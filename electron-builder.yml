@@ -22,7 +22,8 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: build/icon.png
+  # The owner's logo as drawn for every size Windows asks for, 16 to 256 px, rather than one large picture scaled down.
+  icon: build/icon.ico
 nsis:
   oneClick: false
   perMachine: false
