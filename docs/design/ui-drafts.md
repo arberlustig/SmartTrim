@@ -53,4 +53,4 @@ closed. The installed SmartTrim shares that folder; close it first or accept Chr
 
 ## Verdict
 
-_Open until the owner has compared them._
+**Two columns (draft 2)**, chosen by the owner on 2026-09-14 after comparing both in the real window ("2 Spalten"). Built properly on main from here; this branch stays as the primary source.
