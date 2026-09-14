@@ -135,6 +135,7 @@ const view = {
   takeOverSliders: element<HTMLButtonElement>("takeOverSliders"),
   cancelTakeOver: element<HTMLButtonElement>("cancelTakeOver"),
   cutPicture: element("cutPicture"),
+  cutHint: element("cutHint"),
   picture: element("picture"),
   pictureFrame: element("pictureFrame"),
   pictureCanvas: element<HTMLCanvasElement>("pictureCanvas"),
@@ -1220,6 +1221,8 @@ function drawWaveforms(): void {
   const seconds = recordingSeconds(tab);
   // No SourceTrack with a role means nothing to picture — an empty strip would sit there claiming to show a cut.
   view.cutPicture.hidden = !tab || !seconds || shownWaveforms(tab).length === 0;
+  // The hint about the colours and the Playhead sits under the picture, but belongs to the strip and the waveforms.
+  view.cutHint.hidden = view.cutPicture.hidden;
   if (!tab || !seconds || view.cutPicture.hidden) return;
 
   view.zoom.min = "0";

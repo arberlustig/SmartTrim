@@ -467,7 +467,30 @@
         display: none;
       }
 
-      /* ── The picture, centred, in the Recording's own shape (ADR-0028) ────────────────────────────────────── */
+      /* ── The picture and the SourceTracks beside it ───────────────────────────────────────────────────────── */
+      /* The section measures its own width, so the SourceTracks move beside the picture when there is room for both
+         — on the owner's screen — and stay under it on a narrower one, whatever the window's other column does. */
+      section.tracks {
+        container-type: inline-size;
+        container-name: tracks;
+      }
+      @container tracks (min-width: 1500px) {
+        /* Only with a picture on screen: folded away, or with no Recording open, the SourceTracks take the width. */
+        .tracksLayout:has(#picture:not([hidden]) > #pictureFrame:not([hidden])) {
+          display: grid;
+          grid-template-columns: min(800px, 42%) minmax(0, 1fr);
+          column-gap: 32px;
+          align-items: start;
+        }
+        /* The picture keeps to the top of the window while a longer list of SourceTracks scrolls past it. */
+        .tracksLayout:has(#picture:not([hidden]) > #pictureFrame:not([hidden])) .pictureColumn {
+          position: sticky;
+          top: 16px;
+        }
+      }
+      .pictureColumn .hint {
+        margin-top: 12px;
+      }
       .picture {
         margin: 0 0 14px;
       }
@@ -938,48 +961,56 @@
           <div id="recordingInfo">Noch keine Aufnahme offen.</div>
         </section>
 
-        <section>
+        <section class="tracks">
           <h2>Tonspuren</h2>
-          <div class="picture" id="picture" hidden>
-            <div class="pictureFrame" id="pictureFrame">
-              <!-- Drawn from frames ffmpeg makes ahead: the one due at the moment heard (ADR-0028). -->
-              <canvas id="pictureCanvas"></canvas>
+          <!-- Wide enough, the picture stands on the left and the SourceTracks beside it, so the picture stays in view
+               while a SourceTrack far down the list is worked on (ADR-0029). Narrower, the picture comes first. -->
+          <div class="tracksLayout">
+            <div class="pictureColumn">
+              <div class="picture" id="picture" hidden>
+                <div class="pictureFrame" id="pictureFrame">
+                  <!-- Drawn from frames ffmpeg makes ahead: the one due at the moment heard (ADR-0028). -->
+                  <canvas id="pictureCanvas"></canvas>
+                </div>
+                <p class="pictureNote" id="pictureNote" hidden></p>
+                <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
+              </div>
+              <p class="hint" id="cutHint" hidden>
+                Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
+                um woanders hinzuschauen. Ein Klick in die Wellenform setzt den weißen Strich, ▶ spielt die Spur ab dort,
+                höchstens <span id="longestExcerpt"></span>.
+              </p>
             </div>
-            <p class="pictureNote" id="pictureNote" hidden></p>
-            <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
-          </div>
-          <!-- While the SourceTracks are read: the bars fill in where the overview strip and the waveforms will appear. -->
-          <div class="soundArrives" id="reading" hidden>
-            <div class="soundBars" id="readingBars"></div>
-            <p id="readingText"></p>
-          </div>
-          <div id="cutPicture" hidden>
-            <canvas id="overview" class="overview" height="34"></canvas>
-            <div class="zoomRow">
-              <label for="zoom">Ausschnitt</label>
-              <input id="zoom" type="range" />
-              <output id="zoomValue"></output>
+            <div class="tracksColumn">
+              <!-- While the SourceTracks are read: the bars fill in where the overview strip and the waveforms will appear. -->
+              <div class="soundArrives" id="reading" hidden>
+                <div class="soundBars" id="readingBars"></div>
+                <p id="readingText"></p>
+              </div>
+              <div id="cutPicture" hidden>
+                <canvas id="overview" class="overview" height="34"></canvas>
+                <div class="zoomRow">
+                  <label for="zoom">Ausschnitt</label>
+                  <input id="zoom" type="range" />
+                  <output id="zoomValue"></output>
+                </div>
+                <label class="skipRow" id="skipRow" hidden>
+                  <input id="skipRemoved" type="checkbox" checked />
+                  Beim Abspielen überspringen, was herausgeschnitten wird
+                </label>
+              </div>
+              <div id="sourceTracks"></div>
+              <div class="held" id="held" hidden>
+                <div class="holdButtons">
+                  <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
+                  <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
+                  <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
+                </div>
+                <ul id="heldList"></ul>
+              </div>
+              <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
             </div>
-            <label class="skipRow" id="skipRow" hidden>
-              <input id="skipRemoved" type="checkbox" checked />
-              Beim Abspielen überspringen, was herausgeschnitten wird
-            </label>
-            <p class="hint">
-              Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
-              um woanders hinzuschauen. Ein Klick in die Wellenform setzt den weißen Strich, ▶ spielt die Spur ab dort,
-              höchstens <span id="longestExcerpt"></span>.
-            </p>
           </div>
-          <div id="sourceTracks"></div>
-          <div class="held" id="held" hidden>
-            <div class="holdButtons">
-              <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
-              <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
-              <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
-            </div>
-            <ul id="heldList"></ul>
-          </div>
-          <p class="hint" id="sourceTracksHint">Wähle zuerst eine Aufnahme.</p>
         </section>
       </div>
 

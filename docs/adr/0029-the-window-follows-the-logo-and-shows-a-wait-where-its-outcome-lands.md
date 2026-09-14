@@ -20,6 +20,13 @@ screen. **They chose two columns.** This ADR records what was decided and what w
   the SourceTrack rows with their waveforms, the held stretches. Right, 400 px, sticky while the left scrolls: the
   settings, *Schneiden*, the result, saving all. Below 1200 px everything stacks into the old order, centred with a
   maximum width. The order of everything, every word and every slider is unchanged.
+- **The SourceTracks stand beside the picture** when the Tonspuren section is at least 1500 px wide (a container
+  query on the section, so it does not depend on the window's other column): the picture on the left, up to 800 px
+  or 42 % of the section, sticking to the top of the window; the overview strip, the zoom, the skip switch, the rows
+  with their waveforms and the held stretches on the right; the hint about the colours under the picture. Folded away,
+  or with no Recording open, the SourceTracks take the width. Asked for by the owner after their first check on
+  2026-09-14: working on a SourceTrack far down the list meant scrolling up to see the picture. Narrower, the picture
+  comes first, as before.
 - **A wait is shown where its outcome will land** (`waitOf` in `src/app/waiting.ts`, tested). While a Tab's
   SourceTracks are scanned or read, rows of bars in the logo's rhythm stand where the overview strip and the waveforms
   will appear, with the job's status line under them; while a cut runs, the same bars stand under *Schneiden* where
