@@ -19,7 +19,7 @@ The single-track Recording agrees but cannot tell the rules apart: its audio run
 
 ## Considered Options
 
-- **Every SourceTrack rounded down, the first included** — matches five of the six the long Recording SourceTracks and ends SourceTrack 1 two frames before Premiere does. Never imported; the demo cut the owner imported on 2026-09-11 used Premiere's own lengths.
+- **Every SourceTrack rounded down, the first included** — matches five of the long Recording's six SourceTracks and ends SourceTrack 1 two frames before Premiere does. Never imported; the demo cut the owner imported on 2026-09-11 used Premiere's own lengths.
 - **Counting samples at the end of each stream** instead of ffprobe's `duration_ts`. `duration_ts` comes from the edit list, which OBS writes in milliseconds, so in long-recording.mp4 it stops 16 samples before the last packet ends. That changes the rounded-down frame only when a SourceTrack ends within a few hundredths of a frame after a frame boundary, and reading packet timestamps means reading into the file (ADR-0004). Both Recordings give the same frames either way.
 
 ## Refused rather than guessed

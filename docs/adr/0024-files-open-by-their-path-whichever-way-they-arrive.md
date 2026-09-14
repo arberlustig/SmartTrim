@@ -59,7 +59,7 @@ opening a second file while the first is still being scanned or read into an eve
 Checked over CDP on the built app (`electron.exe . --remote-debugging-port=9223`, because a dev server held port
 5173): the 25-minute capture dropped while the long Recording's SourceTracks were being read gave no red message, kept the 25-minute capture on screen and drew a role
 given to the 25-minute capture at once, without reading; the 25-minute capture dropped while a project read its audio gave no red message; a pointer move
-after a cancelled drag hid the overlay. the long Recording's scan finished before a role could be set during it, so that case rests
+after a cancelled drag hid the overlay. The long Recording's scan finished before a role could be set during it, so that case rests
 on the test in `cutSession.test.ts`. The owner confirmed with a real mouse the same day that the overlay stays up
 while a file is moved about over the window (so a real drag sends no pointer moves), and that dropping the 25-minute capture while
 the long Recording was being read gave no red message, kept the 25-minute capture on screen and drew a role given to the 25-minute capture at once.
