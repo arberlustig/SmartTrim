@@ -27,8 +27,11 @@ export interface PlayedPiece {
 export interface Playback {
   sampleRate: number;
   channelCount: number;
-  /** 16-bit samples with the Channels interleaved, as in the Excerpt. */
-  samples: Int16Array;
+  /**
+   * One run of samples from -1 to 1 per Channel, left first — the way Web Audio takes them, so the window copies each
+   * Channel in whole when ▶ is pressed rather than converting them one by one on its own thread (ADR-0028).
+   */
+  channels: Float32Array[];
   pieces: PlayedPiece[];
   joins: Join[];
 }
@@ -61,7 +64,8 @@ export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRem
     );
   }
 
-  const played = new Int16Array(pieces.reduce((total, [start, end]) => total + (end - start) * channelCount, 0));
+  const playedLength = pieces.reduce((total, [start, end]) => total + end - start, 0);
+  const channels = Array.from({ length: channelCount }, () => new Float32Array(playedLength));
   const playedPieces: PlayedPiece[] = [];
   const joins: Join[] = [];
   let playedFrames = 0;
@@ -79,11 +83,17 @@ export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRem
       recordingToSeconds: secondsAt(end),
       playedFromSeconds: playedFrames / sampleRate,
     });
-    played.set(samples.subarray(start * channelCount, end * channelCount), playedFrames * channelCount);
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const out = channels[channel] as Float32Array;
+      let from = start * channelCount + channel;
+      for (let to = playedFrames; to < playedFrames + end - start; to += 1, from += channelCount) {
+        out[to] = (samples[from] as number) / 32768;
+      }
+    }
     playedFrames += end - start;
   });
 
-  return { sampleRate, channelCount, samples: played, pieces: playedPieces, joins };
+  return { sampleRate, channelCount, channels, pieces: playedPieces, joins };
 }
 
 /**

@@ -21,8 +21,9 @@ function numberedExcerpt(fromSeconds: number, seconds: number): Excerpt {
   return { fromSeconds, sampleRate, channelCount: 2, samples };
 }
 
-const leftChannel = (samples: Int16Array) => samples.filter((_sample, index) => index % 2 === 0);
-const rightChannel = (samples: Int16Array) => samples.filter((_sample, index) => index % 2 === 1);
+/** A Channel of what is played, back in the Excerpt's 16-bit numbers. */
+const channelOf = (played: { channels: Float32Array[] }, channel: number) =>
+  [...(played.channels[channel] ?? [])].map((value) => value * 32768);
 
 describe("listening to the cut", () => {
   // 3 s of Recording from 100 s. Kept: until 100.5 s, 101.2 to 101.8 s, from 102.5 s on — the first and the last
@@ -30,8 +31,11 @@ describe("listening to the cut", () => {
   test("skipping what is removed plays the kept frames back to back, with a Join wherever a removed stretch was", () => {
     const played = playbackOf(numberedExcerpt(100, 3), kept([99, 100.5], [101.2, 101.8], [102.5, 110]), true);
 
-    expect([...leftChannel(played.samples)]).toEqual([0, 1, 2, 3, 4, 12, 13, 14, 15, 16, 17, 25, 26, 27, 28, 29]);
-    expect([...rightChannel(played.samples)]).toEqual([0, -1, -2, -3, -4, -12, -13, -14, -15, -16, -17, -25, -26, -27, -28, -29]);
+    // One run per Channel from -1 to 1, the way Web Audio takes it: the window copies each in whole when ▶ is pressed,
+    // instead of converting three minutes of samples one by one, which froze it for up to half a second (ADR-0028).
+    expect(played.channels).toHaveLength(2);
+    expect(channelOf(played, 0)).toEqual([0, 1, 2, 3, 4, 12, 13, 14, 15, 16, 17, 25, 26, 27, 28, 29]);
+    expect(channelOf(played, 1)).toEqual([0, -1, -2, -3, -4, -12, -13, -14, -15, -16, -17, -25, -26, -27, -28, -29]);
     expect(played.joins).toEqual([
       { playedSeconds: 0.5, removedFromSeconds: 100.5, removedToSeconds: 101.2 },
       { playedSeconds: 1.1, removedFromSeconds: 101.8, removedToSeconds: 102.5 },
@@ -64,7 +68,8 @@ describe("listening to the cut", () => {
 
     const played = playbackOf(excerpt, kept([99, 100.5], [101.2, 101.8], [102.5, 110]), false);
 
-    expect([...played.samples]).toEqual([...excerpt.samples]);
+    expect(channelOf(played, 0)).toEqual([...excerpt.samples].filter((_sample, index) => index % 2 === 0));
+    expect(channelOf(played, 1)).toEqual([...excerpt.samples].filter((_sample, index) => index % 2 === 1));
     expect(played.joins).toEqual([]);
     expect(recordingSecondsAt(played, 0)).toBeCloseTo(100, 9);
     expect(recordingSecondsAt(played, 0.8)).toBeCloseTo(100.8, 9);

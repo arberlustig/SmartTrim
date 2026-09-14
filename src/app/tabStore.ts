@@ -9,6 +9,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
 import { saveTrimProject, trimProjectOf, type SavedChoices } from "../project/openTrimProject.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import { newPictureFrames, type PictureFrames, type PictureRun } from "../picture/pictureFrames.ts";
 import { readExcerpt, type Excerpt } from "../playback/readExcerpt.ts";
 import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
 import { recordingPathOf, sameRecording, type OpenedFile } from "./openFile.ts";
@@ -32,6 +33,12 @@ export interface OpenedTab {
 
 /** Called as each SourceTrack of a read finishes. */
 export type OnRead = (done: number, total: number) => void;
+
+/** How the picture is doing, for the measuring scripts: the memory its frames hold and how its ffmpeg runs went. */
+export interface PictureState {
+  heldBytes: number;
+  runs: readonly PictureRun[];
+}
 
 /** Everything the main process keeps for one Tab (CONTEXT.md). Nothing in here is shared with another Tab. */
 interface Tab {
@@ -103,6 +110,15 @@ export interface TabStore {
   readSourceTracks(tabId: number, positions: readonly number[], onRead?: OnRead): Promise<SourceTrackWaveform[]>;
   /** Reads one SourceTrack of the Tab's Recording over a stretch, for the window to play; nothing of it is kept (ADR-0022). */
   readExcerpt(tabId: number, request: { position: number; fromSeconds: number; toSeconds: number }): Promise<Excerpt>;
+  /**
+   * Asks for the picture of the Tab's Recording from a moment on, made ahead by ffmpeg in the background (ADR-0028).
+   * Only one Recording's frames are held: asking for another Tab's lets go of the frames of the one before.
+   */
+  wantPicture(tabId: number, fromSeconds: number): Promise<void>;
+  /** The JPEGs of these frames of the Tab's Recording, null for each one not made yet. */
+  pictureFrames(tabId: number, indices: readonly number[]): (Uint8Array | null)[];
+  /** How much memory the picture holds and how its ffmpeg runs went. */
+  pictureState(): PictureState;
   /** Analyses the Tab's Recording and plans the cuts. The plan stays here until it is saved. */
   cut(tabId: number, request: AnalysisRequest): Promise<CutSummary>;
   /** The waveform of every SourceTrack the Tab's last analysis read. */
@@ -121,6 +137,9 @@ export interface TabStore {
 export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
   const tabs = new Map<number, Tab>();
   let lastId = 0;
+  /** The picture's frames, made on the first wish for them, and the Tab they were last wished for. */
+  let pictures: PictureFrames | null = null;
+  let pictureTabId: number | null = null;
 
   function tabOf(tabId: number): Tab {
     const tab = tabs.get(tabId);
@@ -194,6 +213,11 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
 
     close(tabId) {
       tabs.delete(tabId);
+      // A closed Tab's picture is not made on: its ffmpeg would keep the graphics card busy for nothing.
+      if (pictureTabId === tabId) {
+        pictures?.stop();
+        pictureTabId = null;
+      }
     },
 
     recordingOf(tabId) {
@@ -226,6 +250,23 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
       const excerpt = await readExcerpt(tab.recording, position, fromSeconds, toSeconds, (await tools()).ffmpeg);
       stillOpen(tabId, tab);
       return excerpt;
+    },
+
+    async wantPicture(tabId, fromSeconds) {
+      const tab = tabOf(tabId);
+      pictures ??= newPictureFrames((await tools()).ffmpeg);
+      stillOpen(tabId, tab);
+      pictureTabId = tabId;
+      pictures.want(tab.recording, fromSeconds);
+    },
+
+    pictureFrames(tabId, indices) {
+      const tab = tabOf(tabId);
+      return pictures ? pictures.frames(tab.recording, indices) : indices.map(() => null);
+    },
+
+    pictureState() {
+      return { heldBytes: pictures?.heldBytes() ?? 0, runs: pictures?.runs() ?? [] };
     },
 
     async cut(tabId, request) {

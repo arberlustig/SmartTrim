@@ -1,6 +1,7 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { Preset } from "../app/cutSession.ts";
 import type { Refusal } from "../app/openFile.ts";
+import type { PictureState } from "../app/tabStore.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { CutSummary, PlanSettings, SourceTrackWaveform } from "../app/runCut.ts";
@@ -86,6 +87,15 @@ export interface SmartTrimApi {
    * sample rate, for the window to play. Nothing of it is kept (ADR-0022).
    */
   readExcerpt(request: ExcerptRequest): Promise<Answer<Excerpt>>;
+  /**
+   * Asks for the picture of a Tab's Recording from a moment on, three minutes of small JPEG frames made ahead in the
+   * background (ADR-0028). Answers at once.
+   */
+  wantPicture(tabId: number, fromSeconds: number): Promise<Answer<null>>;
+  /** The JPEGs of these frames of a Tab's Recording, null for each one not made yet. Frame k is on screen from k / fps. */
+  pictureFrames(tabId: number, indices: readonly number[]): Promise<Answer<(Uint8Array | null)[]>>;
+  /** How much memory the picture holds and how its ffmpeg runs went — what the measuring scripts read. */
+  pictureState(): Promise<Answer<PictureState>>;
   /** Called as each SourceTrack finishes being read, so the window can say how far it has got. */
   onReadProgress(listen: (progress: ReadProgress) => void): void;
   /** Analyses a Tab's Recording and plans the cuts. The plan stays in the main process until it is saved. */

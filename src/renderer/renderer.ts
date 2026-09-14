@@ -56,8 +56,7 @@ import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.t
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
 import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Join, type Playback } from "../playback/playback.ts";
-import { videoAddressOf } from "../video/address.ts";
-import { pictureFor } from "../video/picture.ts";
+import { frameAtSeconds, framesDue } from "../picture/framesDue.ts";
 import type { Answer, OpenedInWindow, SmartTrimApi } from "../preload/api.ts";
 
 declare global {
@@ -127,8 +126,7 @@ const view = {
   cutPicture: element("cutPicture"),
   picture: element("picture"),
   pictureFrame: element("pictureFrame"),
-  pictureA: element<HTMLVideoElement>("pictureA"),
-  pictureB: element<HTMLVideoElement>("pictureB"),
+  pictureCanvas: element<HTMLCanvasElement>("pictureCanvas"),
   pictureNote: element("pictureNote"),
   pictureToggle: element<HTMLButtonElement>("pictureToggle"),
   overview: element<HTMLCanvasElement>("overview"),
@@ -1497,7 +1495,7 @@ function followPlayhead(): void {
   if (!now) return;
   const { tab } = now;
   const heard = heardIn(now);
-  followPicture(now, now.context.currentTime - now.startedAt);
+  followPicture(now);
   const seconds = recordingSeconds(tab);
   const wasInView = lastHeard !== null && lastHeard >= tab.zoom.fromSeconds && lastHeard <= tab.zoom.toSeconds;
   lastHeard = heard;
@@ -1562,6 +1560,8 @@ async function play(position: number): Promise<void> {
   const toSeconds = Math.min(fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
   // The Playhead starts in view, so a start that skipping carries past the right edge still turns the page.
   lastHeard = fromSeconds;
+  // The picture's frames are made from here while the Excerpt is read (ADR-0028).
+  preparePicture(tab, fromSeconds);
   // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
   const kept = tab.finished?.keptRanges ?? null;
   const skipping = view.skipRemoved.checked && kept !== null;
@@ -1594,6 +1594,13 @@ async function play(position: number): Promise<void> {
     return;
   }
 
+  // The sound waits a moment for the picture's first frames, so both start together (ADR-0028). Until it starts it still
+  // counts as on its way, so a click meanwhile jumps instead of finding nothing to stop.
+  fetchingFor = position;
+  await waitForPicture(tab, playback, () => request === playRequest && isOpen(tab));
+  if (request !== playRequest || !isOpen(tab)) return;
+  fetchingFor = null;
+
   // `play` runs detached from the button, so a failure here would otherwise vanish without a word.
   let sound: ReturnType<typeof startSound>;
   try {
@@ -1611,14 +1618,10 @@ async function play(position: number): Promise<void> {
 /** Turns what is to be played into sound on the shared AudioContext and starts it a moment from now. */
 function startSound(playback: Playback): { context: AudioContext; source: AudioBufferSourceNode; startedAt: number } {
   const context = sharedAudio();
-  const frames = playback.samples.length / playback.channelCount;
+  const frames = playback.channels[0]?.length ?? 0;
   const buffer = context.createBuffer(playback.channelCount, frames, playback.sampleRate);
-  for (let channel = 0; channel < playback.channelCount; channel += 1) {
-    const out = buffer.getChannelData(channel);
-    for (let frame = 0; frame < frames; frame += 1) {
-      out[frame] = (playback.samples[frame * playback.channelCount + channel] as number) / 32768;
-    }
-  }
+  // Copied in whole per Channel. Converting sample by sample here froze the window for up to half a second (ADR-0028).
+  playback.channels.forEach((channel, index) => buffer.copyToChannel(channel as Float32Array<ArrayBuffer>, index));
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
@@ -1693,54 +1696,123 @@ let pictureOpen = (() => {
     return true;
   }
 })();
-/**
- * The two <video> elements take turns. `front` is on screen; `back` already waits at the moment the next Join jumps
- * to, so the picture follows a Join within a frame or two of the sound instead of freezing while one element seeks
- * (ADR-0027).
+/*
+ * The picture is drawn on a canvas from small JPEG frames that ffmpeg makes ahead in the main process (ADR-0028). Every
+ * animation frame draws the frame due at the moment leaving the speakers, and the next half second is unpacked ahead,
+ * so a Join is only another frame number: nothing seeks while the sound plays. Two <video> elements hitched 4–5 frames
+ * at every Join, and a WebCodecs decoder was held to 63 frames a second while the window drew (ADR-0027).
  */
-let front = view.pictureA;
-let back = view.pictureB;
-/** The Tab whose Recording both elements hold. */
+
+/** How far ahead of the sound frames are unpacked, so drawing never waits for one. */
+const UNPACK_AHEAD_SECONDS = 0.5;
+/** How long the sound may wait for the picture's first frames: the owner allowed 0.3 s later than without a picture. */
+const PICTURE_WAIT_MS = 300;
+/** How much of the start the sound waits for, so the picture does not stop again right after it has begun. */
+const PICTURE_START_SECONDS = 0.25;
+
+const pictureContext = view.pictureCanvas.getContext("2d") as CanvasRenderingContext2D;
+/** Frames unpacked and ready to draw, by number, all of the Recording of `pictureTabId`. */
+const unpacked = new Map<number, ImageBitmap>();
+/** Frames on their way from the main process, so none is asked for twice at once. */
+const unpacking = new Set<number>();
+/** Whether the frames ahead of the sound are being fetched, so animation frames do not pile requests on each other. */
+let unpackingAhead = false;
+/** The Tab whose picture is shown. */
 let pictureTabId: number | null = null;
-/** The Join `back` has been made ready for, while a sound plays. */
-let backReadyFor: Join | null = null;
-/** Where the still frame was last put, so a redraw does not seek again to where the picture already is. */
+/** The frame on the canvas, so the same one is not drawn again every animation frame. */
+let shownFrame: number | null = null;
+/** Where the still frame was last asked for, so a redraw does not ask again. */
 let stillAt: number | null = null;
-/** Why the picture cannot be shown, when the window could not play the Recording. */
+/** Why the picture cannot be shown, when the main process refused to make it. */
 let pictureFailed: string | null = null;
 
-/** Stops both elements and forgets what `back` was made ready for. */
+/** Lets go of every unpacked frame but `keep`. */
+function keepUnpacked(keep: ReadonlySet<number>): void {
+  for (const [index, bitmap] of unpacked) {
+    if (keep.has(index)) continue;
+    bitmap.close();
+    unpacked.delete(index);
+  }
+}
+
+/** Starts over for another Tab, or for none. */
+function forgetPicture(tabId: number | null): void {
+  pictureTabId = tabId;
+  keepUnpacked(new Set());
+  shownFrame = null;
+  stillAt = null;
+  pictureFailed = null;
+  pictureContext.clearRect(0, 0, view.pictureCanvas.width, view.pictureCanvas.height);
+}
+
+/** Asks the main process for the picture of a Tab from a moment on, unless the picture is folded away. */
+function preparePicture(tab: OpenTab, seconds: number): void {
+  if (!pictureOpen) return;
+  void window.smarttrim.wantPicture(tab.id, seconds).then((answer) => {
+    if (answer.ok || pictureTabId !== tab.id) return;
+    pictureFailed = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen: ${answer.message}`;
+    drawPicture(viewed());
+  });
+}
+
+/** Fetches these frames from the main process and unpacks them. Frames not made yet stay missing until asked again. */
+async function unpackFrames(tabId: number, indices: readonly number[]): Promise<void> {
+  const wanted = indices.filter((index) => !unpacked.has(index) && !unpacking.has(index));
+  if (wanted.length === 0) return;
+  for (const index of wanted) unpacking.add(index);
+  try {
+    const answer = await window.smarttrim.pictureFrames(tabId, wanted);
+    if (!answer.ok || pictureTabId !== tabId) return;
+    await Promise.all(
+      answer.value.map(async (jpeg, at) => {
+        if (!jpeg) return;
+        const index = wanted[at] as number;
+        const bitmap = await createImageBitmap(new Blob([jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+        if (pictureTabId !== tabId || unpacked.has(index)) bitmap.close();
+        else unpacked.set(index, bitmap);
+      }),
+    );
+  } catch {
+    // A frame that could not be unpacked is asked for again on the next animation frame.
+  } finally {
+    for (const index of wanted) unpacking.delete(index);
+  }
+}
+
+/** Puts a frame on the canvas, if it is unpacked. A frame still missing leaves the one before on screen. */
+function drawFrame(index: number): boolean {
+  const bitmap = unpacked.get(index);
+  if (!bitmap) return false;
+  if (shownFrame !== index) {
+    pictureContext.drawImage(bitmap, 0, 0, view.pictureCanvas.width, view.pictureCanvas.height);
+    shownFrame = index;
+  }
+  return true;
+}
+
+/** The picture stops with the sound; the next draw puts the still frame where the sound stopped. */
 function pausePicture(): void {
-  front.pause();
-  back.pause();
-  backReadyFor = null;
   stillAt = null;
 }
 
 /**
- * The picture of the Tab on screen: its Recording loaded, folded or not, and — while nothing plays — the still frame
- * under the Playhead, or the first frame while there is none. Zooming and dragging the view leave it where it is.
+ * The picture of the Tab on screen: folded or not, and — while nothing plays — the still frame under the Playhead, or
+ * the first frame while there is none. Zooming and dragging the view leave it where it is.
  */
 function drawPicture(tab: OpenTab | null): void {
   const recording = tab?.session.recording ?? null;
   view.picture.hidden = !tab || !recording;
   if (!tab || !recording) {
-    // No Tab left: let go of the Recording, so a closed Tab's file is not held open by the window.
-    if (pictureTabId !== null) {
-      pictureTabId = null;
-      pausePicture();
-      for (const element of [front, back]) {
-        element.removeAttribute("src");
-        element.load();
-      }
-    }
+    if (pictureTabId !== null) forgetPicture(null);
     return;
   }
-  if (pictureTabId !== tab.id) {
-    pictureTabId = tab.id;
-    pictureFailed = null;
-    pausePicture();
-    for (const element of [front, back]) element.src = videoAddressOf(tab.id);
+  if (pictureTabId !== tab.id) forgetPicture(tab.id);
+  // The canvas holds the frames at the size they are made, in the Recording's own shape; CSS fits it to the frame.
+  const width = Math.round((PICTURE_HEIGHT_PX * recording.width) / recording.height / 2) * 2;
+  if (view.pictureCanvas.width !== width || view.pictureCanvas.height !== PICTURE_HEIGHT_PX) {
+    view.pictureCanvas.width = width;
+    view.pictureCanvas.height = PICTURE_HEIGHT_PX;
+    shownFrame = null;
   }
   view.pictureToggle.textContent = pictureOpen ? "Bild ausblenden" : "Bild zeigen";
   view.pictureFrame.hidden = !pictureOpen;
@@ -1749,37 +1821,70 @@ function drawPicture(tab: OpenTab | null): void {
   // As wide as the waveforms and no higher than PICTURE_HEIGHT_PX, in the Recording's own shape.
   view.pictureFrame.style.aspectRatio = `${recording.width} / ${recording.height}`;
   view.pictureFrame.style.maxWidth = `${(PICTURE_HEIGHT_PX * recording.width) / recording.height}px`;
-  if (!pictureOpen || playing?.tab === tab) return;
+  // While a sound plays, or its Excerpt is on its way, the sound decides what is shown.
+  if (!pictureOpen || playing?.tab === tab || fetchingFor !== null) return;
   const wanted = tab.playheadSeconds ?? 0;
   if (stillAt !== wanted) {
     stillAt = wanted;
-    front.pause();
-    front.currentTime = wanted;
+    void showStill(tab, wanted);
   }
 }
 
-/** Keeps the picture with the sound, once per frame while a SourceTrack plays. The sound is the clock. */
-function followPicture(sound: NonNullable<typeof playing>, playedSeconds: number): void {
-  if (!pictureOpen || pictureTabId !== sound.tab.id) return;
-  stillAt = null;
-  // The Join `back` waits for has been reached: it takes over where the sound went on, and the other one stops.
-  if (backReadyFor && playedSeconds >= backReadyFor.playedSeconds) {
-    [front, back] = [back, front];
-    front.classList.add("front");
-    back.classList.remove("front");
-    back.pause();
-    backReadyFor = null;
+/** The still frame at a moment: asked for, then drawn once it is made and unpacked — at once where it already is. */
+async function showStill(tab: OpenTab, seconds: number): Promise<void> {
+  const recording = tab.session.recording;
+  if (!recording) return;
+  const index = frameAtSeconds(recording, seconds);
+  preparePicture(tab, seconds);
+  const stillWanted = () => stillAt === seconds && pictureTabId === tab.id && playing?.tab !== tab;
+  // Where ffmpeg has not been yet the frame takes a few hundred milliseconds; after five seconds it is given up on.
+  const asked = performance.now();
+  while (stillWanted() && performance.now() - asked < 5000) {
+    await unpackFrames(tab.id, [index]);
+    if (!stillWanted()) return;
+    if (drawFrame(index)) {
+      keepUnpacked(new Set([index]));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 15));
   }
-  // A picture that took over before its seek ended is left to finish it: seeking it again every frame never lets it
-  // arrive, and the abandoned seeks pile up on the graphics chip (ADR-0027).
-  const step = pictureFor(sound.playback, Math.max(playedSeconds, 0), { seconds: front.currentTime, seeking: front.seeking });
-  if (step.seek) front.currentTime = step.wantedSeconds;
-  // The sound starts a moment after it is scheduled; the picture starts with it, not before.
-  if (front.paused && playedSeconds > 0) void front.play().catch(() => undefined);
-  if (step.nextJoin && backReadyFor !== step.nextJoin) {
-    backReadyFor = step.nextJoin;
-    back.pause();
-    back.currentTime = step.nextJoin.removedToSeconds;
+}
+
+/** The moment of what is played that is leaving the speakers now — later than the audio clock by the output latency. */
+function audibleSecondsOf(sound: NonNullable<typeof playing>): number {
+  const stamp = sound.context.getOutputTimestamp();
+  if (!stamp.contextTime || !stamp.performanceTime) return sound.context.currentTime - sound.startedAt;
+  return stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000 - sound.startedAt;
+}
+
+/** Keeps the picture with the sound, once per animation frame while a SourceTrack plays. The sound is the clock. */
+function followPicture(sound: NonNullable<typeof playing>): void {
+  const recording = sound.tab.session.recording;
+  if (!pictureOpen || pictureTabId !== sound.tab.id || !recording) return;
+  stillAt = null;
+  const { due, ahead } = framesDue(sound.playback, audibleSecondsOf(sound), recording, UNPACK_AHEAD_SECONDS);
+  drawFrame(due);
+  keepUnpacked(new Set(ahead));
+  if (unpackingAhead) return;
+  unpackingAhead = true;
+  void unpackFrames(sound.tab.id, ahead).finally(() => {
+    unpackingAhead = false;
+  });
+}
+
+/**
+ * Lets the sound wait up to PICTURE_WAIT_MS for the picture's first quarter second, so both start together. Past that
+ * the sound starts anyway and the picture joins it once its frames are there.
+ */
+async function waitForPicture(tab: OpenTab, playback: Playback, stillWanted: () => boolean): Promise<void> {
+  const recording = tab.session.recording;
+  if (!pictureOpen || pictureTabId !== tab.id || !recording) return;
+  const { ahead } = framesDue(playback, 0, recording, PICTURE_START_SECONDS);
+  const since = performance.now();
+  while (stillWanted() && performance.now() - since < PICTURE_WAIT_MS) {
+    await unpackFrames(tab.id, ahead);
+    if (ahead.every((index) => unpacked.has(index))) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -1791,24 +1896,10 @@ view.pictureToggle.addEventListener("click", () => {
     // Not remembered, then; the choice still holds until SmartTrim is closed.
   }
   pausePicture();
+  // Unfolded while a SourceTrack plays: the picture is asked for from where the sound is.
+  if (pictureOpen && playing) preparePicture(playing.tab, heardIn(playing));
   draw();
 });
-
-// A Recording the window cannot decode — a codec this PC lacks, say — says so instead of showing a black box.
-for (const element of [view.pictureA, view.pictureB]) {
-  element.addEventListener("error", () => {
-    if (!element.getAttribute("src")) return;
-    pictureFailed = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen${element.error?.message ? ` (${element.error.message})` : ""}.`;
-    drawPicture(viewed());
-  });
-  // Chromium raises no error for a video it cannot decode as long as it can play the sound: it loads the Recording as
-  // sound only and stays black. Found with an MPEG-4 Part 2 Recording, whose AAC SourceTracks it read.
-  element.addEventListener("loadedmetadata", () => {
-    if (!element.getAttribute("src") || element.videoWidth > 0) return;
-    pictureFailed = "Das Bild dieser Aufnahme lässt sich hier nicht zeigen: Das Fenster kann ihr Videoformat nicht lesen.";
-    drawPicture(viewed());
-  });
-}
 
 /** The moment "Anfang/Ende festhalten" mark: where the sound is while it plays, else where the Playhead waits. */
 function playheadNow(tab: OpenTab): number | null {

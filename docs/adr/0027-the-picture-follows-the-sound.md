@@ -1,5 +1,9 @@
 # The picture follows the sound, through two video elements and SmartTrim's own address
 
+> **Superseded in part on 2026-09-14 by ADR-0028.** The two `<video>` elements, SmartTrim's own address and `pictureFor`
+> were replaced by frames ffmpeg makes ahead and a canvas. What the picture looks like and does, and everything measured
+> here — the hitch at every Join, the WebCodecs brake — still holds and is why ADR-0028 went the way it did.
+
 A moving picture of the Recording sits above the SourceTracks of the Tab on screen. While a SourceTrack plays, the
 picture runs with the sound and jumps at every Join; while nothing plays, it shows the still frame under the Playhead.
 

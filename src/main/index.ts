@@ -1,8 +1,6 @@
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, app, dialog, ipcMain, protocol, shell } from "electron";
-import { VIDEO_SCHEME } from "../video/address.ts";
-import { serveRecording } from "../video/serveRecording.ts";
+import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
 import { saveCutPlan, type CutSummary, type PlanSettings, type SourceTrackWaveform } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
@@ -70,11 +68,6 @@ function registerHandlers(window: BrowserWindow): void {
    * Recording read can end up in another's cut (ADR-0025).
    */
   const tabs = newTabStore(() => analysisTools(window));
-
-  // The picture above the SourceTracks reads a Tab's Recording through SmartTrim's own address, answered piece by piece
-  // from the file. Only a Tab's own Recording is served (ADR-0027).
-  if (protocol.isProtocolHandled(VIDEO_SCHEME)) protocol.unhandle(VIDEO_SCHEME);
-  protocol.handle(VIDEO_SCHEME, (request) => serveRecording(request, (tabId) => tabs.recordingOf(tabId).path));
 
   /** Tells the window how far reading one Tab's SourceTracks has got. */
   const progressOf =
@@ -174,6 +167,24 @@ function registerHandlers(window: BrowserWindow): void {
   ipcMain.handle(
     "sourceTrack:excerpt",
     answering(({ tabId, ...stretch }: ExcerptRequest): Promise<Excerpt> => tabs.readExcerpt(tabId, stretch)),
+  );
+
+  // The picture above the SourceTracks: frames ffmpeg makes ahead in this process, handed to the window by number
+  // (ADR-0028). Wishing answers at once; the frames follow in the background.
+  ipcMain.handle(
+    "picture:want",
+    answering(async ({ tabId, fromSeconds }: { tabId: number; fromSeconds: number }): Promise<null> => {
+      await tabs.wantPicture(tabId, fromSeconds);
+      return null;
+    }),
+  );
+  ipcMain.handle(
+    "picture:frames",
+    answering(({ tabId, indices }: { tabId: number; indices: readonly number[] }) => tabs.pictureFrames(tabId, indices)),
+  );
+  ipcMain.handle(
+    "picture:state",
+    answering(() => tabs.pictureState()),
   );
 
   ipcMain.handle(
@@ -320,12 +331,6 @@ function createWindow(): void {
     void window.loadFile(fileURLToPath(new URL("../renderer/index.html", import.meta.url)));
   }
 }
-
-// In development the window comes from http://localhost, where file:// is out of reach, so the <video> reads through
-// this address instead. A <video> can only seek on a scheme that streams; Electron wants it named before it is ready.
-protocol.registerSchemesAsPrivileged([
-  { scheme: VIDEO_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
-]);
 
 void app.whenReady().then(() => {
   createWindow();
