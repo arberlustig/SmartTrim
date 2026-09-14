@@ -327,21 +327,32 @@ function drawStatus(): void {
   // A wait is shown where its outcome will land (ADR-0029): the bars above the SourceTracks while they are read,
   // under Schneiden while a cut runs. The status line keeps refusals and everything that is not a wait.
   const wait = tab
-    ? waitOf({ cutting: tab.working, job: job?.tabId === tab.id ? job : null, readingCount: tab.readingCount, status })
+    ? waitOf({
+        cutting: tab.working,
+        job: job?.tabId === tab.id ? job : null,
+        readingCount: tab.readingCount,
+        status,
+        statusFromJob: isJobLine(tab),
+      })
     : null;
-  view.reading.hidden = wait?.where !== "sourceTracks";
-  view.cutting.hidden = wait?.where !== "result";
-  if (wait?.where === "sourceTracks") {
-    fillSoundBars(view.readingBars, wait.share);
-    view.readingText.textContent = wait.text;
+  for (const [where, place] of Object.entries(waitPlaces)) {
+    const shown = wait?.where === where;
+    place.block.hidden = !shown;
+    if (shown) {
+      fillSoundBars(place.bars, wait.share);
+      place.text.textContent = wait.text;
+    }
   }
-  if (wait?.where === "result") {
-    fillSoundBars(view.cuttingBars, wait.share);
-    view.cuttingText.textContent = wait.text;
-  }
-  view.status.textContent = wait ? "" : status.text;
+  // The bars carry the status line only when they show its text; other news stays next to Schneiden.
+  view.status.textContent = wait?.text === status.text ? "" : status.text;
   view.status.classList.toggle("bad", status.bad);
 }
+
+/** The two places a wait is shown: the block, its bars and the line under them. */
+const waitPlaces = {
+  sourceTracks: { block: view.reading, bars: view.readingBars, text: view.readingText },
+  result: { block: view.cutting, bars: view.cuttingBars, text: view.cuttingText },
+};
 
 /** The heights of the mark's five bars, repeated across the width; a pattern, never real audio. */
 const SOUND_BAR_HEIGHTS = [40, 85, 60, 85, 40];
@@ -501,8 +512,13 @@ function drawCloseQuestion(): void {
 function drawRecording(tab: OpenTab | null): void {
   const recording = tab?.session.recording;
   // The drop area stands in for the sentence while nothing is open; the header's buttons step aside for its own.
-  view.emptyDrop.hidden = Boolean(recording);
   document.body.classList.toggle("empty", !recording);
+  // Hidden with the focus still on one of its buttons, the window would have no focus at all (ADR-0018): the header's
+  // matching button, on screen again by now, takes it over.
+  if (recording && view.emptyDrop.contains(document.activeElement)) {
+    (document.activeElement === view.emptyOpen ? view.openProject : view.chooseRecording).focus();
+  }
+  view.emptyDrop.hidden = Boolean(recording);
   if (!recording) {
     view.recordingInfo.textContent = "Noch keine Aufnahme offen.";
     return;
@@ -2371,7 +2387,8 @@ async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>
 
 view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
 view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
-// The drop area's own pair of buttons, shown while nothing is open, do the same as the header's.
+// The drop area's own pair of buttons, shown while nothing is open, do the same as the header's pair, which is hidden
+// meanwhile; `draw` keeps their disabled state in step, and `drawRecording` hands the focus back when the area goes.
 view.emptyChoose.addEventListener("click", () => view.chooseRecording.click());
 view.emptyOpen.addEventListener("click", () => view.openProject.click());
 // A window made wider or narrower while a wait is shown gets its bars remade to the new width.
@@ -2438,6 +2455,10 @@ window.addEventListener("pointermove", () => {
 async function cutTab(tab: OpenTab): Promise<Answer<CutSummary> | null> {
   tab.working = true;
   tab.skippedBy = null;
+  // The bars stand where the result will land, so the old result goes now, and the line under them is the cut's own —
+  // not a "noch einmal schneiden" left over from the slider that made this cut necessary.
+  tab.finished = null;
+  clearStatus(tab);
   // A sound skipping by the cut about to be replaced would go on skipping by it. Only the Tab on screen has one.
   if (viewed() === tab) stopPlaying();
   // A replan still waiting would reach the main process after the cut is taken away and come back refused; one on its

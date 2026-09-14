@@ -95,10 +95,8 @@
         background: none;
         color: inherit;
       }
+      /* A block, not a flex container: only then does a long name end in "…" instead of being cut off. */
       .tab .tabLabel {
-        display: flex;
-        gap: 0;
-        align-items: center;
         max-width: 260px;
         padding: 8px 4px 8px 14px;
         overflow: hidden;
@@ -127,6 +125,7 @@
         align-items: flex-end;
         height: 11px;
         margin-right: 8px;
+        vertical-align: -1px;
       }
       .busyMark i {
         display: block;
@@ -238,9 +237,10 @@
       /* From 1200 px on, the picture and the waveforms take the width on the left; the settings, Schneiden and the
          result stay in view on the right while the left scrolls (the owner's choice, ADR-0029). */
       @media (min-width: 1200px) {
+        /* 400 px for the settings, plus the 32 px between them and the line on the column's left. */
         .layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 400px;
+          grid-template-columns: minmax(0, 1fr) 432px;
           column-gap: 40px;
           max-width: none;
         }
@@ -414,7 +414,7 @@
         width: min(520px, 100%);
         padding: 22px 24px 18px;
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 10px;
         background: var(--raised);
         box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
       }

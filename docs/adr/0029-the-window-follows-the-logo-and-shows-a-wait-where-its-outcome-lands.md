@@ -27,7 +27,9 @@ screen. **They chose two columns.** This ADR records what was decided and what w
   or cut in the background shows three small bars before its name. The wait after ▶, the still frame after a click
   and the first-start download are not shown this way, at the owner's word.
 - **The empty window is a drop area** — "Aufnahme hierher ziehen" with the two open buttons under it — since dropping
-  files was possible for a day without the window saying so.
+  files was possible for a day without the window saying so. While it is on screen the header's pair of open buttons
+  is hidden, so one pair is on screen at a time; the old sentence under *Aufnahme* shrank to "Noch keine Aufnahme
+  offen.", since the drop area now says the rest. Both are decisions of this change, not of the direction.
 - **The header** carries the logo tile and the wordmark on the left and the two open buttons on the right; they add
   Tabs, so they belong to the window, not to a Tab. The Tab strip runs under it. The sentence explaining SmartTrim went.
 - **The window opens maximised the first time** and afterwards where it was closed (`placementOf` in
@@ -53,6 +55,26 @@ screen. **They chose two columns.** This ADR records what was decided and what w
   therefore always opens maximised.
 - **The bars are made when shown, not at load**: hidden, the block has no width, and their number follows the width
   (4 px bars 3 px apart). A resize while a wait is shown redraws the status, which remakes them.
+
+## What a review found
+
+A two-axis review of the first build (the repo's standards, and the direction) on 2026-09-14, fixed the same day:
+
+- **The bars swallowed any status line.** While a read ran in the background, "Projekt gespeichert: …" or "Plant neu …"
+  went under the bars and the status line was blanked. `waitOf` now takes whether the line is the job's own; other news
+  stays next to *Schneiden*, and the bars fall back to what the job does ("Liest den Ton der Tonspuren …").
+- **A stale line under the cut's bars.** `cutTab` drew with `working` before it set its own line, so "Einstellung
+  geändert – noch einmal schneiden." stood under the bars for the span of a pending replan, and the old result box
+  stayed under them. The result and the line are cleared before the first draw now.
+- **Long Tab names lost their "…"**: the label had become a flex container to hold the busy mark, and `text-overflow`
+  applies only to blocks. The label is a block again; the mark sits inline.
+- **Focus dropped after opening from the drop area**: the area hid with the focus still on its button — the pattern
+  ADR-0018 forbids. The header's matching button, on screen again by then, takes the focus.
+- The settings got 368 px, not 400 (the column's padding was inside the track); the dialogs' radius was 12, not the
+  panels' 10. The two places a wait is shown are one record now, not two copies of the same lines.
+- Left as decided, and written into "Decided" above: the header's open buttons hidden while the drop area is on
+  screen; the shortened sentence under *Aufnahme*; the drop area a box of its own height rather than filling the
+  space under the header.
 
 ## Tested, and not
 
