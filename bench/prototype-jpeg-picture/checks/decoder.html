@@ -1,0 +1,88 @@
+<!-- PROTOTYPE, throwaway: one window of the brake check (main.cjs brake). -->
+<canvas id="canvas" width="1600" height="200" style="width: 800px; height: 100px"></canvas>
+<script>
+  const { ipcRenderer } = require("electron");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  let frames = [];
+  let bytes = [];
+  let config = null;
+
+  function load(dir) {
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, "frames.json"), "utf8"));
+    const bin = fs.readFileSync(path.join(dir, "frames.bin"));
+    let at = 0;
+    frames = meta.frames;
+    bytes = frames.map((frame) => {
+      const view = new Uint8Array(bin.buffer, bin.byteOffset + at, frame.size);
+      at += frame.size;
+      return view;
+    });
+    config = {
+      codec: meta.codec,
+      description: Uint8Array.from(Buffer.from(meta.description, "base64")),
+      codedWidth: 1920,
+      codedHeight: 1080,
+      optimizeForLatency: true,
+      hardwareAcceleration: "prefer-hardware",
+    };
+    return { frames: frames.length, visible: document.visibilityState };
+  }
+
+  async function decodeAll() {
+    let out = 0;
+    let failed = null;
+    const decoder = new VideoDecoder({
+      output: (frame) => {
+        out += 1;
+        frame.close();
+      },
+      error: (error) => (failed = String(error?.message ?? error)),
+    });
+    decoder.configure(config);
+    const started = performance.now();
+    for (let index = 0; index < frames.length; index++) {
+      decoder.decode(new EncodedVideoChunk({ type: frames[index].key ? "key" : "delta", timestamp: frames[index].pts, data: bytes[index] }));
+    }
+    try {
+      await decoder.flush();
+    } catch (error) {
+      failed ??= String(error?.message ?? error);
+    }
+    const seconds = (performance.now() - started) / 1000;
+    if (decoder.state !== "closed") decoder.close();
+    return failed ? `failed after ${out}: ${failed}` : Math.round(out / seconds);
+  }
+
+  const context = document.getElementById("canvas").getContext("2d");
+  let drawing = false;
+  let animationFrames = 0;
+  let drawingSince = 0;
+  function loop() {
+    if (!drawing) return;
+    animationFrames += 1;
+    context.fillStyle = `hsl(${performance.now() % 360},50%,50%)`;
+    context.fillRect(0, 0, 1600, 200);
+    requestAnimationFrame(loop);
+  }
+
+  ipcRenderer.on("do", async (_event, { id, what, data }) => {
+    let value = null;
+    if (what === "load") value = load(data);
+    else if (what === "decode") value = await decodeAll();
+    else if (what === "state") value = document.visibilityState;
+    else if (what === "draw") {
+      if (data) {
+        drawing = true;
+        animationFrames = 0;
+        drawingSince = performance.now();
+        requestAnimationFrame(loop);
+        value = "drawing";
+      } else {
+        drawing = false;
+        value = Math.round((animationFrames * 1000) / (performance.now() - drawingSince));
+      }
+    }
+    ipcRenderer.send(`done:${id}`, value);
+  });
+</script>

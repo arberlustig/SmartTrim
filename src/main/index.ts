@@ -10,6 +10,7 @@ import { openFiles } from "../app/openFile.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import { newTabStore, type OnRead } from "../app/tabStore.ts";
+import { registerJpegPicture } from "./prototypeJpegPicture.ts";
 import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab } from "../preload/api.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
@@ -70,6 +71,8 @@ function registerHandlers(window: BrowserWindow): void {
    * Recording read can end up in another's cut (ADR-0025).
    */
   const tabs = newTabStore(() => analysisTools(window));
+  // PROTOTYPE (branch prototype/jpeg-picture): the picture as JPEG frames ffmpeg makes ahead.
+  registerJpegPicture((tabId) => tabs.recordingOf(tabId), async () => (await analysisTools(window)).ffmpeg);
 
   // The picture above the SourceTracks reads a Tab's Recording through SmartTrim's own address, answered piece by piece
   // from the file. Only a Tab's own Recording is served (ADR-0027).
@@ -323,6 +326,12 @@ function createWindow(): void {
 
 // In development the window comes from http://localhost, where file:// is out of reach, so the <video> reads through
 // this address instead. A <video> can only seek on a scheme that streams; Electron wants it named before it is ready.
+// PROTOTYPE (branch prototype/jpeg-picture): a covered window keeps its animation frames, so a measuring run is not
+// silently frozen when another window lies on top (ADR-0027). These switches did not change the decoder brake.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+
 protocol.registerSchemesAsPrivileged([
   { scheme: VIDEO_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
 ]);

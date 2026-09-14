@@ -35,3 +35,13 @@ const api: SmartTrimApi = {
 };
 
 contextBridge.exposeInMainWorld("smarttrim", api);
+
+// PROTOTYPE (branch prototype/jpeg-picture): the picture's JPEG frames, made ahead in the main process.
+contextBridge.exposeInMainWorld("smarttrimPrototype", {
+  prep: (request: { tabId: number; fromSeconds: number }) => ipcRenderer.invoke("prototype:prep", request),
+  frames: (request: { tabId: number; indices: number[] }) => ipcRenderer.invoke("prototype:frames", request),
+  stats: () => ipcRenderer.invoke("prototype:stats"),
+  ping: () => ipcRenderer.invoke("prototype:ping"),
+  tune: (next: { priority?: "normal" | "low"; threads?: number }) => ipcRenderer.invoke("prototype:tune", next),
+  forget: () => ipcRenderer.invoke("prototype:forget"),
+});

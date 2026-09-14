@@ -1,0 +1,18 @@
+{
+ "videoDecode": "enabled",
+ "drawerIdle": 1174,
+ "hiddenIdle": 1320,
+ "quietIdle": 1344,
+ "drawerWhileDrawing": 62,
+ "hiddenWhileDrawerDraws": 63,
+ "quietWhileDrawerDraws": 63,
+ "drawerWhileDrawingAgain": 63,
+ "hiddenWhileDrawerDrawsAgain": 60,
+ "drawerAnimationFrames": 61,
+ "drawerIdleAfter": 1401,
+ "visibility": {
+  "drawer": "visible",
+  "hidden": "visible",
+  "quiet": "visible"
+ }
+}

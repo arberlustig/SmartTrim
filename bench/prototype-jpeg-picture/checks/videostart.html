@@ -1,0 +1,105 @@
+<!-- PROTOTYPE, throwaway: the <video> start check (main.cjs videostart). -->
+<div id="box"></div>
+<script>
+  const { ipcRenderer } = require("electron");
+  const { pathToFileURL } = require("node:url");
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const once = (element, name) => new Promise((resolve) => element.addEventListener(name, resolve, { once: true }));
+  const median = (list) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+  const round = (value) => Math.round(value * 10) / 10;
+
+  async function pairOf(source, tracksOff) {
+    const elements = [0, 1].map(() => {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.preload = "auto";
+      video.style.cssText = "width: 400px; height: 225px; margin: 4px";
+      document.getElementById("box").append(video);
+      video.src = source;
+      return video;
+    });
+    await Promise.all(elements.map((video) => once(video, "loadedmetadata")));
+    if (tracksOff) for (const video of elements) for (let at = 0; at < video.audioTracks.length; at++) video.audioTracks[at].enabled = false;
+    return elements;
+  }
+
+  async function seekTo(video, seconds) {
+    const started = performance.now();
+    video.currentTime = seconds;
+    await once(video, "seeked");
+    return performance.now() - started;
+  }
+
+  function firstMovingFrame(video, seconds) {
+    return new Promise((resolve) => {
+      const tick = (now, meta) => {
+        if (meta.mediaTime > seconds + 1 / 120) resolve({ shownAt: meta.expectedDisplayTime, mediaTime: meta.mediaTime });
+        else video.requestVideoFrameCallback(tick);
+      };
+      video.requestVideoFrameCallback(tick);
+    });
+  }
+
+  async function trial(video, seconds) {
+    const seekMs = await seekTo(video, seconds);
+    await sleep(250);
+    const shownBefore = video.currentTime;
+    const moving = firstMovingFrame(video, shownBefore);
+    const called = performance.now();
+    await video.play();
+    const first = await Promise.race([moving, sleep(2000).then(() => null)]);
+    video.pause();
+    return first ? { seekMs, startMs: first.shownAt - called, skipped: Math.round((first.mediaTime - shownBefore) * 60) - 1 } : { seekMs, startMs: 2000, skipped: null };
+  }
+
+  function summary(trials) {
+    return {
+      seekMsMedian: round(median(trials.map((t) => t.seekMs))),
+      seekMsMax: round(Math.max(...trials.map((t) => t.seekMs))),
+      startMsMedian: round(median(trials.map((t) => t.startMs))),
+      startMsMax: round(Math.max(...trials.map((t) => t.startMs))),
+      startMs: trials.map((t) => Math.round(t.startMs)).join(" "),
+      skippedFrames: trials.map((t) => t.skipped).join(" "),
+    };
+  }
+
+  async function run(recording) {
+    const source = pathToFileURL(recording).href;
+    const result = {};
+    for (const tracksOff of [false, true, false, true]) {
+      const name = tracksOff ? "tracksOff" : "tracksOn";
+      const [playingOne, waitingOne] = await pairOf(source, tracksOff);
+      const audioTracks = playingOne.audioTracks.length;
+      const enabled = [...playingOne.audioTracks].filter((track) => track.enabled).length;
+      const alone = [];
+      for (let at = 0; at < 10; at++) alone.push(await trial(waitingOne, 600 + at * 7.3));
+      playingOne.currentTime = 560;
+      await once(playingOne, "seeked");
+      await playingOne.play();
+      await sleep(500);
+      const together = [];
+      for (let at = 0; at < 10; at++) together.push(await trial(waitingOne, 700 + at * 6.1));
+      playingOne.pause();
+      const entry = { audioTracks, enabled, alone: summary(alone), whileOtherPlays: summary(together) };
+      result[name] = result[name] ? [result[name], entry] : entry;
+      for (const video of [playingOne, waitingOne]) {
+        video.removeAttribute("src");
+        video.load();
+        video.remove();
+      }
+      await sleep(500);
+    }
+    result.visibility = document.visibilityState;
+    return result;
+  }
+
+  ipcRenderer.on("do", async (_event, { id, what, data }) => {
+    let value = null;
+    try {
+      if (what === "run") value = await run(data);
+    } catch (error) {
+      value = String(error?.stack ?? error);
+    }
+    ipcRenderer.send(`done:${id}`, value);
+  });
+</script>
