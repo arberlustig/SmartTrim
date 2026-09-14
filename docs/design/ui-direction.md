@@ -226,6 +226,12 @@ nothing glows or fades, and the memorable element is drawn from the subject — 
 gradient. Two ideas were dropped as decoration: numbering the three sections 01 / 02 / 03 (the order is real, but the
 owner knows it), and a monospace face for the numbers (technical, not calm).
 
+## What came of it
+
+Both drafts were built on branch `prototype/ui-drafts` (`docs/design/ui-drafts.md` there) and compared by the owner
+in the real window on 2026-09-14. **They chose two columns.** What was built on main from it, and what was surprising
+on the way, is ADR-0029.
+
 ## For the drafts
 
 - Branch `prototype/ui-drafts`, never merged: the two drafts differ only in the layout block (a centred max-width

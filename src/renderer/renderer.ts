@@ -51,6 +51,7 @@ import {
   type TabWork,
 } from "../app/tabs.ts";
 import type { Refusal } from "../app/openFile.ts";
+import { waitOf } from "../app/waiting.ts";
 import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from "../app/allTabs.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
@@ -88,6 +89,15 @@ const view = {
   discardClose: element<HTMLButtonElement>("discardClose"),
   cancelClose: element<HTMLButtonElement>("cancelClose"),
   recordingInfo: element("recordingInfo"),
+  emptyDrop: element("emptyDrop"),
+  emptyChoose: element<HTMLButtonElement>("emptyChoose"),
+  emptyOpen: element<HTMLButtonElement>("emptyOpen"),
+  reading: element("reading"),
+  readingBars: element("readingBars"),
+  readingText: element("readingText"),
+  cutting: element("cutting"),
+  cuttingBars: element("cuttingBars"),
+  cuttingText: element("cuttingText"),
   sourceTracks: element("sourceTracks"),
   sourceTracksHint: element("sourceTracksHint"),
   threshold: element<HTMLInputElement>("threshold"),
@@ -312,9 +322,49 @@ function show<Value>(tab: OpenTab | null, answer: Answer<Value>, ifRefused: stri
 }
 
 function drawStatus(): void {
-  const status = statusOf(viewed());
-  view.status.textContent = status.text;
+  const tab = viewed();
+  const status = statusOf(tab);
+  // A wait is shown where its outcome will land (ADR-0029): the bars above the SourceTracks while they are read,
+  // under Schneiden while a cut runs. The status line keeps refusals and everything that is not a wait.
+  const wait = tab
+    ? waitOf({ cutting: tab.working, job: job?.tabId === tab.id ? job : null, readingCount: tab.readingCount, status })
+    : null;
+  view.reading.hidden = wait?.where !== "sourceTracks";
+  view.cutting.hidden = wait?.where !== "result";
+  if (wait?.where === "sourceTracks") {
+    fillSoundBars(view.readingBars, wait.share);
+    view.readingText.textContent = wait.text;
+  }
+  if (wait?.where === "result") {
+    fillSoundBars(view.cuttingBars, wait.share);
+    view.cuttingText.textContent = wait.text;
+  }
+  view.status.textContent = wait ? "" : status.text;
   view.status.classList.toggle("bad", status.bad);
+}
+
+/** The heights of the mark's five bars, repeated across the width; a pattern, never real audio. */
+const SOUND_BAR_HEIGHTS = [40, 85, 60, 85, 40];
+
+/** As many 4 px bars, 3 px apart, as the block is wide — made once the block is on screen, since hidden it has no width. */
+function makeSoundBars(into: HTMLElement): void {
+  const count = Math.max(20, Math.floor((into.clientWidth + 3) / 7));
+  if (into.children.length === count) return;
+  into.replaceChildren(
+    ...Array.from({ length: count }, (_, index) => {
+      const bar = document.createElement("i");
+      bar.style.setProperty("--h", String(SOUND_BAR_HEIGHTS[index % SOUND_BAR_HEIGHTS.length]));
+      bar.style.setProperty("--i", String(index));
+      return bar;
+    }),
+  );
+}
+
+/** Lights the bars up to a share of them; the rest keep pulsing (the CSS does that) so the wait never looks stuck. */
+function fillSoundBars(bars: HTMLElement, share: number): void {
+  makeSoundBars(bars);
+  const lit = Math.round(share * bars.children.length);
+  [...bars.children].forEach((bar, index) => bar.classList.toggle("on", index < lit));
 }
 
 /**
@@ -356,7 +406,13 @@ function drawTabs(): void {
       label.className = "tabLabel";
       // A Tab busy in the background says so, since its status line is only on screen while it is.
       const busy = tab.working || job?.tabId === tab.id;
-      label.textContent = busy ? `${name} …` : name;
+      if (busy) {
+        const mark = document.createElement("span");
+        mark.className = "busyMark";
+        mark.append(...[0, 1, 2].map(() => document.createElement("i")));
+        label.append(mark);
+      }
+      label.append(document.createTextNode(name));
       label.title = tab.session.recording?.path ?? name;
       label.addEventListener("click", () => viewTab(tab.id));
       const close = document.createElement("button");
@@ -444,9 +500,11 @@ function drawCloseQuestion(): void {
 
 function drawRecording(tab: OpenTab | null): void {
   const recording = tab?.session.recording;
+  // The drop area stands in for the sentence while nothing is open; the header's buttons step aside for its own.
+  view.emptyDrop.hidden = Boolean(recording);
+  document.body.classList.toggle("empty", !recording);
   if (!recording) {
-    view.recordingInfo.textContent =
-      "Noch keine Aufnahme offen. Wähle Aufnahmen oder zieh Dateien oder einen ganzen Ordner ins Fenster – jede Datei bekommt einen Tab.";
+    view.recordingInfo.textContent = "Noch keine Aufnahme offen.";
     return;
   }
   const seconds = (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
@@ -758,6 +816,8 @@ function draw(): void {
   const settingsLocked = !tab || tab.working;
   view.chooseRecording.disabled = preparing;
   view.openProject.disabled = preparing;
+  view.emptyChoose.disabled = preparing;
+  view.emptyOpen.disabled = preparing;
   view.threshold.disabled = settingsLocked;
   view.margin.disabled = settingsLocked;
   view.deadZone.disabled = settingsLocked;
@@ -909,8 +969,10 @@ const KEPT_BAND = "#1f3a2e";
 const REMOVED_BAND = "#2a1416";
 const KEPT_WAVE = "#7fd6b4";
 /** Before anything is cut there is nothing to colour, so the waveform is drawn plain (ADR-0020). */
-const PLAIN_BAND = "#1c1f25";
-const PLAIN_WAVE = "#8b96a3";
+// The plain waveform before any cut sits on the navy ground in the window's own sunken and muted tones; the meaning
+// colours above (kept, removed, held, Join, Playhead) stay as the owner learnt them (ADR-0029).
+const PLAIN_BAND = "#11121c";
+const PLAIN_WAVE = "#9c9fb6";
 const REMOVED_WAVE = "#7a4046";
 /** Over a stretch the playing sound jumps across, so a Join is seen as it is heard. Neither green nor red. */
 const JOIN_MARK = "#e8b04a";
@@ -2309,6 +2371,11 @@ async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>
 
 view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
 view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
+// The drop area's own pair of buttons, shown while nothing is open, do the same as the header's.
+view.emptyChoose.addEventListener("click", () => view.chooseRecording.click());
+view.emptyOpen.addEventListener("click", () => view.openProject.click());
+// A window made wider or narrower while a wait is shown gets its bars remade to the new width.
+window.addEventListener("resize", drawStatus);
 
 /* ── Dropping files ────────────────────────────────────────────────────────────────────────────────────────── */
 
