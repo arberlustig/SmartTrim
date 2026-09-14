@@ -51,6 +51,7 @@ import {
   type TabWork,
 } from "../app/tabs.ts";
 import type { Refusal } from "../app/openFile.ts";
+import { TEXTS, decimalsIn, isLanguage, languageOf, type Language, type Texts } from "../app/texts.ts";
 import { waitOf } from "../app/waiting.ts";
 import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from "../app/allTabs.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
@@ -136,6 +137,7 @@ const view = {
   cancelTakeOver: element<HTMLButtonElement>("cancelTakeOver"),
   cutPicture: element("cutPicture"),
   cutHint: element("cutHint"),
+  language: element<HTMLSelectElement>("language"),
   picture: element("picture"),
   pictureFrame: element("pictureFrame"),
   pictureCanvas: element<HTMLCanvasElement>("pictureCanvas"),
@@ -146,7 +148,6 @@ const view = {
   zoomValue: element("zoomValue"),
   skipRow: element("skipRow"),
   skipRemoved: element<HTMLInputElement>("skipRemoved"),
-  longestExcerpt: element("longestExcerpt"),
   held: element("held"),
   holdStart: element<HTMLButtonElement>("holdStart"),
   holdEnd: element<HTMLButtonElement>("holdEnd"),
@@ -156,8 +157,53 @@ const view = {
   dropOverlay: element("dropOverlay"),
 };
 
-// Said once, from the same number `readExcerpt` refuses by, so the hint cannot promise a length the app refuses.
-view.longestExcerpt.textContent = `${LONGEST_EXCERPT_SECONDS / 60} Minuten`;
+/* ── The language the window speaks (ADR-0030) ─────────────────────────────────────────────────────────────── */
+
+const LANGUAGE_KEY = "smarttrim.language";
+
+function savedLanguage(): string | null {
+  try {
+    return localStorage.getItem(LANGUAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+let language: Language = languageOf(savedLanguage(), navigator.language);
+/** Every sentence the window shows, in the language it speaks now. */
+let T: Texts = TEXTS[language];
+
+/** A fixed sentence by its dotted key, such as "sliders.threshold.label". */
+function textAt(key: string): string {
+  const found = key.split(".").reduce<unknown>((at, part) => (at as Record<string, unknown> | undefined)?.[part], T);
+  if (typeof found !== "string") throw new Error(`The texts have no sentence ${key}.`);
+  return found;
+}
+
+/** Puts the page's fixed sentences into the language spoken; everything else is said by `draw`. */
+function applyTexts(): void {
+  document.documentElement.lang = language;
+  for (const each of document.querySelectorAll<HTMLElement>("[data-text]")) each.textContent = textAt(each.dataset["text"] ?? "");
+  for (const each of document.querySelectorAll<HTMLElement>("[data-text-title]")) each.title = textAt(each.dataset["textTitle"] ?? "");
+  for (const each of document.querySelectorAll<HTMLInputElement>("[data-text-placeholder]")) {
+    each.placeholder = textAt(each.dataset["textPlaceholder"] ?? "");
+  }
+  // Said from the same number `readExcerpt` refuses by, so the hint cannot promise a length the app refuses.
+  view.cutHint.textContent = T.cutHint(T.minutes(LONGEST_EXCERPT_SECONDS / 60));
+  view.language.value = language;
+}
+
+/** Switches the language, remembers it, and puts the fixed sentences into it; the caller redraws the rest. */
+function speak(chosen: Language): void {
+  language = chosen;
+  T = TEXTS[language];
+  try {
+    localStorage.setItem(LANGUAGE_KEY, language);
+  } catch {
+    // Not remembered, then: the window still speaks it until it closes.
+  }
+  applyTexts();
+}
 
 type Mutable<Shape> = { -readonly [Key in keyof Shape]: Shape[Key] };
 
@@ -165,6 +211,8 @@ type Mutable<Shape> = { -readonly [Key in keyof Shape]: Shape[Key] };
 interface Status {
   text: string;
   bad: boolean;
+  /** Who put the line up: a background job, an action on all Tabs passing the Tab over, or anything else. */
+  kind: "plain" | "job" | "skipped";
 }
 
 /**
@@ -239,7 +287,7 @@ let openNotes: OpenNote[] = [];
  */
 let notesHeading: { notes: OpenNote[]; text: string } | null = null;
 /** The status line while no Tab is open — the first-run download, say. */
-const windowStatus: Status = { text: "", bad: false };
+const windowStatus: Status = { text: "", bad: false, kind: "plain" };
 /** What the sliders show while no Tab is open: the settings a new Tab starts on. */
 const NO_TAB_SESSION: CutSession = newCutSession();
 
@@ -268,29 +316,19 @@ function isOpen(tab: OpenTab): boolean {
   return tabs.includes(tab);
 }
 
-const decimals = (value: number, digits: number) =>
-  value.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const decimals = (value: number, digits: number) => decimalsIn(T)(value, digits);
 
 /** Lengths the way the user reads them: hours and minutes for a Recording, seconds for a short one. */
-function duration(seconds: number): string {
-  if (seconds < 60) return `${decimals(seconds, 1)} Sek`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} Min`;
-  return `${Math.floor(minutes / 60)} Std ${String(minutes % 60).padStart(2, "0")} Min`;
-}
+const duration = (seconds: number) => T.duration(seconds);
 
 /** What the scan found on one SourceTrack, in the user's words. */
 function soundHint(scan: { carriesSound: boolean; slicesWithSound: number; sliceCount: number } | undefined): string {
   if (!scan) return "";
-  if (!scan.carriesSound) return " · kein Ton gefunden";
-  return scan.slicesWithSound === scan.sliceCount ? " · Ton durchgehend" : " · Ton stellenweise";
+  if (!scan.carriesSound) return T.soundHint.none;
+  return scan.slicesWithSound === scan.sliceCount ? T.soundHint.throughout : T.soundHint.inPlaces;
 }
 
-function channels(count: number): string {
-  if (count === 2) return "Stereo";
-  if (count === 1) return "Mono";
-  return `${count} Kanäle`;
-}
+const channels = (count: number) => T.channels(count);
 
 /* ── The status line ───────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -299,10 +337,11 @@ function statusOf(tab: OpenTab | null): Status {
   return tab ? tab.status : windowStatus;
 }
 
-function setStatus(tab: OpenTab | null, text: string, bad = false): void {
+function setStatus(tab: OpenTab | null, text: string, bad = false, kind: Status["kind"] = "plain"): void {
   const status = statusOf(tab);
   status.text = text;
   status.bad = bad;
+  status.kind = kind;
   drawStatus();
 }
 
@@ -334,6 +373,7 @@ function drawStatus(): void {
         readingCount: tab.readingCount,
         status,
         statusFromJob: isJobLine(tab),
+        lines: { job: T.jobLines, cutting: T.cutting },
       })
     : null;
   for (const [where, place] of Object.entries(waitPlaces)) {
@@ -431,7 +471,7 @@ function drawTabs(): void {
       close.type = "button";
       close.className = "tabClose";
       close.textContent = "×";
-      close.title = `${name} schließen`;
+      close.title = T.closeTab(name);
       close.addEventListener("click", () => requestClose(tab));
       item.append(label, close);
       return item;
@@ -448,9 +488,7 @@ function drawTabs(): void {
       ? notesHeading.text
       : refusedCount === 0
         ? ""
-        : refusedCount === 1
-          ? "Eine Datei ließ sich nicht öffnen"
-          : `${refusedCount} Dateien ließen sich nicht öffnen`;
+        : T.filesNotOpened(refusedCount);
   view.openNotesList.replaceChildren(
     ...openNotes.map((note) => {
       const line = document.createElement("li");
@@ -487,12 +525,8 @@ function drawCloseQuestion(): void {
   const count = unsaved.length;
   // A project can only be saved from a cut: it holds what the analysis found (ADR-0016).
   const canSave = tab.finished !== null;
-  view.tabQuestionTitle.textContent = `„${fileName(tab.session.recording?.path ?? "")}“ schließen?`;
-  view.tabQuestion.textContent =
-    (count === 1
-      ? "Du hast hier eine Stelle festgehalten, die in keinem gespeicherten Projekt steht. Ohne Speichern ist sie weg."
-      : `Du hast hier ${count} Stellen festgehalten, die in keinem gespeicherten Projekt stehen. Ohne Speichern sind sie weg.`) +
-    (canSave ? "" : " Als Projekt speichern lässt sich erst nach dem Schneiden.");
+  view.tabQuestionTitle.textContent = T.closeQuestionTitle(fileName(tab.session.recording?.path ?? ""));
+  view.tabQuestion.textContent = T.closeQuestion(count, canSave);
   view.tabQuestionHeld.replaceChildren(
     ...unsaved.slice(0, HELD_SHOWN_IN_QUESTION).map((range) => {
       const item = document.createElement("li");
@@ -500,7 +534,7 @@ function drawCloseQuestion(): void {
       return item;
     }),
     ...(count > HELD_SHOWN_IN_QUESTION
-      ? [Object.assign(document.createElement("li"), { className: "more", textContent: `und ${count - HELD_SHOWN_IN_QUESTION} weitere` })]
+      ? [Object.assign(document.createElement("li"), { className: "more", textContent: T.heldMore(count - HELD_SHOWN_IN_QUESTION) })]
       : []),
   );
   view.saveClose.hidden = !canSave;
@@ -521,17 +555,21 @@ function drawRecording(tab: OpenTab | null): void {
   }
   view.emptyDrop.hidden = Boolean(recording);
   if (!recording) {
-    view.recordingInfo.textContent = "Noch keine Aufnahme offen.";
+    view.recordingInfo.textContent = T.noRecordingOpen;
     return;
   }
   const seconds = (recording.durationFrames * recording.frameRate.denominator) / recording.frameRate.numerator;
-  const fps = decimals(recording.frameRate.numerator / recording.frameRate.denominator, 2).replace(",00", "");
+  const fps = decimals(recording.frameRate.numerator / recording.frameRate.denominator, 2).replace(/[.,]00$/, "");
   const name = document.createElement("strong");
   name.textContent = fileName(recording.path);
   const detail = document.createElement("div");
-  detail.textContent =
-    `${duration(seconds)} · ${recording.width}×${recording.height} · ${fps} Bilder/s · ` +
-    `${recording.sourceTracks.length} Tonspuren`;
+  detail.textContent = T.recordingFacts({
+    duration: duration(seconds),
+    width: recording.width,
+    height: recording.height,
+    fps,
+    sourceTracks: recording.sourceTracks.length,
+  });
   view.recordingInfo.replaceChildren(name, detail);
 }
 
@@ -539,7 +577,7 @@ function drawSourceTracks(tab: OpenTab | null): void {
   view.sourceTracks.replaceChildren();
   const recording = tab?.session.recording;
   if (!tab || !recording) {
-    view.sourceTracksHint.textContent = "Öffne zuerst eine Aufnahme.";
+    view.sourceTracksHint.textContent = T.openRecordingFirst;
     return;
   }
   const { session } = tab;
@@ -547,7 +585,7 @@ function drawSourceTracks(tab: OpenTab | null): void {
 
   const head = document.createElement("div");
   head.className = "head";
-  for (const caption of ["diese Spur …", "nach Premiere", ""]) {
+  for (const caption of [T.headRole, T.headExport, ""]) {
     const cell = document.createElement("span");
     cell.textContent = caption;
     head.append(cell);
@@ -576,7 +614,7 @@ function drawSourceTracks(tab: OpenTab | null): void {
     };
 
     const text = document.createElement("div");
-    text.textContent = `Tonspur ${index + 1}`;
+    text.textContent = T.sourceTrack(index + 1);
     const detail = document.createElement("span");
     detail.textContent =
       `${channels(sourceTrack.channelCount)} · ${sourceTrack.sampleRate / 1000} kHz` +
@@ -585,11 +623,11 @@ function drawSourceTracks(tab: OpenTab | null): void {
     // One TrackRole per SourceTrack (CONTEXT.md): it drives the cut, it keeps its moments, or it is ignored.
     const role = document.createElement("select");
     role.disabled = tab.working;
-    role.title = `Was Tonspur ${index + 1} zum Schnitt beiträgt`;
+    role.title = T.roleTitle(index + 1);
     for (const [value, label] of [
-      ["ignored", "wird ignoriert"],
-      ["voice", "danach schneiden"],
-      ["content", "Momente behalten"],
+      ["ignored", T.roles.ignored],
+      ["voice", T.roles.voice],
+      ["content", T.roles.content],
     ] as const) {
       const option = document.createElement("option");
       option.value = value;
@@ -612,7 +650,7 @@ function drawSourceTracks(tab: OpenTab | null): void {
     row.append(
       role,
       // Changing this changes the file, not the cut, so a finished cut stays on screen.
-      box(session.exportSourceTracks.includes(index), `Tonspur ${index + 1} nach Premiere übernehmen`, () => {
+      box(session.exportSourceTracks.includes(index), T.exportTick(index + 1), () => {
         tab.session = toggleExportSourceTrack(tab.session, index);
       }),
       text,
@@ -637,8 +675,8 @@ function drawSourceTracks(tab: OpenTab | null): void {
     playButton.className = isPlaying ? "play playing" : "play";
     playButton.textContent = isPlaying ? "■" : fetchingFor === index ? "…" : "▶";
     playButton.title = isPlaying
-      ? `Tonspur ${index + 1} anhalten`
-      : `Tonspur ${index + 1} ab dem weißen Strich anhören (höchstens ${LONGEST_EXCERPT_SECONDS / 60} Minuten)`;
+      ? T.stopTrack(index + 1)
+      : T.playTrack(index + 1, T.minutes(LONGEST_EXCERPT_SECONDS / 60));
     playButton.addEventListener("click", () => void play(index));
     holder.append(playButton, waveformCanvas(index));
     row.append(holder);
@@ -647,12 +685,12 @@ function drawSourceTracks(tab: OpenTab | null): void {
   const hint = document.createElement("span");
   hint.textContent =
     session.listenTo.length === 0
-      ? 'Stell bei der Spur, auf der du sprichst, "danach schneiden" ein. Rechts, was in Premiere landen soll.'
+      ? T.hintChooseVoice
       : !canExport(session)
-        ? "Kreuze rechts mindestens eine Spur an, sonst hat das Premiere-Projekt keinen Ton."
+        ? T.hintTickExport
         : session.contentSourceTracks.length === 0
-          ? 'Alles, was auf den Schnitt-Spuren laut genug ist, bleibt erhalten. "Momente behalten" hält Knaller am Leben, bei denen keiner redet.'
-          : "Auf den Momente-Spuren bleibt, was deutlich aus dem eigenen Grundton ausbricht — Explosionen, Fanfaren, abrupte Stille.";
+          ? T.hintMoments
+          : T.hintContent;
   view.sourceTracksHint.append(hint);
 
   // A scan only listens to slices, so a hidden SourceTrack has to stay reachable.
@@ -664,12 +702,7 @@ function drawSourceTracks(tab: OpenTab | null): void {
   ).length;
   const reveal = document.createElement("button");
   reveal.className = "link";
-  reveal.textContent = session.emptySourceTracksShown
-    ? "Leere Tonspuren ausblenden"
-    : `${hidden} leere ${hidden === 1 ? "Tonspur" : "Tonspuren"} zeigen ` +
-      (hiddenExported === 0
-        ? `(${hidden === 1 ? "kommt" : "kommen"} nicht nach Premiere)`
-        : `(${hiddenExported} davon ${hiddenExported === 1 ? "kommt" : "kommen"} nach Premiere)`);
+  reveal.textContent = session.emptySourceTracksShown ? T.hideEmpty : T.showEmpty(hidden, hiddenExported);
   reveal.disabled = tab.working;
   reveal.addEventListener("click", () => {
     tab.session = revealEmptySourceTracks(tab.session, !tab.session.emptySourceTracksShown);
@@ -678,8 +711,11 @@ function drawSourceTracks(tab: OpenTab | null): void {
   view.sourceTracksHint.append(document.createElement("br"), reveal);
 }
 
-/** The Preset dropdown. "eigene" is what the sliders are once one of them has been moved off a Preset. */
-const OWN_SETTINGS = "eigene";
+/**
+ * The Preset dropdown's entry for sliders that belong to no Preset once one of them has been moved. An internal value:
+ * the entry reads "eigene" or "custom", as the language has it.
+ */
+const OWN_SETTINGS = "__own__";
 
 function drawSettings(tab: OpenTab | null): void {
   const session = tab?.session ?? NO_TAB_SESSION;
@@ -692,13 +728,13 @@ function drawSettings(tab: OpenTab | null): void {
   for (const name of [...PRESETS.map((preset) => preset.name), ...(choice ? [] : [OWN_SETTINGS])]) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = name;
+    option.textContent = name === OWN_SETTINGS ? T.ownSettings : name;
     view.preset.append(option);
   }
   // The user's own sit under a separator, so it is plain which three the app came with.
   if (ownPresets.length > 0) {
     const mine = document.createElement("optgroup");
-    mine.label = "Eigene";
+    mine.label = T.ownPresets;
     for (const preset of ownPresets) {
       const option = document.createElement("option");
       option.value = preset.name;
@@ -711,7 +747,7 @@ function drawSettings(tab: OpenTab | null): void {
   // The chosen Preset keeps its place in the list while the sliders sit off it, and says so.
   if (choice?.changed) {
     const shown = [...view.preset.options].find((option) => option.value === choice.name);
-    if (shown) shown.textContent = `${choice.name} (geändert)`;
+    if (shown) shown.textContent = T.changed(choice.name);
   }
 
   view.preset.disabled = busy;
@@ -745,19 +781,20 @@ function drawResult(tab: OpenTab | null): void {
   if (!tab || !cut) return;
 
   const sentence = document.createElement("p");
-  sentence.textContent =
-    `Von ${duration(cut.recordingSeconds)} bleiben ${duration(cut.keptSeconds)} übrig – ` +
-    `${decimals(cut.removedShare * 100, 0)} % sind weg.`;
+  sentence.textContent = T.resultSentence({
+    total: duration(cut.recordingSeconds),
+    kept: duration(cut.keptSeconds),
+    removedPercent: decimals(cut.removedShare * 100, 0),
+  });
   const numbers = document.createElement("p");
   numbers.className = "numbers";
-  numbers.textContent =
-    `${cut.keepSegments.toLocaleString("de-DE")} Teile, ${duration(cut.removedSeconds)} entfernt.`;
+  numbers.textContent = T.resultNumbers(cut.keepSegments.toLocaleString(T.locale), duration(cut.removedSeconds));
 
   const buttons = document.createElement("div");
   buttons.className = "buttons";
   const save = document.createElement("button");
   save.className = "primary";
-  save.textContent = "Premiere-Datei speichern …";
+  save.textContent = T.savePremiere;
   // Without a SourceTrack to export the file would hold a sequence with no audio at all.
   // While a replan is still pending the plan in the main process is the one before the last change: saved now, the
   // file would lack a stretch just held and still say "Gespeichert".
@@ -766,28 +803,28 @@ function drawResult(tab: OpenTab | null): void {
   save.addEventListener("click", async () => {
     save.disabled = true;
     clearStatus(tab);
-    const saved = show(tab, await window.smarttrim.save(tab.id, tab.session.exportSourceTracks), "Speichern ging nicht");
+    const saved = show(tab, await window.smarttrim.save(tab.id, tab.session.exportSourceTracks, T.dialogs), T.savingFailed);
     save.disabled = mayNotSave();
     // undefined is a refusal, already on screen; null means the user closed the dialog.
     if (saved === undefined || saved === null || !isOpen(tab)) return;
     // The result box belongs to the Tab on screen; another Tab's box gets the news in its status line instead.
     if (viewed() !== tab) {
-      setStatus(tab, `Gespeichert: ${saved}`);
+      setStatus(tab, T.savedAt(saved));
       return;
     }
     const done = document.createElement("p");
     done.className = "numbers";
-    done.textContent = `Gespeichert: ${saved}`;
+    done.textContent = T.savedAt(saved);
     const reveal = document.createElement("button");
-    reveal.textContent = "Im Ordner zeigen";
+    reveal.textContent = T.showInFolder;
     reveal.addEventListener("click", () => void window.smarttrim.reveal(saved));
     view.result.append(done, reveal);
   });
 
   // The project is what makes tomorrow cheap: it holds what the analysis found, so the Recording is not read again.
   const saveProject = document.createElement("button");
-  saveProject.textContent = "Projekt speichern";
-  saveProject.title = "Speichert neben der Aufnahme – oder in das Projekt, aus dem dieser Tab kommt";
+  saveProject.textContent = T.saveProject;
+  saveProject.title = T.saveProjectTitle;
   // While a redo is still pending the numbers on screen and the plan behind them are one step apart.
   saveProject.disabled = redoNeeded(tab.session) !== "nothing";
   saveProject.addEventListener("click", async () => {
@@ -808,11 +845,11 @@ async function saveProjectOf(tab: OpenTab): Promise<string | undefined> {
   clearStatus(tab);
   // Taken now: a stretch held while the file is being written is not in it, and must not count as saved.
   const choices = savedChoicesFrom(tab.session);
-  const saved = show(tab, await window.smarttrim.saveProjectBeside(tab.id, choices), "Speichern ging nicht");
+  const saved = show(tab, await window.smarttrim.saveProjectBeside(tab.id, choices), T.savingFailed);
   if (saved === undefined || !isOpen(tab)) return undefined;
   // What the file holds no longer needs asking about when the Tab is closed (ADR-0025).
   tab.session = projectSaved(tab.session, choices);
-  setStatus(tab, `Projekt gespeichert: ${saved}`);
+  setStatus(tab, T.projectSavedAt(saved));
   return saved;
 }
 
@@ -843,17 +880,17 @@ function draw(): void {
   // While all Tabs are cut or saved, a Tab cut by hand could be cut twice, or lose its cut just before it is saved.
   const allRunning = cuttingAll !== null || savingAll !== null;
   view.cut.disabled = !tab || tab.working || preparing || allRunning || !canCut(tab.session);
-  view.cut.textContent = tab?.working ? "Arbeitet …" : "Schneiden";
+  view.cut.textContent = tab?.working ? T.working : T.cut;
   const severalTabs = tabs.length > 1;
   const counted = (progress: { done: number; total: number }) =>
-    `${Math.min(progress.done + 1, progress.total)} von ${progress.total}`;
+    T.counted(Math.min(progress.done + 1, progress.total), progress.total);
   view.cutAll.hidden = !severalTabs && cuttingAll === null;
   view.cutAll.disabled = preparing || allTabsBusy();
-  view.cutAll.textContent = cuttingAll ? `Schneidet ${counted(cuttingAll)} …` : "Alle schneiden";
+  view.cutAll.textContent = cuttingAll ? T.cuttingCount(counted(cuttingAll)) : T.cutAll;
   view.saveAllRow.hidden = !severalTabs && savingAll === null;
   view.saveAll.disabled =
     preparing || allTabsBusy() || !tabs.some((each) => savingAllDoes(each.session, each.finished !== null) === "save");
-  view.saveAll.textContent = savingAll ? `Speichert ${counted(savingAll)} …` : "Alle Premiere-Dateien speichern";
+  view.saveAll.textContent = savingAll ? T.savingCount(counted(savingAll)) : T.saveAll;
   view.takeOverRow.hidden = !severalTabs;
   // A Tab being cut or saved must not have its settings changed underneath (ADR-0026).
   view.takeOver.disabled = !tab || allTabsBusy();
@@ -870,14 +907,14 @@ function afterSettingChange(tab: OpenTab): void {
   if (redo === "nothing") return;
   if (redo === "analyse") {
     tab.finished = null;
-    setStatus(tab, "Einstellung geändert – noch einmal schneiden.");
+    setStatus(tab, T.settingChanged);
     return;
   }
   scheduleRedo(tab, redo);
 }
 
 function scheduleRedo(tab: OpenTab, redo: "replan" | "redecide"): void {
-  setStatus(tab, redo === "replan" ? "Plant neu …" : "Rechnet neu …");
+  setStatus(tab, redo === "replan" ? T.replanning : T.redeciding);
   clearTimeout(tab.redoTimer);
   tab.redoTimer = setTimeout(() => void redoNow(tab), 120);
 }
@@ -907,7 +944,7 @@ async function redoAs(tab: OpenTab, redo: "replan" | "redecide"): Promise<void> 
   const answer =
     redo === "replan" ? await window.smarttrim.replan(tab.id, used) : await window.smarttrim.redecide(tab.id, used);
   if (!isOpen(tab)) return;
-  const summary = show(tab, answer, redo === "replan" ? "Das Neuplanen ging nicht" : "Das Neurechnen ging nicht");
+  const summary = show(tab, answer, redo === "replan" ? T.replanFailed : T.redecideFailed);
   if (summary) {
     // A slider pulled back while this ran leaves these numbers one step behind; the plan is marked as made for where
     // the sliders were, so the next redo is asked for rather than a plan the sliders no longer describe being saved.
@@ -916,7 +953,7 @@ async function redoAs(tab: OpenTab, redo: "replan" | "redecide"): Promise<void> 
       // A role changed while this ran — taken over from another Tab, say: these numbers belong to SourceTracks no
       // longer chosen, and the cut has to be made again.
       tab.finished = null;
-      setStatus(tab, "Einstellung geändert – noch einmal schneiden.");
+      setStatus(tab, T.settingChanged);
     } else {
       tab.finished = summary;
       // A sound that skips what the cut removes was built from the cut before this one: heard on, it would jump over a
@@ -1203,7 +1240,7 @@ function waveformCanvas(position: number): HTMLCanvasElement {
   if (made) return made;
   const canvas = document.createElement("canvas");
   canvas.dataset["position"] = String(position);
-  canvas.title = `Tonspur ${position + 1} · klicken setzt den Strich, ziehen verschiebt, Mausrad zoomt`;
+  canvas.title = T.waveformTitle(position + 1);
   waveformCanvases.set(position, canvas);
   return canvas;
 }
@@ -1303,22 +1340,18 @@ async function pump(): Promise<void> {
 function drawReading(tab: OpenTab): void {
   if (tab.status.bad) return;
   const { done, total } = tab.readingCount;
-  setStatus(
-    tab,
-    total === 1 ? "Liest den Ton der Tonspur …" : `Liest den Ton der Tonspuren … ${done} von ${total} fertig`,
-  );
+  setStatus(tab, total === 1 ? T.readingOne : T.readingCount(done, total), false, "job");
 }
 
 /** A status line a background job put up, which it takes down again once done — and no other. */
-const isJobLine = (tab: OpenTab) =>
-  !tab.status.bad && (tab.status.text.startsWith("Liest den Ton") || tab.status.text === "Prüft die Tonspuren …");
+const isJobLine = (tab: OpenTab) => !tab.status.bad && tab.status.kind === "job";
 
 /** Listens to slices of a Tab's SourceTracks, so its EmptyTracks are hidden and the rest read ahead (ADR-0013). */
 async function scanTab(tab: OpenTab): Promise<void> {
-  setStatus(tab, "Prüft die Tonspuren …");
+  setStatus(tab, T.jobLines.scan, false, "job");
   const answer = await window.smarttrim.scan(tab.id);
   if (!isOpen(tab)) return;
-  const scan = show(tab, answer, "Die Tonspuren ließen sich nicht prüfen");
+  const scan = show(tab, answer, T.scanFailed);
   if (!scan) {
     Object.assign(tab, jobRefused(tab));
     return;
@@ -1338,7 +1371,7 @@ async function readTab(tab: OpenTab, positions: readonly number[]): Promise<void
   drawReading(tab);
   const answer = await window.smarttrim.readSourceTracks(tab.id, positions);
   if (!isOpen(tab)) return;
-  const drawn = show(tab, answer, "Die Tonspur ließ sich nicht lesen");
+  const drawn = show(tab, answer, T.readFailed);
   if (!drawn) {
     // Asked again, the same read would be refused again — one ffmpeg on a 23 GB file per turn. The user retries by
     // giving a role again.
@@ -1356,10 +1389,10 @@ async function readTab(tab: OpenTab, positions: readonly number[]): Promise<void
  * numbers are already usable, and the waveform appears when it arrives.
  */
 async function readProjectAudioOf(tab: OpenTab): Promise<void> {
-  setStatus(tab, "Liest den Ton für die Wellenform …");
+  setStatus(tab, T.jobLines.projectAudio, false, "job");
   const answer = await window.smarttrim.readProjectAudio(tab.id);
   if (!isOpen(tab)) return;
-  const drawn = show(tab, answer, "Der Ton ließ sich nicht nachlesen");
+  const drawn = show(tab, answer, T.projectAudioFailed);
   if (!drawn) {
     Object.assign(tab, jobRefused(tab));
     return;
@@ -1376,7 +1409,7 @@ async function readProjectAudioOf(tab: OpenTab): Promise<void> {
  * this is asked for once per analysis (ADR-0019).
  */
 async function loadWaveforms(tab: OpenTab): Promise<void> {
-  const drawn = show(tab, await window.smarttrim.waveforms(tab.id), "Die Wellenform ließ sich nicht zeichnen");
+  const drawn = show(tab, await window.smarttrim.waveforms(tab.id), T.waveformFailed);
   if (!drawn || !isOpen(tab)) return;
   mergeWaveforms(tab, drawn);
   // A full redraw, not just the picture: the SourceTrack rows are what put each waveform's canvas on screen, and
@@ -1448,12 +1481,12 @@ view.confirmPreset.addEventListener("click", () => {
   }
 
   const write = async () => {
-    const saved = show(tab, await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+    const saved = show(tab, await window.smarttrim.savePreset(preset), T.presetSaveFailed);
     if (saved) presetsSaved(saved, preset);
   };
   if (ownPresets.some((each) => each.name === name)) {
     naming = false;
-    ask(`„${name}“ gibt es schon. Überschreiben?`, () => void write());
+    ask(T.overwriteAsk(name), () => void write());
     return;
   }
   void write();
@@ -1468,7 +1501,7 @@ view.savePreset.addEventListener("click", async () => {
   const choice = presetChoice(tab.session, ownPresets);
   if (!choice) return;
   const preset = presetFromSliders(tab.session, choice.name);
-  const saved = show(tab, await window.smarttrim.savePreset(preset), "Die Voreinstellung ließ sich nicht speichern");
+  const saved = show(tab, await window.smarttrim.savePreset(preset), T.presetSaveFailed);
   if (saved) presetsSaved(saved, preset);
 });
 
@@ -1478,8 +1511,8 @@ view.deletePreset.addEventListener("click", () => {
   clearStatus(tab);
   const choice = presetChoice(tab.session, ownPresets);
   if (!choice) return;
-  ask(`„${choice.name}“ löschen?`, async () => {
-    const left = show(tab, await window.smarttrim.deletePreset(choice.name), "Die Voreinstellung ließ sich nicht löschen");
+  ask(T.deleteAsk(choice.name), async () => {
+    const left = show(tab, await window.smarttrim.deletePreset(choice.name), T.presetDeleteFailed);
     if (!left) return;
     ownPresets = left;
     // The sliders keep their values; only the name they belonged to is gone — in every Tab that had it chosen.
@@ -1667,7 +1700,7 @@ async function play(position: number): Promise<void> {
   // Something else was pressed, another Tab was shown, or this one closed, while the Excerpt was on its way.
   if (request !== playRequest || !isOpen(tab)) return;
   fetchingFor = null;
-  const excerpt = show(tab, answer, "Der Ton ließ sich nicht abspielen");
+  const excerpt = show(tab, answer, T.playFailed);
   if (!excerpt) {
     draw();
     return;
@@ -1681,8 +1714,8 @@ async function play(position: number): Promise<void> {
     say(
       tab,
       skipping
-        ? "Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten."
-        : `Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`,
+        ? T.nothingKeptHere
+        : `${T.playFailed}: ${error instanceof Error ? error.message : String(error)}`,
     );
     draw();
     return;
@@ -1704,7 +1737,7 @@ async function play(position: number): Promise<void> {
   try {
     sound = startSound(playback);
   } catch (error) {
-    say(tab, `Der Ton ließ sich nicht abspielen: ${error instanceof Error ? error.message : String(error)}`);
+    say(tab, `${T.playFailed}: ${error instanceof Error ? error.message : String(error)}`);
     draw();
     return;
   }
@@ -1843,7 +1876,7 @@ function forgetPicture(tabId: number | null): void {
 
 /** Says under the frame why the picture cannot be shown. */
 function sayAboutPicture(reason: string): void {
-  const said = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen: ${reason}`;
+  const said = T.pictureFailed(reason);
   if (pictureFailed === said) return;
   pictureFailed = said;
   drawPicture(viewed());
@@ -1938,7 +1971,7 @@ function drawPicture(tab: OpenTab | null): void {
     view.pictureCanvas.height = height;
     shownFrame = null;
   }
-  view.pictureToggle.textContent = pictureOpen ? "Bild ausblenden" : "Bild zeigen";
+  view.pictureToggle.textContent = pictureOpen ? T.hidePicture : T.showPicture;
   view.pictureFrame.hidden = !pictureOpen;
   view.pictureNote.hidden = pictureFailed === null;
   view.pictureNote.textContent = pictureFailed ?? "";
@@ -2053,16 +2086,16 @@ function drawHeld(tab: OpenTab | null): void {
   // Playhead, or an Ende on the Anfang, is answered with a sentence instead.
   view.holdStart.disabled = tab.working;
   view.holdEnd.disabled = tab.working || anfang === null;
-  view.holdEnd.textContent = anfang === null ? "Ende festhalten" : `Ende festhalten (Anfang ${clock(anfang)})`;
+  view.holdEnd.textContent = anfang === null ? T.holdEnd : T.holdEndWithStart(clock(anfang));
   view.heldList.replaceChildren(
     ...tab.session.lockedRanges.map((range, index) => {
       const item = document.createElement("li");
       const text = document.createElement("span");
-      text.textContent = `Festgehalten: ${clock(range.startSeconds)} – ${clock(range.endSeconds)}`;
+      text.textContent = T.heldRange(clock(range.startSeconds), clock(range.endSeconds));
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "link";
-      remove.textContent = "entfernen";
+      remove.textContent = T.remove;
       remove.disabled = tab.working;
       remove.addEventListener("click", () => {
         tab.session = removeLockedRange(tab.session, index);
@@ -2080,7 +2113,7 @@ view.holdStart.addEventListener("click", () => {
   if (!tab) return;
   const at = playheadNow(tab);
   if (at === null) {
-    say(tab, "Setz zuerst den weißen Strich: ein Klick in die Wellenform, dann „Anfang festhalten“.");
+    say(tab, T.holdStartFirst);
     return;
   }
   tab.session = markLockedRangeStart(tab.session, at);
@@ -2092,13 +2125,13 @@ view.holdEnd.addEventListener("click", () => {
   if (!tab) return;
   const at = playheadNow(tab);
   if (at === null) {
-    say(tab, "Setz zuerst den weißen Strich an das Ende: ein Klick in die Wellenform, dann „Ende festhalten“.");
+    say(tab, T.holdEndFirst);
     return;
   }
   try {
     tab.session = markLockedRangeEnd(tab.session, at);
   } catch (error) {
-    say(tab, `Das ließ sich nicht festhalten: ${error instanceof Error ? error.message : String(error)}`);
+    say(tab, T.holdFailed(error instanceof Error ? error.message : String(error)));
     return;
   }
   // Holding a stretch only replans (ADR-0023), which a finished cut does at once and a pending one picks up.
@@ -2182,7 +2215,7 @@ function openTabFrom(work: TabWork, finished: CutSummary | null): OpenTab {
     zoom: { fromSeconds: 0, toSeconds: 1 },
     playheadSeconds: null,
     working: false,
-    status: { text: "", bad: false },
+    status: { text: "", bad: false, kind: "plain" },
     readingCount: { done: 0, total: 0 },
     redoTimer: undefined,
     redoing: null,
@@ -2296,43 +2329,43 @@ view.dismissNotes.addEventListener("click", () => {
 /** A refused file in the user's words, with the core of what was reported beneath (ADR-0025). */
 function refusalNote({ path, kind, detail }: Refusal): OpenNote {
   const name = fileName(path);
-  const because = detail ? `Grund: ${detail}` : undefined;
+  const because = detail ? T.because(detail) : undefined;
   switch (kind) {
     case "missing":
-      return { tone: "refused", name, text: "Die Datei gibt es nicht mehr." };
+      return { tone: "refused", name, text: T.fileMissing };
     case "folder":
-      return { tone: "refused", name, text: "Das ist ein Ordner, keine Datei." };
+      return { tone: "refused", name, text: T.isFolder };
     case "notARecording":
       return {
         tone: "refused",
         name,
-        text: "Das ist keine Aufnahme. Darin ließ sich weder Bild noch Ton lesen.",
-        detail: detail ? `ffprobe meldet: ${detail}` : undefined,
+        text: T.notARecording,
+        detail: detail ? T.ffprobeSays(detail) : undefined,
       };
     case "cannotCut":
-      return { tone: "refused", name, text: "Diese Aufnahme kann SmartTrim nicht schneiden.", detail: because };
+      return { tone: "refused", name, text: T.cannotCut, detail: because };
     case "notAProject":
-      return { tone: "refused", name, text: "Das Projekt lässt sich nicht lesen.", detail: because };
+      return { tone: "refused", name, text: T.notAProject, detail: because };
     case "projectRecordingMissing":
       return {
         tone: "refused",
         name,
-        text: "Die Aufnahme zu diesem Projekt ist nicht mehr da, wo sie beim Speichern lag.",
-        detail: `Gesucht unter: ${detail}`,
+        text: T.projectRecordingMissing,
+        detail: T.lookedUnder(detail),
       };
     case "otherProjectOpened":
       // Not an error: the Recording opens, only through the other project. Grey, not red.
       return {
         tone: "info",
         name,
-        text: "Nicht geöffnet, weil zu derselben Aufnahme schon ein anderes Projekt geöffnet wird.",
-        detail: `Geöffnet: ${fileName(detail)}`,
+        text: T.otherProjectOpened,
+        detail: T.openedAs(fileName(detail)),
       };
     case "projectRecordingChanged":
       return {
         tone: "refused",
         name,
-        text: "Die Aufnahme zu diesem Projekt hat sich seit dem Speichern verändert, die Schnitte würden nicht mehr passen.",
+        text: T.projectRecordingChanged,
         detail: because,
       };
   }
@@ -2347,14 +2380,14 @@ function openingNotes(opened: OpenedInWindow): OpenNote[] {
   const alreadyOpen = opened.tabs.filter((one) => one.alreadyOpen);
   const recordings = alreadyOpen.filter((one) => one.kind === "recording");
   if (recordings.length === 1) {
-    notes.push({ tone: "info", name: fileName(recordings[0]?.path ?? ""), text: "Ist schon offen." });
+    notes.push({ tone: "info", name: fileName(recordings[0]?.path ?? ""), text: T.alreadyOpen });
   }
-  if (recordings.length > 1) notes.push({ tone: "info", name: "", text: `${recordings.length} Aufnahmen sind schon offen.` });
+  if (recordings.length > 1) notes.push({ tone: "info", name: "", text: T.recordingsAlreadyOpen(recordings.length) });
   for (const project of alreadyOpen.filter((one) => one.kind === "project")) {
     notes.push({
       tone: "info",
       name: fileName(project.path),
-      text: "Nicht geladen, weil die Aufnahme dazu schon in einem Tab offen ist. Schließ diesen Tab zuerst, wenn du das Projekt öffnen willst.",
+      text: T.projectNotLoaded,
     });
   }
   return notes;
@@ -2367,7 +2400,7 @@ function openingNotes(opened: OpenedInWindow): OpenNote[] {
 async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>): Promise<void> {
   const answer = await opening();
   if (!answer.ok) {
-    openNotes = [{ tone: "refused", name: "", text: "Die Dateien ließen sich nicht öffnen.", detail: `Grund: ${answer.message}` }];
+    openNotes = [{ tone: "refused", name: "", text: T.filesFailed, detail: T.because(answer.message) }];
     draw();
     return;
   }
@@ -2388,14 +2421,20 @@ async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>
   else draw();
 }
 
-view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording()));
-view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject()));
+view.chooseRecording.addEventListener("click", () => openAndShow(() => window.smarttrim.chooseRecording(T.dialogs)));
+view.openProject.addEventListener("click", () => openAndShow(() => window.smarttrim.openProject(T.dialogs)));
 // The drop area's own pair of buttons, shown while nothing is open, do the same as the header's pair, which is hidden
 // meanwhile; `draw` keeps their disabled state in step, and `drawRecording` hands the focus back when the area goes.
 view.emptyChoose.addEventListener("click", () => view.chooseRecording.click());
 view.emptyOpen.addEventListener("click", () => view.openProject.click());
 // A window made wider or narrower while a wait is shown gets its bars remade to the new width.
 window.addEventListener("resize", drawStatus);
+// The language switch at the top right: the fixed sentences change at once, the rest with the next draw.
+view.language.addEventListener("change", () => {
+  if (isLanguage(view.language.value)) speak(view.language.value);
+  draw();
+});
+applyTexts();
 
 /* ── Dropping files ────────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -2434,7 +2473,7 @@ window.addEventListener("drop", async (event) => {
   if (files.length === 0 || !mayOpen()) return;
   const paths = files.map((file) => window.smarttrim.pathOf(file)).filter((path) => path !== "");
   if (paths.length === 0) {
-    openNotes = [{ tone: "refused", name: "", text: "Das lässt sich nicht öffnen: Es ist keine Datei auf diesem Rechner." }];
+    openNotes = [{ tone: "refused", name: "", text: T.notAFileHere }];
     draw();
     return;
   }
@@ -2477,12 +2516,12 @@ async function cutTab(tab: OpenTab): Promise<Answer<CutSummary> | null> {
   tab.finished = null;
   // The waveforms are kept: they belong to this Recording, and this analysis reuses what was read to draw them
   // (ADR-0020). They simply lose their colours until the new plan arrives.
-  setStatus(tab, "Liest die Aufnahme …");
+  setStatus(tab, T.readingRecording);
   draw();
   const answer = await window.smarttrim.cut(tab.id, analysisRequestFrom(tab.session));
   tab.working = false;
   if (!isOpen(tab)) return null;
-  const summary = show(tab, answer, "Der Schnitt ging nicht");
+  const summary = show(tab, answer, T.cutFailed);
   if (summary) {
     tab.finished = summary;
     // From here on, moving Luft or Pause only replans (ADR-0004).
@@ -2502,18 +2541,7 @@ view.cut.addEventListener("click", async () => {
 
 /* ── All Tabs at once ──────────────────────────────────────────────────────────────────────────────────────── */
 
-/** Why "Alle schneiden" or "Alle Premiere-Dateien speichern" passed a Tab over, in the user's words. */
-const SKIPPED_BECAUSE = {
-  skipNoVoice: "Übersprungen: Keine Tonspur steht auf „danach schneiden“.",
-  skipNotCut: "Übersprungen: Noch nicht nach den jetzigen Einstellungen geschnitten.",
-  skipNoExport: "Übersprungen: Keine Tonspur ist für Premiere angekreuzt.",
-} as const;
-
-/** "Alle schneiden: 8 geschnitten, 2 übersprungen" — each count with its words, the ones at nought left out. */
-function allTabsHeading(action: string, counts: readonly (readonly [number, string])[]): string {
-  const said = counts.filter(([count]) => count > 0).map(([count, words]) => `${count} ${words}`);
-  return `${action}: ${said.length > 0 ? said.join(", ") : "nichts zu tun"}`;
-}
+// Why "Alle schneiden" or "Alle Premiere-Dateien speichern" passed a Tab over is said by `T.skipped`, in the user's words.
 
 /**
  * Puts up what an action on all Tabs had to say, under its heading. What something else put up while it ran — files
@@ -2540,7 +2568,7 @@ function forgetSettledPassOvers(): void {
   for (const tab of tabs) {
     if (!tab.skippedBy || stillPassedOver(tab)) continue;
     tab.skippedBy = null;
-    if (!tab.status.bad && tab.status.text.startsWith("Übersprungen")) {
+    if (!tab.status.bad && tab.status.kind === "skipped") {
       tab.status.text = "";
     }
   }
@@ -2580,15 +2608,15 @@ async function cutAllTabs(): Promise<void> {
       const step = cuttingAllDoes(tab.session, tab.finished !== null);
       tab.skippedBy = step === "skipNoVoice" ? "cutAll" : null;
       if (step === "skipNoVoice") {
-        setStatus(tab, SKIPPED_BECAUSE[step]);
-        passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
+        setStatus(tab, T.skipped[step], false, "skipped");
+        passedOver.push({ tone: "info", name, text: T.skipped[step] });
       } else if (step === "nothing") {
         // Its cut already matches its settings: nothing was done, and the heading does not claim otherwise.
         alreadyCurrent += 1;
       } else {
         const cut = await cutTab(tab);
         if (cut?.ok) cutCount += 1;
-        else if (cut) failed.push({ tone: "refused", name, text: "Der Schnitt ging nicht.", detail: `Grund: ${cut.message}` });
+        else if (cut) failed.push({ tone: "refused", name, text: `${T.cutFailed}.`, detail: T.because(cut.message) });
       }
     }
     cuttingAll = { done: cuttingAll.done + 1, total: queue.length };
@@ -2599,17 +2627,12 @@ async function cutAllTabs(): Promise<void> {
   showAllTabsNotes(
     [
       ...(cutCount + alreadyCurrent > 0
-        ? [{ tone: "info", name: "", text: "Gespeichert ist noch nichts: dafür „Alle Premiere-Dateien speichern“ ganz unten." } as const]
+        ? [{ tone: "info", name: "", text: T.nothingSavedYet } as const]
         : []),
       ...failed,
       ...passedOver,
     ],
-    allTabsHeading("Alle schneiden", [
-      [cutCount, "geschnitten"],
-      [alreadyCurrent, alreadyCurrent === 1 ? "war schon geschnitten" : "waren schon geschnitten"],
-      [passedOver.length, "übersprungen"],
-      [failed.length, failed.length === 1 ? "ging nicht" : "gingen nicht"],
-    ]),
+    T.cutAllHeading({ cut: cutCount, alreadyCut: alreadyCurrent, skipped: passedOver.length, failed: failed.length }),
     notesBefore,
   );
   draw();
@@ -2642,14 +2665,14 @@ async function saveAllTabs(): Promise<void> {
       const step = savingAllDoes(tab.session, tab.finished !== null);
       tab.skippedBy = step === "save" ? null : "saveAll";
       if (step !== "save") {
-        setStatus(tab, SKIPPED_BECAUSE[step]);
-        passedOver.push({ tone: "info", name, text: SKIPPED_BECAUSE[step] });
+        setStatus(tab, T.skipped[step], false, "skipped");
+        passedOver.push({ tone: "info", name, text: T.skipped[step] });
       } else {
         const answer = await window.smarttrim.savePremiereBeside(tab.id, tab.session.exportSourceTracks);
         if (answer.ok) {
           // Written is written, whether or not the Tab was closed while it was: the file is there and is counted.
           if (isOpen(tab)) setStatus(tab, `Gespeichert: ${answer.value}`);
-          saved.push({ tone: "info", name: fileName(answer.value), text: "Gespeichert.", detail: `Ordner: ${folderOf(answer.value)}` });
+          saved.push({ tone: "info", name: fileName(answer.value), text: T.savedDot, detail: T.folderIs(folderOf(answer.value)) });
         } else if (isOpen(tab)) {
           say(tab, `Speichern ging nicht: ${answer.message}`);
           failed.push({ tone: "refused", name, text: "Nicht gespeichert.", detail: `Grund: ${answer.message}` });
@@ -2664,11 +2687,7 @@ async function saveAllTabs(): Promise<void> {
   savingAll = null;
   showAllTabsNotes(
     [...failed, ...passedOver, ...saved],
-    allTabsHeading("Alle Premiere-Dateien speichern", [
-      [saved.length, "gespeichert"],
-      [passedOver.length, "übersprungen"],
-      [failed.length, failed.length === 1 ? "ging nicht" : "gingen nicht"],
-    ]),
+    T.saveAllHeading({ saved: saved.length, skipped: passedOver.length, failed: failed.length }),
     notesBefore,
   );
   draw();
@@ -2682,11 +2701,7 @@ function drawTakeOverQuestion(): void {
   view.takeOverAsking.hidden = !takeOverAsking || !from;
   if (!takeOverAsking || !from) return;
   const others = tabs.length - 1;
-  view.takeOverQuestion.textContent =
-    `Die Regler von „${fileName(from.session.recording?.path ?? "")}“ gehen an ` +
-    `${others === 1 ? "den anderen Tab" : `die ${others} anderen Tabs`}. ` +
-    "Nur wenn die Tonspuren überall gleich belegt sind, sollen auch die Tonspur-Rollen und die Premiere-Häkchen mit. " +
-    "Aufnahmen mit einer anderen Zahl an Tonspuren bekommen so oder so nur die Regler. Festgehaltene Stellen bleiben, wo sie sind.";
+  view.takeOverQuestion.textContent = T.takeOverQuestion(fileName(from.session.recording?.path ?? ""), others);
 }
 
 function closeTakeOver(): void {
@@ -2713,22 +2728,22 @@ function takeOverInto(what: TakenOver): void {
     // A finished cut in that Tab is planned again, decided again, or stops being offered — as if moved by hand.
     afterSettingChange(tab);
     if (rolesLeftOut) {
-      const sourceTracks = (count: number) => (count === 1 ? "eine Tonspur" : `${count} Tonspuren`);
       leftOut.push({
         tone: "info",
         name: fileName(tab.session.recording?.path ?? ""),
-        text:
-          `Nur die Regler übernommen: Diese Aufnahme hat ${sourceTracks(session.recording?.sourceTracks.length ?? 0)}, ` +
-          `„${fileName(from.session.recording?.path ?? "")}“ hat ${sourceTracks(from.session.recording?.sourceTracks.length ?? 0)}.`,
+        text: T.onlySlidersTaken(
+          session.recording?.sourceTracks.length ?? 0,
+          fileName(from.session.recording?.path ?? ""),
+          from.session.recording?.sourceTracks.length ?? 0,
+        ),
       });
     }
   }
-  const taken = what === "slidersAndRoles" ? "Regler und Tonspur-Rollen" : "Regler";
   openNotes = [
     {
       tone: "info",
       name: "",
-      text: `${taken} von „${fileName(from.session.recording?.path ?? "")}“ in ${others.length === 1 ? "den anderen Tab" : `${others.length} Tabs`} übernommen. Festgehaltene Stellen sind geblieben.`,
+      text: T.takenOver(what, fileName(from.session.recording?.path ?? ""), others.length),
     },
     ...leftOut,
   ];
@@ -2763,17 +2778,17 @@ window.smarttrim.onReadProgress(({ tabId, done, total }) => {
 // A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
 // and this is over before the window has finished drawing.
 window.smarttrim.onToolsProgress(({ name, percent }) => {
-  setStatus(null, `Lädt ${name} … ${percent} % (nur beim ersten Start)`);
+  setStatus(null, T.loadingTool(name, percent));
 });
 // The user's own Presets are read once at startup; without them the dropdown shows only the built-in three.
 void (async () => {
-  const saved = show(null, await window.smarttrim.loadPresets(), "Die eigenen Voreinstellungen ließen sich nicht lesen");
+  const saved = show(null, await window.smarttrim.loadPresets(), T.presetsLoadFailed);
   if (saved) ownPresets = saved;
   draw();
 })();
 
 void (async () => {
-  const ready = show(null, await window.smarttrim.ensureTools(), "Die Werkzeuge fehlen");
+  const ready = show(null, await window.smarttrim.ensureTools(), T.toolsMissing);
   preparing = false;
   if (ready !== undefined) clearStatus(null);
   draw();

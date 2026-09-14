@@ -68,6 +68,6 @@ describe("the preset file in the user's folder", () => {
     const folder = join(workDir, "newer");
     await storeOwnPresets(folder, [abend]);
     writeFileSync(join(folder, "presets.json"), `{ "smarttrimPresets": 99, "presets": [] }`);
-    await expect(loadOwnPresets(folder)).rejects.toThrow(/neuere/i);
+    await expect(loadOwnPresets(folder)).rejects.toThrow(/newer/i);
   });
 });

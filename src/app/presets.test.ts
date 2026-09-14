@@ -101,7 +101,7 @@ describe("the saved file", () => {
   // newer SmartTrim wrote.
   test("refuses a file a newer SmartTrim saved", () => {
     const newer = ownPresetsText([abend]).replace(`"smarttrimPresets": 1`, `"smarttrimPresets": 2`);
-    expect(() => readOwnPresets(newer)).toThrow(/neuere/i);
+    expect(() => readOwnPresets(newer)).toThrow(/newer/i);
   });
 
   test("refuses a Preset whose settings are not numbers", () => {

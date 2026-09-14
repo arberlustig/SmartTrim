@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
+import type { DialogTexts } from "../app/texts.ts";
 import { placementOf, readSavedWindow, savedWindowText, type SavedWindow } from "../app/windowPlacement.ts";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
 import { saveCutPlan, type CutSummary, type PlanSettings, type SourceTrackWaveform } from "../app/runCut.ts";
@@ -122,14 +123,14 @@ function registerHandlers(window: BrowserWindow): void {
 
   ipcMain.handle(
     "recording:choose",
-    answering(async (): Promise<OpenedInWindow | null> => {
+    answering(async (dialogs: DialogTexts): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
-        title: "Aufnahmen wählen",
+        title: dialogs.chooseRecordings.title,
         properties: ["openFile", "multiSelections"],
         // MKV is left out on purpose: it reports no stream lengths, so the probe refuses it (ADR-0009).
         filters: [
-          { name: "Aufnahmen", extensions: ["mp4", "mov", "m4v"] },
-          { name: "Alle Dateien", extensions: ["*"] },
+          { name: dialogs.chooseRecordings.recordings, extensions: ["mp4", "mov", "m4v"] },
+          { name: dialogs.chooseRecordings.allFiles, extensions: ["*"] },
         ],
       });
       if (canceled || filePaths.length === 0) return null;
@@ -139,11 +140,11 @@ function registerHandlers(window: BrowserWindow): void {
 
   ipcMain.handle(
     "project:open",
-    answering(async (): Promise<OpenedInWindow | null> => {
+    answering(async (dialogs: DialogTexts): Promise<OpenedInWindow | null> => {
       const { canceled, filePaths } = await dialog.showOpenDialog(window, {
-        title: "SmartTrim-Projekte öffnen",
+        title: dialogs.openProjects.title,
         properties: ["openFile", "multiSelections"],
-        filters: [{ name: "SmartTrim-Projekt", extensions: ["smarttrim"] }],
+        filters: [{ name: dialogs.openProjects.project, extensions: ["smarttrim"] }],
       });
       if (canceled || filePaths.length === 0) return null;
       // Only the stream descriptions are read, to make sure it is still the Recording the project was cut from.
@@ -282,13 +283,21 @@ function registerHandlers(window: BrowserWindow): void {
   ipcMain.handle(
     "cut:save",
     answering(
-      async ({ tabId, exportSourceTracks }: { tabId: number; exportSourceTracks: readonly number[] }): Promise<string | null> => {
+      async ({
+        tabId,
+        exportSourceTracks,
+        dialogs,
+      }: {
+        tabId: number;
+        exportSourceTracks: readonly number[];
+        dialogs: DialogTexts;
+      }): Promise<string | null> => {
         // Saving a plan that is no longer the one on screen would hand the user a file for settings they changed.
         const { recording } = tabs.cutOf(tabId);
         const { canceled, filePath } = await dialog.showSaveDialog(window, {
-          title: "Premiere-Datei speichern",
+          title: dialogs.savePremiere.title,
           defaultPath: join(dirname(recording.path), `${basename(recording.path, extname(recording.path))}.xml`),
-          filters: [{ name: "Premiere-Projekt (FCP7 XML)", extensions: ["xml"] }],
+          filters: [{ name: dialogs.savePremiere.premiereProject, extensions: ["xml"] }],
         });
         if (canceled || !filePath) return null;
         const { cutPlan } = tabs.cutOf(tabId);

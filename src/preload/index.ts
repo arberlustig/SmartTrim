@@ -8,7 +8,7 @@ const api: SmartTrimApi = {
   onToolsProgress: (listen) => {
     ipcRenderer.on("tools:progress", (_event, progress: ToolsProgress) => listen(progress));
   },
-  chooseRecording: () => ipcRenderer.invoke("recording:choose"),
+  chooseRecording: (dialogs) => ipcRenderer.invoke("recording:choose", dialogs),
   // A dropped File no longer carries its path (Electron 32 removed File.path); only this call can still ask for it.
   pathOf: (file) => webUtils.getPathForFile(file),
   openFiles: (paths) => ipcRenderer.invoke("file:open", paths),
@@ -27,10 +27,10 @@ const api: SmartTrimApi = {
   waveforms: (tabId) => ipcRenderer.invoke("cut:waveforms", tabId),
   replan: (tabId, settings) => ipcRenderer.invoke("cut:replan", { tabId, settings }),
   redecide: (tabId, settings) => ipcRenderer.invoke("cut:redecide", { tabId, settings }),
-  save: (tabId, exportSourceTracks) => ipcRenderer.invoke("cut:save", { tabId, exportSourceTracks }),
+  save: (tabId, exportSourceTracks, dialogs) => ipcRenderer.invoke("cut:save", { tabId, exportSourceTracks, dialogs }),
   saveProjectBeside: (tabId, choices) => ipcRenderer.invoke("project:saveBeside", { tabId, choices }),
   savePremiereBeside: (tabId, exportSourceTracks) => ipcRenderer.invoke("cut:saveBeside", { tabId, exportSourceTracks }),
-  openProject: () => ipcRenderer.invoke("project:open"),
+  openProject: (dialogs) => ipcRenderer.invoke("project:open", dialogs),
   readProjectAudio: (tabId) => ipcRenderer.invoke("project:readAudio", tabId),
   loadPresets: () => ipcRenderer.invoke("presets:load"),
   savePreset: (preset) => ipcRenderer.invoke("presets:save", preset),

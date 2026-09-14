@@ -63,6 +63,26 @@
       body.empty .opening {
         display: none;
       }
+      /* The language the window speaks (ADR-0030): a small choice at the top right, always there. */
+      .languagePick {
+        margin-left: 12px;
+      }
+      body.empty .languagePick {
+        margin-left: auto;
+      }
+      .languagePick select {
+        padding: 6px 8px;
+        font-size: 13px;
+      }
+      /* Read out, not shown: the select's name for those who cannot see its flag of a label. */
+      .visuallyHidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
       /* One Tab per Recording. A long row of them scrolls sideways rather than wrapping into a second strip. */
       .tabStrip {
         display: flex;
@@ -907,15 +927,22 @@
         <img class="brandWord" src="./assets/wordmark.png" alt="SmartTrim" />
       </div>
       <div class="opening">
-        <button id="chooseRecording">Aufnahmen wählen …</button>
-        <button id="openProject">Projekt öffnen …</button>
+        <button id="chooseRecording" data-text="chooseRecordings">Aufnahmen wählen …</button>
+        <button id="openProject" data-text="openProject">Projekt öffnen …</button>
       </div>
+      <label class="languagePick">
+        <span class="visuallyHidden">Sprache / Language</span>
+        <select id="language" title="Sprache / Language">
+          <option value="de">Deutsch</option>
+          <option value="en">English</option>
+        </select>
+      </label>
     </header>
     <nav class="tabStrip" id="tabStrip" hidden></nav>
     <div class="openNotes" id="openNotes" hidden>
       <p class="notesHeading" id="openNotesHeading"></p>
       <ul id="openNotesList"></ul>
-      <button class="notesClose" id="dismissNotes" type="button" title="Ausblenden">×</button>
+      <button class="notesClose" id="dismissNotes" type="button" title="Ausblenden" data-text-title="dismiss">×</button>
     </div>
 
     <!-- Asked inside the window, never with confirm(): a Windows popup leaves the window without focus (ADR-0018). -->
@@ -925,21 +952,21 @@
         <p id="tabQuestion"></p>
         <ul class="heldPreview" id="tabQuestionHeld"></ul>
         <div class="dialogButtons">
-          <button id="saveClose" class="primary" type="button">Speichern und schließen</button>
-          <button id="discardClose" class="danger" type="button">Nicht speichern</button>
-          <button id="cancelClose" type="button">Abbrechen</button>
+          <button id="saveClose" class="primary" type="button" data-text="saveAndClose">Speichern und schließen</button>
+          <button id="discardClose" class="danger" type="button" data-text="dontSave">Nicht speichern</button>
+          <button id="cancelClose" type="button" data-text="cancel">Abbrechen</button>
         </div>
       </div>
     </div>
 
     <div class="modal" id="takeOverAsking" hidden>
       <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="takeOverTitle" aria-describedby="takeOverQuestion">
-        <h3 id="takeOverTitle">Haben alle Aufnahmen dieselbe Tonspur-Aufteilung?</h3>
+        <h3 id="takeOverTitle" data-text="takeOverQuestionTitle">Haben alle Aufnahmen dieselbe Tonspur-Aufteilung?</h3>
         <p id="takeOverQuestion"></p>
         <div class="dialogButtons">
-          <button id="takeOverRoles" class="primary" type="button">Regler und Tonspur-Rollen</button>
-          <button id="takeOverSliders" type="button">Nur Regler</button>
-          <button id="cancelTakeOver" type="button">Abbrechen</button>
+          <button id="takeOverRoles" class="primary" type="button" data-text="takeOverRoles">Regler und Tonspur-Rollen</button>
+          <button id="takeOverSliders" type="button" data-text="takeOverSliders">Nur Regler</button>
+          <button id="cancelTakeOver" type="button" data-text="cancel">Abbrechen</button>
         </div>
       </div>
     </div>
@@ -947,22 +974,22 @@
     <main class="layout">
       <div class="emptyDrop" id="emptyDrop">
         <img src="./assets/smarttrim-icon.svg" alt="" width="96" height="96" />
-        <strong>Aufnahme hierher ziehen</strong>
-        <span>eine Aufnahme, mehrere, oder ein ganzer Ordner</span>
+        <strong data-text="dropTitle">Aufnahme hierher ziehen</strong>
+        <span data-text="dropSubtitle">eine Aufnahme, mehrere, oder ein ganzer Ordner</span>
         <div class="emptyButtons">
-          <button id="emptyChoose" type="button">Aufnahmen wählen …</button>
-          <button id="emptyOpen" type="button">Projekt öffnen …</button>
+          <button id="emptyChoose" type="button" data-text="chooseRecordings">Aufnahmen wählen …</button>
+          <button id="emptyOpen" type="button" data-text="openProject">Projekt öffnen …</button>
         </div>
       </div>
 
       <div class="column left">
         <section>
-          <h2>Aufnahme</h2>
+          <h2 data-text="sectionRecording">Aufnahme</h2>
           <div id="recordingInfo">Noch keine Aufnahme offen.</div>
         </section>
 
         <section class="tracks">
-          <h2>Tonspuren</h2>
+          <h2 data-text="sectionSourceTracks">Tonspuren</h2>
           <!-- Wide enough, the picture stands on the left and the SourceTracks beside it, so the picture stays in view
                while a SourceTrack far down the list is worked on (ADR-0029). Narrower, the picture comes first. -->
           <div class="tracksLayout">
@@ -975,11 +1002,8 @@
                 <p class="pictureNote" id="pictureNote" hidden></p>
                 <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>
               </div>
-              <p class="hint" id="cutHint" hidden>
-                Grün bleibt stehen, dunkelrot wird herausgeschnitten. Den weißen Rahmen ziehen oder in die Leiste klicken,
-                um woanders hinzuschauen. Ein Klick in die Wellenform setzt den weißen Strich, ▶ spielt die Spur ab dort,
-                höchstens <span id="longestExcerpt"></span>.
-              </p>
+              <!-- Said by the window, from the same number readExcerpt refuses by. -->
+              <p class="hint" id="cutHint" hidden></p>
             </div>
             <div class="tracksColumn">
               <!-- While the SourceTracks are read: the bars fill in where the overview strip and the waveforms will appear. -->
@@ -990,21 +1014,21 @@
               <div id="cutPicture" hidden>
                 <canvas id="overview" class="overview" height="34"></canvas>
                 <div class="zoomRow">
-                  <label for="zoom">Ausschnitt</label>
+                  <label for="zoom" data-text="zoom">Ausschnitt</label>
                   <input id="zoom" type="range" />
                   <output id="zoomValue"></output>
                 </div>
                 <label class="skipRow" id="skipRow" hidden>
                   <input id="skipRemoved" type="checkbox" checked />
-                  Beim Abspielen überspringen, was herausgeschnitten wird
+                  <span data-text="skipRemoved">Beim Abspielen überspringen, was herausgeschnitten wird</span>
                 </label>
               </div>
               <div id="sourceTracks"></div>
               <div class="held" id="held" hidden>
                 <div class="holdButtons">
-                  <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest">Anfang festhalten</button>
-                  <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest">Ende festhalten</button>
-                  <span class="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
+                  <button id="holdStart" type="button" title="Hält ab dem weißen Strich fest" data-text="holdStart" data-text-title="holdStartTitle">Anfang festhalten</button>
+                  <button id="holdEnd" type="button" title="Hält bis zum weißen Strich fest" data-text-title="holdEndTitle">Ende festhalten</button>
+                  <span class="holdHint" data-text="holdHint">Festgehaltenes bleibt immer im Schnitt, egal wie die Regler stehen.</span>
                 </div>
                 <ul id="heldList"></ul>
               </div>
@@ -1016,70 +1040,70 @@
 
       <div class="column right">
         <section>
-          <h2>Einstellungen</h2>
+          <h2 data-text="sectionSettings">Einstellungen</h2>
           <div class="preset">
-            <label for="preset">Voreinstellung</label>
+            <label for="preset" data-text="preset">Voreinstellung</label>
             <div class="presetRow">
               <select id="preset"></select>
-              <button id="savePreset" type="button" title="Die Änderungen in diese Voreinstellung übernehmen">sichern</button>
-              <button id="newPreset" class="icon" type="button" title="Eigene Voreinstellung aus den jetzigen Reglern anlegen">+</button>
-              <button id="deletePreset" type="button">löschen</button>
+              <button id="savePreset" type="button" title="Die Änderungen in diese Voreinstellung übernehmen" data-text="presetSave" data-text-title="presetSaveTitle">sichern</button>
+              <button id="newPreset" class="icon" type="button" title="Eigene Voreinstellung aus den jetzigen Reglern anlegen" data-text-title="presetNewTitle">+</button>
+              <button id="deletePreset" type="button" data-text="presetDelete">löschen</button>
             </div>
           </div>
           <div class="preset presetNaming" id="presetNaming" hidden>
-            <label for="presetName">Name</label>
+            <label for="presetName" data-text="presetNameLabel">Name</label>
             <div class="presetRow">
-              <input id="presetName" type="text" maxlength="40" placeholder="z. B. Abend" />
-              <button id="confirmPreset" type="button">Hinzufügen</button>
-              <button id="cancelPreset" type="button">Abbrechen</button>
+              <input id="presetName" type="text" maxlength="40" placeholder="z. B. Abend" data-text-placeholder="presetNamePlaceholder" />
+              <button id="confirmPreset" type="button" data-text="presetAdd">Hinzufügen</button>
+              <button id="cancelPreset" type="button" data-text="cancel">Abbrechen</button>
             </div>
           </div>
           <div class="preset presetNaming" id="presetAsking" hidden>
             <label></label>
             <div class="presetRow">
               <span id="presetQuestion"></span>
-              <button id="confirmAsk" type="button">Ja</button>
-              <button id="cancelAsk" type="button">Abbrechen</button>
+              <button id="confirmAsk" type="button" data-text="yes">Ja</button>
+              <button id="cancelAsk" type="button" data-text="cancel">Abbrechen</button>
             </div>
           </div>
           <div class="slider">
-            <label for="threshold">Lautstärke ab<small>Leiseres gilt als Pause</small></label>
+            <label for="threshold"><span data-text="sliders.threshold.label">Lautstärke ab</span><small data-text="sliders.threshold.small">Leiseres gilt als Pause</small></label>
             <input id="threshold" type="range" />
             <output id="thresholdValue"></output>
           </div>
           <div class="slider">
-            <label for="margin">Luft an den Schnitten<small>Bleibt vor und nach dem Ton stehen</small></label>
+            <label for="margin"><span data-text="sliders.margin.label">Luft an den Schnitten</span><small data-text="sliders.margin.small">Bleibt vor und nach dem Ton stehen</small></label>
             <input id="margin" type="range" />
             <output id="marginValue"></output>
           </div>
           <div class="slider">
-            <label for="deadZone">Pausen entfernen ab<small>Kürzere Pausen bleiben drin</small></label>
+            <label for="deadZone"><span data-text="sliders.deadZone.label">Pausen entfernen ab</span><small data-text="sliders.deadZone.small">Kürzere Pausen bleiben drin</small></label>
             <input id="deadZone" type="range" />
             <output id="deadZoneValue"></output>
           </div>
           <div id="eventSliders" hidden>
             <div class="slider">
-              <label for="eventLead">Vorlauf bei Momenten<small>Bleibt vor einem Knall stehen</small></label>
+              <label for="eventLead"><span data-text="sliders.eventLead.label">Vorlauf bei Momenten</span><small data-text="sliders.eventLead.small">Bleibt vor einem Knall stehen</small></label>
               <input id="eventLead" type="range" />
               <output id="eventLeadValue"></output>
             </div>
             <div class="slider">
-              <label for="eventTail">Nachlauf bei Momenten<small>Bleibt danach stehen</small></label>
+              <label for="eventTail"><span data-text="sliders.eventTail.label">Nachlauf bei Momenten</span><small data-text="sliders.eventTail.small">Bleibt danach stehen</small></label>
               <input id="eventTail" type="range" />
               <output id="eventTailValue"></output>
             </div>
           </div>
           <div class="preset takeOverRow" id="takeOverRow" hidden>
-            <label for="takeOver">Andere Tabs</label>
+            <label for="takeOver" data-text="otherTabs">Andere Tabs</label>
             <div class="presetRow">
-              <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen">Für alle übernehmen</button>
+              <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen" data-text="takeOver" data-text-title="takeOverTitle">Für alle übernehmen</button>
             </div>
           </div>
         </section>
 
         <div class="actions">
           <button id="cut" class="primary" disabled>Schneiden</button>
-          <button id="cutAll" type="button" title="Jeden Tab mit seinen eigenen Einstellungen schneiden" hidden>Alle schneiden</button>
+          <button id="cutAll" type="button" title="Jeden Tab mit seinen eigenen Einstellungen schneiden" data-text-title="cutAllTitle" hidden>Alle schneiden</button>
           <div id="status"></div>
         </div>
 
@@ -1093,14 +1117,14 @@
 
         <div class="actions saveAllRow" id="saveAllRow" hidden>
           <button id="saveAll" type="button">Alle Premiere-Dateien speichern</button>
-          <span>Legt jede Premiere-Datei neben ihre Aufnahme und überschreibt nichts.</span>
+          <span data-text="saveAllHint">Legt jede Premiere-Datei neben ihre Aufnahme und überschreibt nichts.</span>
         </div>
       </div>
     </main>
 
     <div class="dropOverlay" id="dropOverlay" hidden>
-      <strong>Hier ablegen</strong>
-      <span>Eine Aufnahme oder ein SmartTrim-Projekt</span>
+      <strong data-text="dropHere">Hier ablegen</strong>
+      <span data-text="dropWhat">Eine Aufnahme oder ein SmartTrim-Projekt</span>
     </div>
 
     <script type="module" src="./renderer.ts"></script>

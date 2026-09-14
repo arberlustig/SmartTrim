@@ -1,6 +1,7 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { Preset } from "../app/cutSession.ts";
 import type { Refusal } from "../app/openFile.ts";
+import type { DialogTexts } from "../app/texts.ts";
 import type { PictureRun } from "../picture/pictureFrames.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
@@ -82,8 +83,8 @@ export interface SmartTrimApi {
   ensureTools(): Promise<Answer<null>>;
   /** Called while the first-run download runs. */
   onToolsProgress(listen: (progress: ToolsProgress) => void): void;
-  /** Opens the file dialog and opens every file the user picked, each in a Tab: Recordings, or projects. */
-  chooseRecording(): Promise<Answer<OpenedInWindow | null>>;
+  /** Opens the file dialog, in the window's words, and opens every file the user picked, each in a Tab. */
+  chooseRecording(dialogs: DialogTexts): Promise<Answer<OpenedInWindow | null>>;
   /** Where a file dropped on the window lives on disk; empty for something dropped that is no file on disk. */
   pathOf(file: File): string;
   /** Opens files and folders by their paths, each file in a Tab; a folder opens the files directly inside it. */
@@ -130,7 +131,7 @@ export interface SmartTrimApi {
    * Opens the save dialog and writes a Tab's Premiere file, with TimelineTracks for the named SourceTracks only.
    * Returns where it landed.
    */
-  save(tabId: number, exportSourceTracks: readonly number[]): Promise<Answer<string | null>>;
+  save(tabId: number, exportSourceTracks: readonly number[], dialogs: DialogTexts): Promise<Answer<string | null>>;
   /**
    * Writes a Tab as a `.smarttrim` project without asking where: into the project it came from or was last saved to,
    * else beside its Recording, never over another file. Returns where it landed.
@@ -146,8 +147,8 @@ export interface SmartTrimApi {
    * tried again. A project holds what the analysis found, never the audio (ADR-0016).
    */
   readProjectAudio(tabId: number): Promise<Answer<SourceTrackWaveform[]>>;
-  /** Opens the project dialog and opens every project picked, each in a Tab. */
-  openProject(): Promise<Answer<OpenedInWindow | null>>;
+  /** Opens the project dialog, in the window's words, and opens every project picked, each in a Tab. */
+  openProject(dialogs: DialogTexts): Promise<Answer<OpenedInWindow | null>>;
   /** The Presets the user saved themselves, read from their folder. Built-in Presets are not in here. */
   loadPresets(): Promise<Answer<readonly Preset[]>>;
   /** Saves a Preset under its name, replacing one of that name. Returns the user's own Presets as they now are. */

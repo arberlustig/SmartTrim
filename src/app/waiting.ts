@@ -9,6 +9,12 @@ export interface Wait {
   readonly share: number;
 }
 
+/** What the bars say when the status line holds something else than the job's own line, in the window's language. */
+export interface WaitLines {
+  readonly job: Record<BackgroundJob["kind"], string>;
+  readonly cutting: string;
+}
+
 export interface Waiting {
   /** True while the Tab's analysis runs. */
   readonly cutting: boolean;
@@ -20,14 +26,8 @@ export interface Waiting {
   readonly status: { readonly text: string; readonly bad: boolean };
   /** Whether the status line is the job's own — then it goes under the bars; other news stays where it is. */
   readonly statusFromJob: boolean;
+  readonly lines: WaitLines;
 }
-
-/** What the bars say when the status line holds something else than the job's own line. */
-const JOB_LINES: Record<BackgroundJob["kind"], string> = {
-  scan: "Prüft die Tonspuren …",
-  read: "Liest den Ton der Tonspuren …",
-  projectAudio: "Liest den Ton für die Wellenform …",
-};
 
 /**
  * A wait is shown where its outcome will land (ADR-0029): a cut where the result box will be, a scan or a read where
@@ -35,15 +35,15 @@ const JOB_LINES: Record<BackgroundJob["kind"], string> = {
  * still running for the same Tab, since the cut is what the user pressed. The window blanks the status line only when
  * the bars carry its text (`text === status.text`), so "Projekt gespeichert: …" survives a read in the background.
  */
-export function waitOf({ cutting, job, readingCount, status, statusFromJob }: Waiting): Wait | null {
+export function waitOf({ cutting, job, readingCount, status, statusFromJob, lines }: Waiting): Wait | null {
   if (status.bad) return null;
-  if (cutting) return { where: "result", text: status.text || "Schneidet …", share: 0 };
+  if (cutting) return { where: "result", text: status.text || lines.cutting, share: 0 };
   if (!job) return null;
   // All SourceTracks are read at once (ADR-0011), so the count only moves as each finishes; one alone has no count.
   const counted = job.kind === "read" && readingCount.total > 1;
   return {
     where: "sourceTracks",
-    text: statusFromJob ? status.text : JOB_LINES[job.kind],
+    text: statusFromJob ? status.text : lines.job[job.kind],
     share: counted ? readingCount.done / readingCount.total : 0,
   };
 }

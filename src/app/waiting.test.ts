@@ -2,10 +2,14 @@ import { describe, expect, test } from "vitest";
 import { waitOf, type Waiting } from "./waiting";
 
 const idle = { text: "", bad: false };
+const lines = {
+  job: { scan: "Prüft die Tonspuren …", read: "Liest den Ton der Tonspuren …", projectAudio: "Liest den Ton für die Wellenform …" },
+  cutting: "Schneidet …",
+};
 
 /** A Tab waiting for one job, its status line the job's own. */
 function waiting(job: Waiting["job"], text: string, readingCount = { done: 0, total: 0 }): Waiting {
-  return { cutting: false, job, readingCount, status: { text, bad: false }, statusFromJob: true };
+  return { cutting: false, job, readingCount, status: { text, bad: false }, statusFromJob: true, lines };
 }
 
 describe("waitOf: a wait is shown where its outcome will land", () => {
@@ -54,7 +58,7 @@ describe("waitOf: a wait is shown where its outcome will land", () => {
   });
 
   test("a cut with no line of its own still says it is cutting", () => {
-    expect(waitOf({ cutting: true, job: null, readingCount: { done: 0, total: 0 }, status: idle, statusFromJob: false })?.text).toBe(
+    expect(waitOf({ cutting: true, job: null, readingCount: { done: 0, total: 0 }, status: idle, statusFromJob: false, lines })?.text).toBe(
       "Schneidet …",
     );
   });
@@ -68,6 +72,7 @@ describe("waitOf: a wait is shown where its outcome will land", () => {
         readingCount: { done: 0, total: 1 },
         status: refused,
         statusFromJob: false,
+        lines,
       }),
     ).toBeNull();
   });

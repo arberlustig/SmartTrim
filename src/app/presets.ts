@@ -11,12 +11,12 @@ const isNumber = (value: unknown) => typeof value === "number" && Number.isFinit
 
 /** Reads one Preset, refusing anything whose five settings are not all numbers. */
 function presetFrom(value: unknown): Preset {
-  if (typeof value !== "object" || value === null) throw new Error("Diese Voreinstellung ist unlesbar.");
+  if (typeof value !== "object" || value === null) throw new Error("This preset cannot be read.");
   const each = value as Record<string, unknown>;
   const name = each["name"];
-  if (typeof name !== "string" || name.trim() === "") throw new Error("Eine Voreinstellung hat keinen Namen.");
+  if (typeof name !== "string" || name.trim() === "") throw new Error("A preset has no name.");
   for (const field of ["thresholdDbfs", "marginSeconds", "eventLeadSeconds", "eventTailSeconds", "minimumDeadZoneSeconds"]) {
-    if (!isNumber(each[field])) throw new Error(`Der Voreinstellung ${name} fehlt ${field}.`);
+    if (!isNumber(each[field])) throw new Error(`The preset ${name} lacks ${field}.`);
   }
   return {
     name,
@@ -55,11 +55,11 @@ export function readOwnPresets(text: string): readonly Preset[] {
   if (!isNumber(format)) return [];
   if ((format as number) > FORMAT) {
     throw new Error(
-      `Diese Voreinstellungen stammen aus einer neueren SmartTrim-Version (Format ${format as number}, diese liest ${FORMAT}).`,
+      `These presets come from a newer SmartTrim (format ${format as number}; this one reads ${FORMAT}).`,
     );
   }
   const presets = file["presets"];
-  if (!Array.isArray(presets)) throw new Error("Diese Datei enthält keine Voreinstellungen.");
+  if (!Array.isArray(presets)) throw new Error("This file holds no presets.");
   return presets.map(presetFrom);
 }
 
@@ -68,9 +68,9 @@ export function readOwnPresets(text: string): readonly Preset[] {
  * are never overwritten; a blank name would sit in the dropdown as nothing at all.
  */
 function checkName(name: string): void {
-  if (name.trim() === "") throw new Error("Diese Voreinstellung braucht einen Namen.");
+  if (name.trim() === "") throw new Error("This preset needs a name.");
   if (PRESETS.some((built) => built.name === name)) {
-    throw new Error(`${name} ist eine eingebaute Voreinstellung und kann nicht überschrieben werden.`);
+    throw new Error(`${name} is a built-in preset and cannot be overwritten.`);
   }
 }
 
@@ -114,8 +114,8 @@ export function allPresets(own: readonly Preset[]): readonly Preset[] {
 /** Takes one of the user's own Presets out of the list. The built-in three cannot be deleted (ADR-0018). */
 export function withoutPreset(own: readonly Preset[], name: string): readonly Preset[] {
   if (PRESETS.some((built) => built.name === name)) {
-    throw new Error(`${name} ist eine eingebaute Voreinstellung und kann nicht gelöscht werden.`);
+    throw new Error(`${name} is a built-in preset and cannot be deleted.`);
   }
-  if (!own.some((each) => each.name === name)) throw new Error(`Es gibt keine Voreinstellung namens ${name}.`);
+  if (!own.some((each) => each.name === name)) throw new Error(`There is no preset named ${name}.`);
   return own.filter((each) => each.name !== name);
 }

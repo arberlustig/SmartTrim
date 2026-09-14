@@ -146,7 +146,7 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
 
   function cutOf(tabId: number): CutResult {
     const { lastCut } = tabOf(tabId);
-    if (!lastCut) throw new Error("There is no finished cut in this Tab. Press Schneiden first.");
+    if (!lastCut) throw new Error("There is no finished cut in this Tab. Cut it first.");
     return lastCut;
   }
 

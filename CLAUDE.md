@@ -30,3 +30,5 @@ Only Premiere can confirm an import truly works, and only the owner can run it. 
 ## Working with the owner
 
 Conversations are in German; code, comments and docs are English. The owner does not read the source and does not want it explained — build it so the next AI session can. That means tests around the cutting logic and ADRs for anything surprising.
+
+The window speaks German and English (ADR-0030): every sentence the user reads lives in `src/app/texts.ts`, in both languages, and nowhere else. Never write a user-facing sentence into `index.html` or `renderer.ts` directly — add it to `Texts` for both languages and use `T.…` or a `data-text` key.
