@@ -1,4 +1,4 @@
-# The picture follows the sound, through two video elements and SmartTrim's own address
+# The picture follows the sound, decoded with WebCodecs from the Recording's own index
 
 A moving picture of the Recording sits above the SourceTracks of the Tab on screen. While a SourceTrack plays, the
 picture runs with the sound and jumps at every Join; while nothing plays, it shows the still frame under the Playhead.
@@ -13,151 +13,156 @@ The owner asked for it on 2026-09-13 as the last of four agreed steps. What was 
 - **The picture is silent.** The sound stays exactly as ADR-0022 made it, so the Joins stay exact in the sound.
 - **As wide as the waveforms and at most 450 px high**, in the Recording's own shape. 360 px was proposed; the owner
   asked for "ein Ticken größer".
-- **The picture jumps when it lies more than 0.1 s from the sound** (`PICTURE_SLACK_SECONDS`), and at a Join the next
-  place is made ready ahead, so it follows within a frame or two.
 
-## What was measured first
+It was built twice. The first build used two `<video>` elements and stuttered at every Join; the second decodes the
+picture itself with WebCodecs and is what is on main now.
 
-Before anything was built, a hidden-free Electron 44.3.0 window (Chromium 152, RTX 4060, 90 Hz screen) played both
-test Recordings, HEVC 1080p60 with a keyframe every 250 frames (4.17 s):
+## The first build: two `<video>` elements
 
-- `<video>` decodes both in hardware, over `file://` and over a custom protocol with its own Range handler, the 23 GB
-  the long Recording included: 598–599 frames in 10 s, none dropped.
-- A paused seek takes 7–8 ms just after a keyframe and 160–240 ms just before the next one — decoding from the
-  keyframe dominates, the slow external drive barely matters.
-- With two elements, the second one seeked ahead while the first plays: seeking ahead takes up to 750 ms (two to three
-  times longer than when idle); once ready, its first moving frame comes 22–33 ms late (median), 44 ms at worst, now and
-  then skipping one or two frames at the start. One switch in 80 missed: with only half a second kept before it, the
-  element was not ready and came 250 ms late.
-- ffmpeg is too slow for a picture: three minutes at 640 px took 20–30 s, a single frame 250–1000 ms.
-- `app.getGPUFeatureStatus()` says `disabled_software` straight after `ready` and `enabled` a second later; do not
-  judge hardware decoding by the first answer.
+Measured before building, in an Electron 44.3.0 window (Chromium 152, RTX 4060, 90 Hz screen) with both test
+Recordings, HEVC 1080p60 with a keyframe every 250 frames (4.17 s): `<video>` decodes them in hardware, the 23 GB Recording
+included; a paused seek takes 7–8 ms just after a keyframe and 160–240 ms just before the next; a second element seeked
+ahead while the first plays takes up to 750 ms to get there. ffmpeg is far too slow for a picture (a single frame
+250–1000 ms). `app.getGPUFeatureStatus()` says `disabled_software` straight after `ready` and `enabled` a second later.
 
-So the picture follows the exact Web Audio sound within a few frames at a Join. It is not frame-exact like Premiere,
-and was not promised as such.
+So the picture read the Recording through SmartTrim's own address (`smarttrim-video://tab/<id>`, answered from
+`fs.createReadStream`, since `net.fetch` of the file never answered on the long Recording), two muted elements took turns at the
+Joins, and the one behind waited seeked at the next Join.
 
-## Why SmartTrim's own address
-
-In development the window is loaded from `http://localhost`, where `file://` is out of reach, so the `<video>` reads
-`smarttrim-video://tab/<id>`. Passing such a request on to `net.fetch` of the file never answered on the long Recording (ADR-0022),
-so `serveRecording(request, recordingPathOf)` in `src/video/serveRecording.ts` answers Range requests itself from
-`fs.createReadStream`: 206 with the piece asked for, 200 with the whole file when no Range is named, 416 for a piece that
-cannot be given. The address **names a Tab, never a path**: the Recording is looked up in the TabStore, and anything
-else — a closed Tab, an address holding a path — is a 404. The window can reach this address, so it must not become a
-way to read any file on the disk.
-
-The scheme is registered as privileged (`standard`, `secure`, `stream`, `supportFetchAPI`) before the app is ready, as
-Electron requires; a `<video>` cannot seek on a scheme that does not stream. The window's Content-Security-Policy
-allows `media-src smarttrim-video:` and nothing more. `src/video/address.ts` holds the scheme and `videoAddressOf`, so
-the window's bundle does not pull in `node:fs`.
-
-## How the picture follows
-
-The sound is the clock, as it is for the Playhead (ADR-0022). Every animation frame, `pictureFor(playback,
-playedSeconds, shownSeconds)` in `src/video/picture.ts` answers where the Recording belongs on screen
-(`recordingSecondsAt`), whether the picture lies far enough off to jump, and which Join comes next. The window keeps
-two muted `<video>` elements: the one in front plays; the one behind is paused at the next Join's `removedToSeconds`.
-When the sound reaches that Join, they swap — the one behind starts playing and comes to the front, the other stops and
-waits for the Join after. Anything still more than 0.1 s off after that is seeked.
-
-## A Recording the window cannot show
-
-Chromium raises no `error` for a Recording whose video it cannot decode as long as it can play its sound: it loads it as
-sound only, and the picture stays black. It was found with an MPEG-4 Part 2 test Recording whose AAC SourceTracks were
-read. The window therefore also checks `videoWidth` once the metadata has loaded, and says in red under the frame that
-the picture of this Recording cannot be shown here, as it does for a real `error`.
-
-## What the owner's first look found
-
-The owner watched it on 2026-09-13: in step with the sound for about a second, then "sobald ein Cut erfolgt … alles
-ist langsam und auf einmal lagged es".
-
-- **A seek storm.** When the stretch kept before a Join is shorter than the waiting element needs to finish its seek
-  (up to 750 ms on HEVC while the other element decodes), the element takes over still seeking. While it seeks it
-  reports the moment it is seeking to, the sound runs on, and after a tenth of a second the window told it to seek
-  again — every frame, so the seek started over and never ended. Recorded in the window with tagged instrumentation: up
-  to 8 seeks started while one was still running in a single 8 s run. `pictureFor` now takes whether the picture is
-  still seeking and never asks it to seek again then; the same runs afterwards started none.
-- **What it did not fix.** A picture that takes over before its seek ends still stands until that seek ends — up to a
-  second in the densest stretch of the owner's cut (8 Joins in 8 s, kept stretches down to 0.4 s) — and each Join still
-  costs about a tenth of a second before the next element shows a moving frame. Whether that is good enough is the
-  owner's call.
-- **Not the cause, but it looked like one.** A test window covered by other windows is reported hidden by Windows'
-  occlusion tracking: Chromium then stops its animation frames, and since the picture follows on animation frames, it
-  froze completely — which in a long series looked exactly like a slowdown that ends in a freeze. Measure with the
-  window visible, or start Electron with `--disable-features=CalculateNativeWinOcclusion
-  --disable-backgrounding-occluded-windows --disable-renderer-backgrounding` and check `document.visibilityState`. With
-  it, ten runs in a row showed no decline (28–32 frames/s shown, 93 animation frames/s). Streams through the address
-  do not pile up either: 15 opened, 14 closed, never more than one open.
-
-## Still too choppy: what the second round measured
-
-After the seek storm was fixed the owner said "Immer noch zu ruckelig." The second round counted what the eye sees:
-frames the picture on screen really presented (`requestVideoFrameCallback`'s `presentedFrames`, not the number of
-callbacks — those came at about 30 a second for a 60 fps picture and misled the first round) and every gap of more than
-50 ms between two shown frames. Eight seconds each, in the densest stretches of the owner's cut, window visible:
+The owner's first look: "sobald ein Cut erfolgt … alles ist langsam und auf einmal lagged es". That was a **seek
+storm**: an element taking over while still seeking reports the moment it seeks to, the sound ran on, and the window
+told it to seek again every frame. After that fix the owner said "Immer noch zu ruckelig", and counting the frames
+really presented showed why — every stutter sat at a Join:
 
 | case | frames shown per second | gaps over 50 ms | longest gap |
 |---|---|---|---|
 | without skipping | 59–60 | 0 | — |
-| skipping, as built | 52–56 | about 7, **every one at a Join** | 56–78 ms, once 256 ms |
-| skipping, waveform not redrawn per frame | 54–57 | 3–10 | 78 ms, once 189 ms |
+| skipping, two `<video>` elements | 52–56 | about 7, every one at a Join | 56–78 ms, once 256 ms |
 | skipping, next Join not made ready ahead | 28–34 | 21–31 | 234 ms |
 
-- **The stutter is the start at each Join.** The waiting element is ready and shows the right frame, but once told to
-  play it takes 56–78 ms — four or five frames — to show a moving one. In the owner's dense stretches that is about one
-  hitch a second.
-- Redrawing the waveform every frame costs nothing measurable. Making the next Join ready ahead is necessary: without it
-  the picture is far worse.
-- **Tried and not kept: a run-up.** The waiting element was set running out of sight a quarter of a second before its
-  Join, from a quarter of a second before its target, so it would be moving when the cut came. It made things worse: 49–51
-  frames a second in two of three stretches, gaps up to 345 ms at Joins and new gaps of 190–220 ms in the middle of kept
-  stretches, and the picture up to 1.9 s off the sound. Two 1080p60 HEVC elements decoding at the same time slow each
-  other down — the same contention the first measurement saw when seeking ahead (up to 750 ms instead of 240).
+A ready, paused element takes 56–78 ms to show a moving frame once told to play. A run-up (starting the waiting element
+a quarter of a second early) made it worse, because two 1080p60 HEVC elements decoding at once slow each other down.
+Four to five frames per Join was the floor with `<video>`.
 
-So with two `<video>` elements, a hitch of about four to five frames at every Join is the floor measured on this machine.
+**Measuring gotcha, still true:** a test window covered by other windows is reported hidden by Windows' occlusion
+tracking and gets no animation frames, which looks exactly like a slowdown ending in a freeze. Start Electron with
+`--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding`
+and check `document.visibilityState`.
 
-## Below the floor: WebCodecs, measured in a prototype
+## Below the floor: the WebCodecs prototype
 
-Asked whether to live with it or try another way, the owner chose to try ("Ganz ehrlich B. Gleich ausprobieren"). A
-throwaway prototype (branch `prototype/webcodecs-picture`, not on main) decodes the kept pieces of 8 s of what is played
-with a hardware `VideoDecoder`, in order, at most half a second of frames ahead of the clock, and draws the frame that is
-due on a canvas every animation frame. What it needs from the file: the HEVC configuration from the `hvcC` box
-(`hvc1.1.6.L123.90` on the 25-minute capture) and the packets of the stretch from ffprobe (JSON; 0.16 s for 18 s of video).
-
-Same three stretches of the owner's cut, 7–8 Joins in 8 s, pieces down to 0.07 s:
+Asked whether to live with it, the owner chose to try another way ("Ganz ehrlich B. Gleich ausprobieren"). A throwaway
+prototype (branch `prototype/webcodecs-picture`) decoded the kept pieces of 8 s of what is played with a hardware
+`VideoDecoder`, at most half a second ahead, and drew the frame due on a canvas. At the three densest stretches of the
+owner's cut (7–8 Joins in 8 s, pieces down to 0.07 s):
 
 | how the frames are kept | frames shown per second | gaps over 50 ms | first frame of a piece, latest | queued |
 |---|---|---|---|---|
-| two `<video>` elements (as built) | 52–56 | at every Join, 56–78 ms | — | — |
 | decoder's own frames held | 58–59 | 1–4, up to 122 ms | 108 ms | 12–17 frames |
-| copies at full size (`createImageBitmap`) | 59–60 | one of 145 ms at a first Join, else none | 134 ms once, else 10–12 ms | 44 frames, ~365 MB |
+| copies at full size (`createImageBitmap`) | 59–60 | one of 145 ms at a first Join | 134 ms once, else 10–12 ms | 44 frames, ~365 MB |
 | copies at 960×540 | **60** | **none** | **23 ms** | 44 frames, ~91 MB |
 
-- The hardware decoder turns out 1051–1058 frames a second — seventeen times what is played — so reaching a piece from
-  its keyframe (up to four seconds of frames decoded and thrown away) fits easily between Joins.
-- Holding the decoder's own frames stutters: it has only a dozen or so surfaces, and holding them stalls its output.
-  Copies at the size the window draws cost a quarter of the memory and were the smoothest.
-- The window process stayed near 200 MB. Graphics memory was not measured.
+The hardware decoder turns out 1051–1058 frames a second, so reaching a piece from its keyframe (up to four seconds of
+frames decoded and thrown away) fits easily between Joins. Holding the decoder's own frames stalls it: it has a dozen
+or so surfaces.
 
-Not measured yet: following the Web Audio clock instead of the prototype's own, the 23 GB Recording on the external drive,
-three-minute Excerpts, the still frame on a click, graphics memory. Building it would replace the two `<video>`
-elements and the address they read through.
+## The build on main: WebCodecs
+
+The owner approved the seams and four defaults ("Passt"): a) H.264 and HEVC, anything else the red note; b) frames
+copied at 960 px wide, about half a second ahead; c) looks and behaviour unchanged; d) the Recording's index read when
+the picture first needs it, not on opening.
+
+### The Recording's own index
+
+`videoIndexOf(path)` in `src/video/videoIndex.ts` reads the video track's sample tables straight out of the MP4's
+`moov` (stts, ctts, stsz, stsc, stco or co64, stss, the edit list, and the avcC or hvcC record for the decoder, whose
+codec it names the RFC 6381 way). ffprobe, as the prototype used it, took 0.16 s for 18 s of video; the whole index
+takes 35 ms for the owner's 25-minute capture and 147 ms for the long Recording from the external drive (a 15.7 MB `moov`, 546,692
+frames). `readFrameBytes` reads a batch of frames in one go and copies each out, since IPC would carry a view's whole
+buffer with every frame.
+
+Times follow libavformat, so they can be compared with ffprobe tick for tick. Two rules only real files showed:
+
+- **OBS writes signed composition offsets** (ctts version 1, down to −1 frame) with the edit list starting at zero.
+  libavformat then moves every decode time back by the most negative offset. Before this rule every dts on the 25-minute capture and
+  the long Recording lay one frame off ffprobe's, while pts, positions and sizes already matched.
+- **the long Recording keeps its chunk offsets in co64**, as any Recording past 4 GB must; the 25-minute capture (3.9 GB) still uses stco.
+
+A fragmented MP4 (empty sample tables, frames in `moof` boxes) is refused rather than read as a picture without frames.
+Checked on the real files against ffprobe over 10 s stretches: 0 differences on the 25-minute capture and on the long Recording, the frame counts equal
+ffprobe's `nb_frames`, and both name their codec `hvc1.1.6.L123.90`.
+
+### What to decode for each piece
+
+`picturePlanOf(index, pieces)` in `src/video/picturePlan.ts` gives, for every kept piece, the frames to feed in decode
+order and the frames to show with the moment of what is played each goes on screen:
+
+- **The first frame shown is the one on screen at the piece's first moment**, the latest shown at or before it, shown
+  from the piece's start — as Premiere would show it. The prototype dropped every frame before the start instead.
+- Decoding starts at the latest keyframe shown at or before that moment and ends with the last shown frame to be
+  decoded. Every piece starts again at a keyframe, and the decoder is flushed between pieces.
+- HEVC allows **open groups**: frames decoded after a keyframe but shown before it. So the search runs to the *second*
+  keyframe shown after the piece; stopping at the first puts the wrong frame on screen (a test holds it).
+- Reading every frame of the long Recording for each of 80 pieces took 912 ms. Keyframes are found by halving instead: 31 ms, and the
+  same plan for 80 dense pieces, 300 scattered pieces and 300 still frames on the long Recording.
+
+`stillFrameOf(index, seconds)` is a piece that ends where it starts: the frame on screen and what to decode for it.
+
+### In the window
+
+The main process keeps the index per Tab, read the first time the picture needs it; a read that failed is not kept, so
+a sleeping drive is tried again. The window asks `picture:plan`, `picture:still` and `picture:frames`, each naming its
+Tab, so only a Tab's own Recording is read; frames come 30 to a request, and a request spanning more than 64 MB is
+refused as a fault. `src/renderer/picturePlayer.ts` holds the decoding: `PictureRun` feeds the pieces in order, never
+more than 0.5 s of decoded frames ahead of the sound, copies each frame at 960 px wide and draws the one due on every
+animation frame; `drawStill` decodes one frame. The decoder is asked for in the graphics chip first and taken in
+software only if that is refused; a codec the window cannot decode, or an index the main process refuses, ends in the
+red note under the frame.
+
+**The clock is the sound, read smoothly.** `AudioContext.currentTime` moves in steps of the audio device's buffer. With
+it the picture showed 57–59 frames a second — without skipping as well — because now and then two frames fell due in
+one animation frame. `getOutputTimestamp()` says when a moment of the context was heard, and the time since then is
+added: 60 frames a second, and the picture follows what is heard rather than what is sent to the device. The Playhead
+still reads `currentTime` (ADR-0022).
+
+### Measured in the built app
+
+Over the Chrome DevTools protocol, window visible, the owner's Gaming cut on SourceTrack 5, eight seconds each, every
+frame drawn on the picture's canvas counted from half a second after the first one:
+
+| where | frames shown per second | gaps over 50 ms | picture after the sound at the start |
+|---|---|---|---|
+| the 25-minute capture 289.1 s, skipping | 60 | 0 | 120 ms |
+| the 25-minute capture 585.9 s, skipping | 60 | 0 | 160 ms |
+| the 25-minute capture 1016.4 s, skipping | 60 | 0 | 215 ms |
+| the 25-minute capture 289.1 s, not skipping | 60 | 0 | 135 ms |
+| the long Recording from G:, 1300 s, skipping | 60 | 0 | 129 ms |
+| the long Recording from G:, 4556 s, skipping | 60 | 0 | 168 ms |
+
+- **The start is where it still lags.** The sound needs 0.35–0.9 s to be read (ADR-0022); the plan follows within
+  about 50 ms, and the first moving frame 120–215 ms after the sound begins. The still frame, which is the right
+  picture, stands meanwhile. One run in six had two gaps of 56 and 62 ms within its first second. Planning while the
+  Excerpt is still being read would give the decoder a head start; it is not built and not measured.
+- Memory while playing, the 25-minute capture and the long Recording open side by side: window process at most 248 MB, GPU process at most 207 MB, main
+  process at most 261 MB. The graphics card's own memory was not measured.
+
+### What went away
+
+Both `<video>` elements, the `smarttrim-video` address with `serveRecording` and `address.ts` and their registration in
+the main process, the window's `media-src` in its Content-Security-Policy, and `pictureFor` with its seek slack and its
+tests.
 
 ## Tested, and not
 
-- `src/video/serveRecording.test.ts`, a real file of 1000 bytes that each carry their own place: a named piece, a piece
-  to the end and the whole file come back byte for byte; a piece past the end is 416; a closed Tab, an address holding
-  a path and a Tab number that is no number are 404.
-- `src/video/picture.test.ts`, on a Playback built by `playbackOf` with three kept stretches: within a tenth of a second
-  the picture runs on, beyond it jumps; just past a Join it jumps to where the sound went on and has the Join after that
-  ready; past the last Join nothing is made ready; a picture still seeking is not told to seek again however far behind
-  it looks (written red before the fix). The Join test passed at once, so it was checked against a broken `pictureFor`
-  (the next Join taken too early) and failed there.
-- The elements, the swapping, the still frame and the fold are drawing, untested like the rest of the window
-  (ADR-0012). Checked over the Chrome DevTools protocol on the built app with the owner's 25-minute capture: the picture
-  loaded at 1920×1080 and drew 408 px high in an 820 px window; a click at 40 % of the waveform put the still frame at
-  605.6 s; while playing with skipping, the elements swapped at the Joins, the one behind waiting at 609.80 s and
-  614.82 s and running on at the speed of the clock (2.88 s of picture in 2.92 s); stopping paused both; folding hid the
-  frame and was remembered; closing every Tab emptied both elements. How late the picture looks against the sound, and
-  the long Recording read from the external drive through the address, need the owner's eyes.
+- `src/video/videoIndex.test.ts` generates Recordings with the vendor ffmpeg and compares with ffprobe, the independent
+  reader: every frame of H.264 (libopenh264) and of HEVC with B-frames and an edit list (kvazaar); negative composition
+  offsets (`-movflags negative_cts_offsets`); co64, made by rewriting a generated file's stco, since ffmpeg has no switch
+  for it; the avcC and hvcC records against ffprobe's extradata, with codec strings worked out by hand; a fragmented MP4
+  refused; the bytes of a stretch against ffprobe's packet dump. `codecOf` is tested on the hvcC record of the owner's
+  capture, `fixtures/video/obs-hevc-1080p60.hvcC`.
+- `src/video/picturePlan.test.ts` uses synthetic indexes in B-frame order: the frame on screen at a piece's start and
+  the frames it needs, the still frame of a B-frame decoded after a later P-frame, and an open group. The first test and
+  the open-group test were each checked against a broken plan and failed there.
+- The window, the decoding and the main process's handlers are glue, untested like the rest of the window (ADR-0012);
+  the table above is how they were checked. How the picture looks against the sound, the start in particular, needs the
+  owner's eyes.

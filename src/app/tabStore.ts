@@ -9,8 +9,11 @@ import { basename, dirname, extname, join } from "node:path";
 import { decodeSourceTracks } from "../decode/decodeSourceTracks.ts";
 import { saveTrimProject, trimProjectOf, type SavedChoices } from "../project/openTrimProject.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import type { PlayedPiece } from "../playback/playback.ts";
 import { readExcerpt, type Excerpt } from "../playback/readExcerpt.ts";
 import { scanSourceTracks, type SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import { picturePlanOf, stillFrameOf, type PicturePlan, type StillPicture } from "../video/picturePlan.ts";
+import { readFrameBytes, videoIndexOf, type IndexedFrame, type VideoIndex } from "../video/videoIndex.ts";
 import { recordingPathOf, sameRecording, type OpenedFile } from "./openFile.ts";
 import {
   redecideCut,
@@ -33,6 +36,12 @@ export interface OpenedTab {
 /** Called as each SourceTrack of a read finishes. */
 export type OnRead = (done: number, total: number) => void;
 
+/**
+ * The most the window may have read from a Recording in one go for the picture. A batch of half a second of the
+ * owner's HEVC, with the audio lying between its frames, is a few megabytes; a request spanning more is a fault.
+ */
+const LONGEST_FRAME_READ_BYTES = 64 * 1024 * 1024;
+
 /** Everything the main process keeps for one Tab (CONTEXT.md). Nothing in here is shared with another Tab. */
 interface Tab {
   recording: RecordingInfo;
@@ -51,6 +60,8 @@ interface Tab {
   reopenedSourceTracks: readonly number[];
   /** Where this Tab's project lives: the file it was opened from, or the one it was last saved to. */
   projectPath: string | null;
+  /** Where every frame of the Recording's video lies, read when the picture first needs it (ADR-0027). */
+  videoIndex: Promise<VideoIndex> | null;
 }
 
 /**
@@ -103,6 +114,15 @@ export interface TabStore {
   readSourceTracks(tabId: number, positions: readonly number[], onRead?: OnRead): Promise<SourceTrackWaveform[]>;
   /** Reads one SourceTrack of the Tab's Recording over a stretch, for the window to play; nothing of it is kept (ADR-0022). */
   readExcerpt(tabId: number, request: { position: number; fromSeconds: number; toSeconds: number }): Promise<Excerpt>;
+  /**
+   * How the window decodes the picture of what is played: the decoder's configuration and, for each kept piece, the
+   * frames to feed and the ones to show (ADR-0027). The Recording's video index is read the first time and kept.
+   */
+  picturePlan(tabId: number, pieces: readonly PlayedPiece[]): Promise<PicturePlan>;
+  /** How the window decodes the still frame at a moment of the Tab's Recording. */
+  stillPicture(tabId: number, seconds: number): Promise<StillPicture>;
+  /** The bytes of frames of the Tab's Recording that a plan names, a batch at a time. */
+  readFrames(tabId: number, frames: readonly IndexedFrame[]): Promise<Uint8Array[]>;
   /** Analyses the Tab's Recording and plans the cuts. The plan stays here until it is saved. */
   cut(tabId: number, request: AnalysisRequest): Promise<CutSummary>;
   /** The waveform of every SourceTrack the Tab's last analysis read. */
@@ -150,6 +170,21 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
     return lastCut;
   }
 
+  /**
+   * The Tab's video index, read once however many requests ask for it at the same time. A read that failed is not
+   * kept, so a drive that was asleep is tried again next time.
+   */
+  function videoIndexFor(tab: Tab): Promise<VideoIndex> {
+    if (!tab.videoIndex) {
+      const reading = videoIndexOf(tab.recording.path);
+      tab.videoIndex = reading;
+      reading.catch(() => {
+        if (tab.videoIndex === reading) tab.videoIndex = null;
+      });
+    }
+    return tab.videoIndex;
+  }
+
   return {
     open(file) {
       const path = recordingPathOf(file);
@@ -165,6 +200,7 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
           reopenedVoice: [],
           reopenedSourceTracks: [],
           projectPath: null,
+          videoIndex: null,
         });
       } else {
         const voice = file.project.listenTo;
@@ -175,6 +211,7 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
           reopenedVoice: voice,
           reopenedSourceTracks: [...new Set([...voice, ...(file.project.contentSourceTracks ?? [])])],
           projectPath: file.path ?? null,
+          videoIndex: null,
         });
       }
       return { tabId: lastId, alreadyOpen: false };
@@ -226,6 +263,33 @@ export function newTabStore(tools: () => Promise<AnalysisTools>): TabStore {
       const excerpt = await readExcerpt(tab.recording, position, fromSeconds, toSeconds, (await tools()).ffmpeg);
       stillOpen(tabId, tab);
       return excerpt;
+    },
+
+    async picturePlan(tabId, pieces) {
+      const tab = tabOf(tabId);
+      const index = await videoIndexFor(tab);
+      stillOpen(tabId, tab);
+      return { decoder: index.decoder, pieces: picturePlanOf(index, pieces) };
+    },
+
+    async stillPicture(tabId, seconds) {
+      const tab = tabOf(tabId);
+      const index = await videoIndexFor(tab);
+      stillOpen(tabId, tab);
+      return { decoder: index.decoder, ...stillFrameOf(index, seconds) };
+    },
+
+    async readFrames(tabId, frames) {
+      const tab = tabOf(tabId);
+      if (frames.length === 0) return [];
+      const from = frames.reduce((first, frame) => Math.min(first, frame.position), Number.POSITIVE_INFINITY);
+      const to = frames.reduce((last, frame) => Math.max(last, frame.position + frame.size), 0);
+      if (to - from > LONGEST_FRAME_READ_BYTES) {
+        throw new Error(`Refused to read ${to - from} bytes of ${tab.recording.path} at once for the picture.`);
+      }
+      const bytes = await readFrameBytes(tab.recording.path, frames);
+      stillOpen(tabId, tab);
+      return bytes;
     },
 
     async cut(tabId, request) {

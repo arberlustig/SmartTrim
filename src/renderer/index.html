@@ -2,7 +2,7 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src smarttrim-video:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
     <title>SmartTrim</title>
     <style>
       :root {
@@ -183,16 +183,11 @@
       .pictureFrame[hidden] {
         display: none;
       }
-      .pictureFrame video {
+      .pictureFrame canvas {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
-        object-fit: contain;
-        visibility: hidden;
-      }
-      .pictureFrame video.front {
-        visibility: visible;
       }
       .pictureNote {
         margin: 6px 0 0;
@@ -678,9 +673,8 @@
       <h2>Tonspuren</h2>
       <div class="picture" id="picture" hidden>
         <div class="pictureFrame" id="pictureFrame">
-          <!-- Two elements take turns at every Join: the one behind already waits where the sound goes on (ADR-0027). -->
-          <video id="pictureA" class="front" muted preload="auto"></video>
-          <video id="pictureB" muted preload="auto"></video>
+          <!-- Frames decoded with WebCodecs a little ahead of the sound are drawn here (ADR-0027). -->
+          <canvas id="pictureCanvas"></canvas>
         </div>
         <p class="pictureNote" id="pictureNote" hidden></p>
         <button class="link" id="pictureToggle" type="button">Bild ausblenden</button>

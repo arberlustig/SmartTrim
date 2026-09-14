@@ -2,11 +2,14 @@ import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { Preset } from "../app/cutSession.ts";
 import type { Refusal } from "../app/openFile.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import type { PlayedPiece } from "../playback/playback.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { CutSummary, PlanSettings, SourceTrackWaveform } from "../app/runCut.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import type { PicturePlan, StillPicture } from "../video/picturePlan.ts";
+import type { IndexedFrame } from "../video/videoIndex.ts";
 
 /**
  * Every answer the window gets from the main process, so a refusal reaches the user as a sentence instead of as an
@@ -86,6 +89,15 @@ export interface SmartTrimApi {
    * sample rate, for the window to play. Nothing of it is kept (ADR-0022).
    */
   readExcerpt(request: ExcerptRequest): Promise<Answer<Excerpt>>;
+  /**
+   * How to decode the picture of what is played from a Tab's Recording: the decoder's configuration and, for each kept
+   * piece, the frames to feed and the ones to show (ADR-0027).
+   */
+  picturePlan(tabId: number, pieces: readonly PlayedPiece[]): Promise<Answer<PicturePlan>>;
+  /** How to decode the still frame at a moment of a Tab's Recording. */
+  stillPicture(tabId: number, seconds: number): Promise<Answer<StillPicture>>;
+  /** The bytes of frames a plan names, read from a Tab's Recording, a batch at a time. */
+  readFrames(tabId: number, frames: readonly IndexedFrame[]): Promise<Answer<Uint8Array[]>>;
   /** Called as each SourceTrack finishes being read, so the window can say how far it has got. */
   onReadProgress(listen: (progress: ReadProgress) => void): void;
   /** Analyses a Tab's Recording and plans the cuts. The plan stays in the main process until it is saved. */

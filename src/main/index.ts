@@ -1,8 +1,6 @@
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, app, dialog, ipcMain, protocol, shell } from "electron";
-import { VIDEO_SCHEME } from "../video/address.ts";
-import { serveRecording } from "../video/serveRecording.ts";
+import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
 import type { AnalysisRequest, AnalysisTools } from "../analysis/analyseRecording.ts";
 import { saveCutPlan, type CutSummary, type PlanSettings, type SourceTrackWaveform } from "../app/runCut.ts";
 import type { Preset } from "../app/cutSession.ts";
@@ -11,10 +9,13 @@ import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import { newTabStore, type OnRead } from "../app/tabStore.ts";
 import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab } from "../preload/api.ts";
+import type { PlayedPiece } from "../playback/playback.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import type { PicturePlan, StillPicture } from "../video/picturePlan.ts";
+import type { IndexedFrame } from "../video/videoIndex.ts";
 
 /**
  * Where ffmpeg, ffprobe and the Silero model live: next to the installed app they belong to the user, so they go in
@@ -70,11 +71,6 @@ function registerHandlers(window: BrowserWindow): void {
    * Recording read can end up in another's cut (ADR-0025).
    */
   const tabs = newTabStore(() => analysisTools(window));
-
-  // The picture above the SourceTracks reads a Tab's Recording through SmartTrim's own address, answered piece by piece
-  // from the file. Only a Tab's own Recording is served (ADR-0027).
-  if (protocol.isProtocolHandled(VIDEO_SCHEME)) protocol.unhandle(VIDEO_SCHEME);
-  protocol.handle(VIDEO_SCHEME, (request) => serveRecording(request, (tabId) => tabs.recordingOf(tabId).path));
 
   /** Tells the window how far reading one Tab's SourceTracks has got. */
   const progressOf =
@@ -174,6 +170,29 @@ function registerHandlers(window: BrowserWindow): void {
   ipcMain.handle(
     "sourceTrack:excerpt",
     answering(({ tabId, ...stretch }: ExcerptRequest): Promise<Excerpt> => tabs.readExcerpt(tabId, stretch)),
+  );
+
+  // The picture above the SourceTracks is decoded in the window with WebCodecs. This process looks its frames up in the
+  // Recording's own index and reads them for it, half a second at a time; only a Tab's own Recording is read (ADR-0027).
+  ipcMain.handle(
+    "picture:plan",
+    answering(
+      ({ tabId, pieces }: { tabId: number; pieces: readonly PlayedPiece[] }): Promise<PicturePlan> =>
+        tabs.picturePlan(tabId, pieces),
+    ),
+  );
+
+  ipcMain.handle(
+    "picture:still",
+    answering(({ tabId, seconds }: { tabId: number; seconds: number }): Promise<StillPicture> => tabs.stillPicture(tabId, seconds)),
+  );
+
+  ipcMain.handle(
+    "picture:frames",
+    answering(
+      ({ tabId, frames }: { tabId: number; frames: readonly IndexedFrame[] }): Promise<Uint8Array[]> =>
+        tabs.readFrames(tabId, frames),
+    ),
   );
 
   ipcMain.handle(
@@ -320,12 +339,6 @@ function createWindow(): void {
     void window.loadFile(fileURLToPath(new URL("../renderer/index.html", import.meta.url)));
   }
 }
-
-// In development the window comes from http://localhost, where file:// is out of reach, so the <video> reads through
-// this address instead. A <video> can only seek on a scheme that streams; Electron wants it named before it is ready.
-protocol.registerSchemesAsPrivileged([
-  { scheme: VIDEO_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
-]);
 
 void app.whenReady().then(() => {
   createWindow();
