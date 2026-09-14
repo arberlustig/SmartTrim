@@ -13,14 +13,15 @@ const vendor = (name: string) => fileURLToPath(new URL(`../../vendor/${name}`, i
 
 /** The frequency of one Channel between two moments of an Excerpt, counted from zero crossings; 0 for silence. */
 function hertzOf(excerpt: Excerpt, channel: number, fromSeconds: number, toSeconds: number): number {
-  const { samples, sampleRate, channelCount } = excerpt;
+  const { channels, sampleRate } = excerpt;
+  const samples = channels[channel] ?? new Float32Array(0);
   const first = Math.round(fromSeconds * sampleRate);
   const last = Math.round(toSeconds * sampleRate);
   let crossings = 0;
   let loudest = 0;
   for (let frame = first; frame < last; frame++) {
-    const sample = samples[frame * channelCount + channel] ?? 0;
-    const before = samples[(frame - 1) * channelCount + channel] ?? 0;
+    const sample = samples[frame] ?? 0;
+    const before = samples[frame - 1] ?? 0;
     loudest = Math.max(loudest, Math.abs(sample));
     if (frame > first && sample < 0 !== before < 0) crossings++;
   }
@@ -32,6 +33,9 @@ function pitchOf(excerpt: Excerpt, channel: number, fromSeconds: number, toSecon
   const hertz = hertzOf(excerpt, channel, fromSeconds, toSeconds);
   return hertz === 0 ? "silence" : `${Math.round(hertz / 10) * 10} Hz`;
 }
+
+/** How long an Excerpt lasts, from its first Channel. */
+const secondsOf = (excerpt: Excerpt) => (excerpt.channels[0]?.length ?? 0) / excerpt.sampleRate;
 
 describe("readExcerpt", () => {
   let workDir: string;
@@ -59,17 +63,31 @@ describe("readExcerpt", () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  test("the chosen SourceTrack comes back with both Channels apart, at its own sample rate, as long as asked", async () => {
+  // The Channels come apart and from -1 to 1, the way Web Audio takes them. Made so in the main process, the window
+  // copies each Channel in whole when ▶ is pressed instead of converting three minutes of samples on its own thread,
+  // which stood it still for up to half a second (ADR-0028).
+  test("the chosen SourceTrack comes back one Channel at a time, from -1 to 1, at its own sample rate, as long as asked", async () => {
     const excerpt = await readExcerpt(recording, 0, 1, 3, vendor("ffmpeg.exe"));
 
     expect({
       fromSeconds: excerpt.fromSeconds,
       sampleRate: excerpt.sampleRate,
       channelCount: excerpt.channelCount,
-      seconds: excerpt.samples.length / excerpt.channelCount / excerpt.sampleRate,
+      channels: excerpt.channels.length,
+      fromMinusOneToOne: excerpt.channels.every((channel) => channel.every((sample) => sample >= -1 && sample <= 1)),
+      seconds: secondsOf(excerpt),
       left: pitchOf(excerpt, 0, 0.2, 1.8),
       right: pitchOf(excerpt, 1, 0.2, 1.8),
-    }).toEqual({ fromSeconds: 1, sampleRate: 48000, channelCount: 2, seconds: 2, left: "440 Hz", right: "1000 Hz" });
+    }).toEqual({
+      fromSeconds: 1,
+      sampleRate: 48000,
+      channelCount: 2,
+      channels: 2,
+      fromMinusOneToOne: true,
+      seconds: 2,
+      left: "440 Hz",
+      right: "1000 Hz",
+    });
   });
 
   // Playback exists to judge the Joins, so an Excerpt that starts even a few frames late would put every Join in
@@ -79,7 +97,7 @@ describe("readExcerpt", () => {
 
     expect({
       sampleRate: excerpt.sampleRate,
-      seconds: excerpt.samples.length / excerpt.channelCount / excerpt.sampleRate,
+      seconds: secondsOf(excerpt),
       before: pitchOf(excerpt, 0, 0.05, 0.45),
       after: pitchOf(excerpt, 0, 0.55, 0.95),
     }).toEqual({ sampleRate: 44100, seconds: 1, before: "600 Hz", after: "1500 Hz" });

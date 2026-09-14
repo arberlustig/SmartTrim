@@ -25,6 +25,9 @@ still installed. Scripted runs alone twice missed what the owner saw (ADR-0027).
 - `report.js`, run with `cdp.mjs evalfile`: per sound played, press to audible sound, how late the first new frame came,
   frames drawn a second, gaps over 34 ms; still frames after a click; the picture's memory and ffmpeg runs. Set
   `globalThis.__compact = true` first for one line per play. Run `recorder.js` again to start a fresh recording.
+  A still frame is counted from the moment the button is let go — that is when the window puts the Playhead down — and
+  only for a press that moved less than 4 px and started no sound within two seconds. Counted from the press, drags and
+  jumps landed among the stills and made one look like 1.4 s.
 - `cdp.mjs eval "<expression>"`, `cdp.mjs evalfile <script>`, `cdp.mjs drop <path>`: drive the window by hand.
 
 The densest stretches of the owner's Gaming cut on SourceTrack 5 of the 25-minute capture are 289.1, 585.9 and 1016.4 s.

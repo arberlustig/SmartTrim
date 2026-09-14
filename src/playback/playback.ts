@@ -28,8 +28,8 @@ export interface Playback {
   sampleRate: number;
   channelCount: number;
   /**
-   * One run of samples from -1 to 1 per Channel, left first — the way Web Audio takes them, so the window copies each
-   * Channel in whole when ▶ is pressed rather than converting them one by one on its own thread (ADR-0028).
+   * One run of samples from -1 to 1 per Channel, left first, as in the Excerpt — the way Web Audio takes them, so the
+   * window hands each Channel over in whole rather than converting samples on its own thread (ADR-0028).
    */
   channels: Float32Array[];
   pieces: PlayedPiece[];
@@ -42,8 +42,8 @@ export interface Playback {
  * have its cut and nowhere else (ADR-0022).
  */
 export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRemoved: boolean): Playback {
-  const { sampleRate, channelCount, samples, fromSeconds } = excerpt;
-  const frames = samples.length / channelCount;
+  const { sampleRate, channelCount, fromSeconds } = excerpt;
+  const frames = excerpt.channels[0]?.length ?? 0;
   const firstFrame = fromSeconds * sampleRate;
   // Edges become whole frames of the Excerpt, and seconds are computed back from those frames, so the numbers the
   // window shows describe exactly the samples it plays.
@@ -83,12 +83,10 @@ export function playbackOf(excerpt: Excerpt, kept: readonly TimeRange[], skipRem
       recordingToSeconds: secondsAt(end),
       playedFromSeconds: playedFrames / sampleRate,
     });
+    // Copied Channel by Channel in whole runs: the Excerpt already holds them the way Web Audio takes them.
     for (let channel = 0; channel < channelCount; channel += 1) {
-      const out = channels[channel] as Float32Array;
-      let from = start * channelCount + channel;
-      for (let to = playedFrames; to < playedFrames + end - start; to += 1, from += channelCount) {
-        out[to] = (samples[from] as number) / 32768;
-      }
+      const from = excerpt.channels[channel];
+      if (from) (channels[channel] as Float32Array).set(from.subarray(start, end), playedFrames);
     }
     playedFrames += end - start;
   });

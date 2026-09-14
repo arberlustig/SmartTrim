@@ -2,9 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { constants, setPriority } from "node:os";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import { LONGEST_EXCERPT_SECONDS } from "../playback/playback.ts";
-
-/** How high every frame is made, in pixels: the picture is drawn at most 450 px high (ADR-0027). */
-export const PICTURE_HEIGHT = 450;
+import { PICTURE_HEIGHT, frameAtSeconds, lastPictureFrameOf, pictureRateOf, pictureSizeOf } from "./framesDue.ts";
 
 /**
  * How much memory the frames may take. The owner allowed the picture 2 GB; three minutes of their Recordings are
@@ -24,6 +22,12 @@ const FFMPEG_THREADS = 4;
 /** How many runs `runs()` remembers. */
 const RUNS_KEPT = 200;
 
+/** Refusals of the graphics card in a row after which it is not asked again for this Recording. */
+const HARDWARE_REFUSALS_BELIEVED = 3;
+
+/** Runs in a row that bring no frame before a wish is given up and reported. */
+const EMPTY_RUNS_BELIEVED = 3;
+
 /** A decoder on the graphics card and the filter that scales on it before the frames come down. */
 export interface HardwareDecoder {
   hwaccel: string;
@@ -36,6 +40,7 @@ export const CUDA: HardwareDecoder = {
   scale: (width, height) => `scale_cuda=${width}:${height},hwdownload,format=nv12`,
 };
 
+/** How a PictureFrames makes its frames. Left out, each takes the value SmartTrim uses; the tests shrink them. */
 export interface PictureFramesOptions {
   /** How high every frame is made. */
   height?: number;
@@ -49,9 +54,9 @@ export interface PictureFramesOptions {
 
 /** One ffmpeg asked for frames: what it was asked for and how far it got. */
 export interface PictureRun {
-  /** The first frame asked for. */
+  /** The first picture frame asked for. */
   fromFrame: number;
-  /** The frame after the last one asked for. */
+  /** The picture frame after the last one asked for. */
   toFrame: number;
   made: number;
   running: boolean;
@@ -64,9 +69,9 @@ export interface PictureRun {
 }
 
 /**
- * The picture of one Recording as small JPEG frames, made ahead by ffmpeg and held in memory by frame number, so the
- * window can draw the frame due at any moment of what is played without seeking (ADR-0028). Frame k is the frame on
- * screen at k / fps of the Recording.
+ * The picture of one Recording as small JPEG frames, made ahead by ffmpeg and held in memory by number, so the window
+ * can draw the frame due at any moment of what is played without seeking (ADR-0028). Frame numbers count the picture's
+ * own frames, which are the Recording's up to 60 frames a second (`pictureRateOf`).
  */
 export interface PictureFrames {
   /**
@@ -75,8 +80,16 @@ export interface PictureFrames {
    * Recording than the one held lets go of everything held.
    */
   want(recording: RecordingInfo, fromSeconds: number): void;
-  /** The JPEGs of these frames of `recording`, null for each one not made yet. */
+  /**
+   * The JPEGs of these frames of `recording`, null for each one not made yet. Frames past the last one the Recording
+   * really holds — its own count can promise more (ADR-0009) — answer with that last frame.
+   */
   frames(recording: RecordingInfo, indices: readonly number[]): (Uint8Array | null)[];
+  /**
+   * Why no frame of `recording` can be made, in ffmpeg's own words, once asking has been given up; null while there is
+   * nothing to report. The next wish tries again.
+   */
+  failure(recording: RecordingInfo): string | null;
   /** How many bytes of frames are held. */
   heldBytes(): number;
   /** The latest runs of ffmpeg, oldest first — what the measuring scripts read. */
@@ -85,20 +98,32 @@ export interface PictureFrames {
   stop(): void;
 }
 
-interface Run {
+/** A run and the ffmpeg process doing it. */
+interface RunningFfmpeg {
   child: ChildProcess;
-  record: PictureRun;
+  run: PictureRun;
 }
 
-interface Held {
+/** The frames held of one Recording, and what is being done about the ones still missing. */
+interface RecordingFrames {
   recording: RecordingInfo;
-  frames: Map<number, Buffer>;
+  jpegs: Map<number, Buffer>;
   bytes: number;
-  wanted: { from: number; end: number } | null;
-  run: Run | null;
-  onProcessor: boolean;
-  /** Runs in a row that brought nothing, so a stretch ffmpeg cannot give is not asked for without end. */
+  /** The stretch wished for last, in picture frames, the end not included. */
+  wanted: { fromFrame: number; toFrame: number } | null;
+  running: RunningFfmpeg | null;
+  /** The frame after the last one the Recording turned out to hold, once a run ran out of picture. */
+  beyond: number | null;
+  /** Nothing outside the stretch wished for is left to let go, so the limit is not looked at again until the next wish. */
+  nothingToLetGo: boolean;
+  /** How often in a row the graphics card refused. */
+  hardwareRefusals: number;
+  /** The graphics card just refused a stretch, so its next run goes to the processor. */
+  retryOnProcessor: boolean;
+  /** How many runs in a row brought no frame. */
   emptyRuns: number;
+  /** What ffmpeg last said, once asking was given up. */
+  failure: string | null;
 }
 
 /** Where the JPEG starting at `start` ends, or -1 while it has not arrived whole. */
@@ -129,71 +154,99 @@ function jpegEnd(buffer: Buffer, start: number): number {
   return -1;
 }
 
+/** What ffmpeg said, for the window to show: its last line, or the exit code when it said nothing at all. */
+function reasonOf(errors: string, code: number | null): string {
+  const said = errors
+    .trim()
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .at(-1);
+  return said?.trim() ?? `ffmpeg ended with code ${code} and made no frames.`;
+}
+
+/**
+ * Makes the picture's frames ahead with the ffmpeg at `ffmpegPath` and holds them in memory, for one Recording at a
+ * time (ADR-0028).
+ */
 export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptions = {}): PictureFrames {
   const height = options.height ?? PICTURE_HEIGHT;
   const wantSeconds = options.wantSeconds ?? LONGEST_EXCERPT_SECONDS;
   const budgetBytes = options.budgetBytes ?? PICTURE_BUDGET_BYTES;
   const hardware = options.hardware === undefined ? CUDA : options.hardware;
   const runs: PictureRun[] = [];
-  let held: Held | null = null;
+  let held: RecordingFrames | null = null;
 
-  function stopRun(holding: Held): void {
-    if (!holding.run) return;
-    holding.run.record.stopped = true;
-    holding.run.child.kill();
-    holding.run = null;
+  function stopRun(stock: RecordingFrames): void {
+    if (!stock.running) return;
+    stock.running.run.stopped = true;
+    stock.running.child.kill();
+    stock.running = null;
+  }
+
+  function stopAll(): void {
+    if (held) stopRun(held);
+    held = null;
   }
 
   /**
    * Lets go of frames outside the stretch wished for, farthest from it first, until a tenth of the limit is free again
    * — so the sorting happens once in a while rather than for every frame that arrives.
    */
-  function makeRoom(holding: Held): void {
-    const { wanted } = holding;
+  function makeRoom(stock: RecordingFrames): void {
+    const { wanted } = stock;
     if (!wanted) return;
-    const distanceOf = (index: number) => (index < wanted.from ? wanted.from - index : index - wanted.end + 1);
-    const outside = [...holding.frames.keys()].filter((index) => index < wanted.from || index >= wanted.end);
+    const distanceOf = (index: number) => (index < wanted.fromFrame ? wanted.fromFrame - index : index - wanted.toFrame + 1);
+    const outside = [...stock.jpegs.keys()].filter((index) => index < wanted.fromFrame || index >= wanted.toFrame);
+    // The stretch wished for is never given up. Once it fills the memory on its own there is nothing to sort again.
+    if (outside.length === 0) {
+      stock.nothingToLetGo = true;
+      return;
+    }
     outside.sort((a, b) => distanceOf(b) - distanceOf(a));
     for (const index of outside) {
-      if (holding.bytes <= budgetBytes * 0.9) break;
-      holding.bytes -= (holding.frames.get(index) as Buffer).length;
-      holding.frames.delete(index);
+      if (stock.bytes <= budgetBytes * 0.9) break;
+      stock.bytes -= (stock.jpegs.get(index) as Buffer).length;
+      stock.jpegs.delete(index);
     }
   }
 
-  function keep(holding: Held, index: number, jpeg: Buffer): void {
-    holding.bytes += jpeg.length - (holding.frames.get(index)?.length ?? 0);
-    holding.frames.set(index, jpeg);
-    if (holding.bytes > budgetBytes) makeRoom(holding);
+  function storeFrame(stock: RecordingFrames, index: number, jpeg: Buffer): void {
+    stock.bytes += jpeg.length - (stock.jpegs.get(index)?.length ?? 0);
+    stock.jpegs.set(index, jpeg);
+    if (stock.bytes > budgetBytes && !stock.nothingToLetGo) makeRoom(stock);
   }
 
   /** Puts ffmpeg to work on the first frame still missing from what is wanted, unless a run already heads there. */
-  function ensure(holding: Held): void {
-    if (!holding.wanted) return;
-    const { from, end } = holding.wanted;
-    let missing = from;
-    while (missing < end && holding.frames.has(missing)) missing += 1;
-    if (missing >= end) {
-      stopRun(holding);
+  function workOnWhatIsMissing(stock: RecordingFrames): void {
+    if (!stock.wanted) return;
+    const { fromFrame, toFrame } = stock.wanted;
+    let missing = fromFrame;
+    while (missing < toFrame && stock.jpegs.has(missing)) missing += 1;
+    if (missing >= toFrame) {
+      stopRun(stock);
       return;
     }
-    const perSecond = holding.recording.frameRate.numerator / holding.recording.frameRate.denominator;
-    const running = holding.run?.record;
+    const run = stock.running?.run;
     // A run that is about to reach the first missing frame — within a second — is left to get there.
-    if (running && running.fromFrame <= missing && missing <= running.fromFrame + running.made + perSecond) return;
-    stopRun(holding);
-    let stop = missing;
-    while (stop < end && !holding.frames.has(stop)) stop += 1;
-    start(holding, missing, stop);
+    if (run && run.fromFrame <= missing && missing <= run.fromFrame + run.made + pictureRateOf(stock.recording).perSecond) return;
+    stopRun(stock);
+    let upTo = missing;
+    while (upTo < toFrame && !stock.jpegs.has(upTo)) upTo += 1;
+    startRun(stock, missing, upTo);
   }
 
-  function start(holding: Held, fromFrame: number, toFrame: number): void {
-    const { recording } = holding;
+  function startRun(stock: RecordingFrames, fromFrame: number, toFrame: number): void {
+    const { recording } = stock;
+    const { step } = pictureRateOf(recording);
     const { numerator, denominator } = recording.frameRate;
     // ffmpeg keeps the first frame whose time is not before -ss, so the frame's own time is rounded down to a microsecond.
-    const seconds = Math.floor(((fromFrame * denominator) / numerator) * 1e6) / 1e6;
-    const width = Math.round((height * recording.width) / recording.height / 2) * 2;
-    const decoder = holding.onProcessor ? null : hardware;
+    const seconds = Math.floor(((fromFrame * step * denominator) / numerator) * 1e6) / 1e6;
+    const { width } = pictureSizeOf(recording, height);
+    const decoder = hardware && stock.hardwareRefusals < HARDWARE_REFUSALS_BELIEVED && !stock.retryOnProcessor ? hardware : null;
+    stock.retryOnProcessor = false;
+    // Above 60 frames a second every step-th frame is kept, counted from the first one after -ss.
+    const thinning = step > 1 ? [`select=not(mod(n\\,${step}))`] : [];
+    const filters = decoder ? [decoder.scale(width, height), ...thinning] : [...thinning, `scale=${width}:${height}`];
     const startedAt = performance.now();
     const child = spawn(
       ffmpegPath,
@@ -201,7 +254,7 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
         ...["-hide_banner", "-loglevel", "error", "-nostdin"],
         ...(decoder ? ["-hwaccel", decoder.hwaccel, "-hwaccel_output_format", decoder.hwaccel] : []),
         ...["-ss", seconds.toFixed(6), "-i", recording.path, "-map", "0:v:0", "-frames:v", String(toFrame - fromFrame)],
-        ...["-vf", decoder ? decoder.scale(width, height) : `scale=${width}:${height}`],
+        ...["-vf", filters.join(",")],
         ...["-pix_fmt", "yuvj420p", "-c:v", "mjpeg", "-q:v", String(JPEG_QUALITY), "-threads", String(FFMPEG_THREADS)],
         ...["-f", "image2pipe", "-"],
       ],
@@ -214,7 +267,7 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
         // The frames still come, only with the sound read beside them a little slower.
       }
     }
-    const record: PictureRun = {
+    const run: PictureRun = {
       fromFrame,
       toFrame,
       made: 0,
@@ -224,9 +277,9 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
       firstFrameMs: null,
       ms: null,
     };
-    runs.push(record);
+    runs.push(run);
     if (runs.length > RUNS_KEPT) runs.splice(0, runs.length - RUNS_KEPT);
-    holding.run = { child, record };
+    stock.running = { child, run };
 
     let pending: Buffer = Buffer.alloc(0);
     let errors = "";
@@ -237,9 +290,9 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
       let at = 0;
       for (let end = jpegEnd(pending, at); end >= 0; end = jpegEnd(pending, at)) {
-        if (!record.stopped) keep(holding, fromFrame + record.made, Buffer.from(pending.subarray(at, end)));
-        record.firstFrameMs ??= Math.round(performance.now() - startedAt);
-        record.made += 1;
+        if (!run.stopped) storeFrame(stock, fromFrame + run.made, Buffer.from(pending.subarray(at, end)));
+        run.firstFrameMs ??= Math.round(performance.now() - startedAt);
+        run.made += 1;
         at = end;
       }
       if (at > 0) pending = pending.subarray(at);
@@ -248,40 +301,74 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
       // A missing ffmpeg is reported by "close" with no frames made.
     });
     child.on("close", (code) => {
-      record.running = false;
-      record.ms = Math.round(performance.now() - startedAt);
-      if (holding.run?.record === record) holding.run = null;
-      if (record.stopped || held !== holding) return;
-      if (record.made > 0) {
-        holding.emptyRuns = 0;
+      run.running = false;
+      run.ms = Math.round(performance.now() - startedAt);
+      if (stock.running?.run === run) stock.running = null;
+      if (run.stopped || held !== stock) return;
+      if (run.made > 0) {
+        stock.emptyRuns = 0;
+        if (decoder) stock.hardwareRefusals = 0;
+        // Fewer frames than asked for, and ffmpeg content: the Recording holds no more picture than this, whatever its
+        // own frame count promises (ADR-0009). Nothing past that is asked for again.
+        if (code === 0 && run.made < run.toFrame - run.fromFrame) {
+          stock.beyond = fromFrame + run.made;
+          if (stock.wanted) stock.wanted = { ...stock.wanted, toFrame: Math.min(stock.wanted.toFrame, stock.beyond) };
+        }
       } else {
-        holding.emptyRuns += 1;
-        // Nothing came out. A graphics card that failed gets one more try on the processor; anything else stops asking
-        // after three empty runs in a row.
-        if (!holding.onProcessor && decoder && (code !== 0 || errors)) holding.onProcessor = true;
-        else if (holding.emptyRuns >= 3) {
-          holding.wanted = null;
+        stock.emptyRuns += 1;
+        // The graphics card refused: this stretch goes to the processor, and the card is asked again next time.
+        if (decoder && (code !== 0 || errors)) {
+          stock.hardwareRefusals += 1;
+          stock.retryOnProcessor = true;
+        }
+        if (stock.emptyRuns >= EMPTY_RUNS_BELIEVED) {
+          stock.wanted = null;
+          stock.failure = reasonOf(errors, code);
           return;
         }
       }
-      ensure(holding);
+      workOnWhatIsMissing(stock);
     });
   }
 
   return {
     want(recording, fromSeconds) {
-      if (held && held.recording.path !== recording.path) this.stop();
-      held ??= { recording, frames: new Map(), bytes: 0, wanted: null, run: null, onProcessor: false, emptyRuns: 0 };
-      const perSecond = recording.frameRate.numerator / recording.frameRate.denominator;
-      const from = Math.min(Math.max(Math.floor(fromSeconds * perSecond + 1e-6), 0), recording.durationFrames - 1);
-      held.wanted = { from, end: Math.min(from + Math.round(wantSeconds * perSecond), recording.durationFrames) };
+      if (held && held.recording.path !== recording.path) stopAll();
+      held ??= {
+        recording,
+        jpegs: new Map(),
+        bytes: 0,
+        wanted: null,
+        running: null,
+        beyond: null,
+        nothingToLetGo: false,
+        hardwareRefusals: 0,
+        retryOnProcessor: false,
+        emptyRuns: 0,
+        failure: null,
+      };
+      // Nothing past what the Recording turned out to hold, and nothing past the frame its own count promises.
+      const beyond = Math.min(held.beyond ?? Number.POSITIVE_INFINITY, lastPictureFrameOf(recording) + 1);
+      const fromFrame = Math.min(frameAtSeconds(recording, fromSeconds), beyond - 1);
+      const toFrame = Math.min(fromFrame + Math.round(wantSeconds * pictureRateOf(recording).perSecond), beyond);
+      held.wanted = { fromFrame, toFrame };
       held.emptyRuns = 0;
-      ensure(held);
+      held.nothingToLetGo = false;
+      held.failure = null;
+      workOnWhatIsMissing(held);
     },
 
     frames(recording, indices) {
-      const holding = held && held.recording.path === recording.path ? held : null;
-      return indices.map((index) => holding?.frames.get(index) ?? null);
+      const stock = held && held.recording.path === recording.path ? held : null;
+      return indices.map((index) => {
+        // Past the last frame the Recording holds, its last frame stands in.
+        const wanted = stock?.beyond !== null && stock?.beyond !== undefined && index >= stock.beyond ? stock.beyond - 1 : index;
+        return stock?.jpegs.get(wanted) ?? null;
+      });
+    },
+
+    failure(recording) {
+      return held && held.recording.path === recording.path ? held.failure : null;
     },
 
     heldBytes() {
@@ -292,9 +379,6 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
       return runs;
     },
 
-    stop() {
-      if (held) stopRun(held);
-      held = null;
-    },
+    stop: stopAll,
   };
 }

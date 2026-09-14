@@ -82,9 +82,10 @@ Scripted, at the three densest stretches of the owner's Gaming cut of the 25-min
     wish, so a stretch ffmpeg cannot give is not asked for without end.
   - Beyond `PICTURE_BUDGET_BYTES` (1 GiB) the frames outside the stretch wished for go, farthest from it first, down to
     nine tenths of the limit, so the sorting happens once in a while rather than for every frame.
-- `TabStore` holds one `PictureFrames` for the whole window. A wish for another Tab's Recording lets go of the frames of
-  the one before; closing the Tab the picture was last wished for stops ffmpeg. IPC `picture:want`, `picture:frames`,
-  `picture:state`.
+- `src/main/index.ts` holds one `PictureFrames` for the whole window — not the per-Tab `TabStore`, since only one
+  Recording's frames are held at a time. A wish for another Tab's Recording lets go of the frames of the one before;
+  closing the Tab the picture was last wished for, or folding the picture away, stops ffmpeg. IPC `picture:want`,
+  `picture:frames` (the JPEGs and, once given up, ffmpeg's reason), `picture:stop`, `picture:state`.
 - `framesDue(playback, audibleSeconds, video, aheadSeconds)` and `frameAtSeconds(video, seconds)` in
   `src/picture/framesDue.ts` are pure: the frame due now and the frames the next moments show, across Joins, never past
   the last frame.
@@ -108,8 +109,8 @@ Scripted, at the three densest stretches of the owner's Gaming cut of the 25-min
   faster than the picture plays — not measured in the window.
 - Up to 1 GiB of frames lie in the main process, more briefly while a run fills a stretch. Only one Recording's frames
   are held, so showing another Tab starts over there.
-- A Recording ffmpeg makes no frames of shows no picture, without a word once the wish is dropped. Recordings the probe
-  refuses never open at all (ADR-0009).
+- A Recording ffmpeg makes no frames of shows ffmpeg's last line in red under the frame once three runs in a row brought
+  nothing; the next click tries again. Recordings the probe refuses never open at all (ADR-0009).
 - If users' memory does not suffice, the next step is a small preview copy on disk — the owner's own condition.
 
 ## Accepted in the built app
@@ -132,6 +133,52 @@ each play 5–6 s with skipping, the picture folded away for the baseline:
 - A still frame at a place ffmpeg had not been to: 421–480 ms. The frames held stayed at the limit, 990–1060 MB.
 - Still there, not caused by the picture: the window stands still 134–223 ms around a press of ▶ (the prototype saw up
   to 560 ms before the Channels came ready), and the main process answers IPC 100–240 ms late while an Excerpt is read.
+
+## What a review found
+
+A two-axis review of the first build (the repo's standards, and the owner's conditions) on 2026-09-14 found twelve
+points on the spec side and a handful on the standards side. The owner had all fixed but two.
+
+- **The samples were still converted one by one on the window's thread** — the loop had only moved from `startSound`
+  into `playbackOf`. Now ffmpeg writes every Channel as 32-bit floats on a pipe of its own (`asplit` and `pan`, Channel 1
+  on stdout, Channel 2 on pipe 3 …), so neither process converts or pulls apart a single sample. A first attempt, 16-bit
+  samples converted in the main process, made the sound about 80 ms later: 50 ms of loop and twice the data across IPC
+  (measured with three minutes of stereo). The pipes cost 13 ms to copy instead. The sound still comes about 45 ms later
+  than on the old 16-bit path, because 69 MB instead of 35 MB cross into the window; in exchange the window's longest
+  stand-still around a press of ▶ went from up to 560 ms to 100–145 ms.
+- **Folding the picture away did not stop ffmpeg.** It does now (`picture:stop`), and the frames held are let go. Unfolding
+  while an Excerpt is on its way asks for the picture from where that sound will start; folding while the sound waits for
+  the picture ends the wait.
+- **The wait before the sound came on top of the slower read**, up to 0.5 s in all. The wait is now what is left of the
+  owner's 0.3 s once the read has lost time against the fastest read of the Tab (`pictureWaitMs`); before a Tab's first
+  read, the 240 ms the long Recording lost is assumed.
+- **Nothing held a Recording above 60 frames a second to the owner's 60**, so three minutes of one could outgrow the limit
+  and sort the frames again on every frame. The picture now takes every second or third frame there (`pictureRateOf`,
+  ffmpeg's `select`), and once nothing outside the stretch wished for is left to let go the limit is not looked at again
+  until the next wish.
+- **A Recording ffmpeg makes no frames of said nothing.** After three empty runs the picture now shows ffmpeg's last line in
+  red under the frame (`failure`), as the two-`<video>` picture did for a video it could not decode.
+- **One refusal of the graphics card sent the whole Recording to the processor for good.** Only that stretch goes to the
+  processor now; three refusals in a row keep it there.
+- **Frames a Recording promises but lacks were asked for again and again**, and a still at the very end never came. A run
+  that ends early without an error now marks where the picture ends, and later frames answer with its last one.
+- **The still that took 1.4 s in the owner's check** was counted from the press, among drags and jumps. `report.js` now
+  counts a still from the release — when the window puts the Playhead down — and only for a click that started no sound.
+- Measured again after the fixes, the same way as above, in the built app:
+
+  | | press of ▶ to audible sound | first new frame | frames drawn a second | gaps over 34 ms | still frame |
+  |---|---|---|---|---|---|
+  | 25-minute capture, dense stretches, folded | 515–540 ms | — | — | — | — |
+  | 25-minute capture, dense stretches, picture | 682–770 ms | 2–20 ms | 60 | none | 344–394 ms |
+  | the long Recording from the external drive, fresh places, folded | about 700 ms (928 on the first play) | — | — | — | — |
+  | the long Recording from the external drive, fresh places, picture | 904–1026 ms | 1–30 ms | 60 | none | 549–569 ms |
+
+  Folding the picture away let go of 998 MB at once. The window stood still at most 100–167 ms around a press of ▶.
+- On the standards side: the picture's `PictureFrames` moved out of the per-Tab `TabStore` into `src/main/index.ts`; frame
+  size, height and rate are worked out once in `framesDue.ts` instead of three times; the internal names of
+  `pictureFrames.ts` say what they hold; `video` became `recording` where the Recording is meant (CONTEXT.md).
+- Left as they are, at the owner's word: the `pictureState` call that only the measuring scripts use, and frame k = k / fps
+  assuming a constant frame rate — the probe already refuses variable frame rates (ADR-0009).
 
 ## Tested, and not
 

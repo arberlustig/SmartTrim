@@ -44,16 +44,20 @@ const plays = starts.map((start, index) => {
   };
 });
 
-// A click into a waveform while nothing plays puts the still frame there.
-const playingAt = (at) => starts.some((start, index) => {
-  const stop = r.events.find((event) => event.what === "soundStop" && event.at > start.at);
-  return at >= start.at && at <= (stop ? stop.at : nowAt) && index >= 0;
-});
+// A click into a waveform while nothing plays puts the still frame there. Timed from the release, which is when the
+// window moves the Playhead; a release more than 4 px from its press was a drag, and a click followed by a sound within
+// two seconds was a jump, not a still.
+const playingAt = (at) =>
+  starts.some((start) => {
+    const stop = r.events.find((event) => event.what === "soundStop" && event.at > start.at);
+    return at >= start.at && at <= (stop ? stop.at : nowAt);
+  });
 const stills = r.events
-  .filter((event) => event.what === "pointerdown" && event.detail === "waveform" && !playingAt(event.at))
-  .map((press) => {
-    const drawn = r.draws.find((at) => at > press.at && at < press.at + 5000);
-    return drawn === undefined ? null : Math.round(drawn - press.at);
+  .filter((event) => event.what === "pointerup" && event.detail.where === "waveform" && event.detail.travel < 4)
+  .filter((release) => !playingAt(release.at) && !starts.some((start) => start.at > release.at && start.at < release.at + 2000))
+  .map((release) => {
+    const drawn = r.draws.find((at) => at > release.at && at < release.at + 5000);
+    return drawn === undefined ? null : Math.round(drawn - release.at);
   })
   .filter((ms) => ms !== null);
 

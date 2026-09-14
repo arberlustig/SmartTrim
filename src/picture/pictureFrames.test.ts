@@ -122,17 +122,28 @@ describe("pictureFrames", () => {
   }, 60000);
 
   // The owner's machine decodes on its NVIDIA card; other machines have none, or a driver that refuses. ffmpeg then
-  // exits with an error and no frame, and the picture must still come — from the processor, about half as fast.
-  test("when the graphics card's decoder fails, the frames come from the processor", async () => {
+  // exits with an error and no frame, and the picture must still come — from the processor, about half as fast. One
+  // refusal is no proof there is no card, though: a start refused the moment after a run was stopped would otherwise
+  // leave the whole Recording on the slow processor. Only three refusals in a row settle it.
+  test("when the graphics card's decoder fails the frames come from the processor, and the card is tried again until it failed three times", async () => {
     const broken = { hwaccel: "nosuchdecoder", scale: (width: number, height: number) => `scale=${width}:${height}` };
     const pictures = newPictureFrames(vendor("ffmpeg.exe"), { height: HEIGHT, wantSeconds: 1, hardware: broken });
     try {
       pictures.want(recording, 3);
-
       expect(whichFrame(await madeFrame(pictures, recording, 100), recording.path, [99, 100, 101])).toBe(100);
-      expect(pictures.runs()).toMatchObject([
-        { fromFrame: 90, made: 0, onProcessor: false },
-        { fromFrame: 90, onProcessor: true },
+      for (const seconds of [6, 9, 12]) {
+        pictures.want(recording, seconds);
+        await madeFrame(pictures, recording, seconds * 30);
+      }
+
+      expect(pictures.runs().map((run) => [run.fromFrame, run.onProcessor])).toEqual([
+        [90, false],
+        [90, true],
+        [180, false],
+        [180, true],
+        [270, false],
+        [270, true],
+        [360, true],
       ]);
     } finally {
       pictures.stop();
@@ -172,6 +183,72 @@ describe("pictureFrames", () => {
       const left = range(60, 120).filter((index) => pictures.frames(recording, [index])[0] !== null);
       expect(left.length).toBeGreaterThan(0);
       expect(left).toEqual(range(120 - left.length, 120));
+    } finally {
+      pictures.stop();
+    }
+  }, 60000);
+
+  // What a Recording promises is not always what it holds: the last frames can be missing. A Playhead at the very end
+  // then asks for frames that never come, and the prototype answered with three empty runs and a picture left standing.
+  test("frames the Recording promises but does not hold stand in as its last frame, and are not asked for twice", async () => {
+    const promisingMore = { ...recording, durationFrames: recording.durationFrames + 10 };
+    const pictures = newPictureFrames(vendor("ffmpeg.exe"), { height: HEIGHT, wantSeconds: 1 });
+    try {
+      // 19.9 s is frame 597; the file holds up to 599, the Recording promises ten more.
+      pictures.want(promisingMore, 19.9);
+
+      expect(whichFrame(await madeFrame(pictures, promisingMore, 605), recording.path, [598, 599])).toBe(599);
+      await vi.waitFor(() => expect(pictures.runs().some((run) => run.running)).toBe(false), { timeout: 15000 });
+      expect(pictures.runs()).toHaveLength(1);
+    } finally {
+      pictures.stop();
+    }
+  }, 60000);
+
+  // A Recording ffmpeg cannot read — moved away since it was opened, say — has to say so. Left to itself the window
+  // shows an empty picture and nothing else.
+  test("a Recording ffmpeg makes no frames of is reported with ffmpeg's own reason", async () => {
+    const gone = { ...recording, path: join(workDir, "gone.mp4") };
+    const pictures = newPictureFrames(vendor("ffmpeg.exe"), { height: HEIGHT, wantSeconds: 1 });
+    try {
+      pictures.want(gone, 3);
+
+      const reason = await vi.waitFor(
+        () => {
+          const failure = pictures.failure(gone);
+          if (!failure) throw new Error("nothing reported yet");
+          return failure;
+        },
+        { timeout: 20000, interval: 50 },
+      );
+      expect(reason).toMatch(/no such file/i);
+      expect(pictures.frames(gone, [90])).toEqual([null]);
+      // Another Recording, whose frames ffmpeg makes, is not tarred with that brush.
+      pictures.want(recording, 3);
+      expect(pictures.failure(recording)).toBeNull();
+    } finally {
+      pictures.stop();
+    }
+  }, 60000);
+
+  // The owner took 60 frames a second as enough. Above that the picture takes every second or third frame, so three
+  // minutes of it need no more memory — and picture frame 30 of a 120 fps Recording is its frame 60.
+  test("a Recording above 60 frames a second has its picture made of every second frame", async () => {
+    const path = join(workDir, "fast-frames.mp4");
+    execFileSync(vendor("ffmpeg.exe"), [
+      ...["-v", "error"],
+      ...["-f", "lavfi", "-i", "color=black:size=160x90:rate=120:duration=2,format=yuv420p,geq=lum='16+4*mod(N\\,50)':cb=128:cr=128"],
+      ...["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"],
+      ...["-map", "0:v", "-map", "1:a", "-t", "2"],
+      ...["-c:v", "libopenh264", "-g", "240", "-b:v", "2M", "-c:a", "aac", path],
+    ]);
+    const fast = await probeRecording(path, vendor("ffprobe.exe"));
+    const pictures = newPictureFrames(vendor("ffmpeg.exe"), { height: HEIGHT, wantSeconds: 1 });
+    try {
+      pictures.want(fast, 0.5);
+
+      expect(whichFrame(await madeFrame(pictures, fast, 30), path, [59, 60, 61])).toBe(60);
+      expect(whichFrame(await madeFrame(pictures, fast, 31), path, [61, 62, 63])).toBe(62);
     } finally {
       pictures.stop();
     }

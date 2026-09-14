@@ -43,11 +43,26 @@ AudioBufferSourceNode.prototype.stop = function (...args) {
   return soundStop.apply(this, args);
 };
 
+// Where a press on a canvas went down, so its release can tell a click (the Playhead moves) from a drag (the view pans).
+let pressed = null;
 document.addEventListener(
   "pointerdown",
   (event) => {
     const canvas = event.target.closest?.("canvas");
-    if (canvas) note("pointerdown", canvas.closest(".waveform") ? "waveform" : canvas.id || "canvas");
+    if (!canvas) return;
+    const where = canvas.closest(".waveform") ? "waveform" : canvas.id || "canvas";
+    pressed = { where, x: event.clientX };
+    note("pointerdown", where);
+  },
+  true,
+);
+// The window puts the Playhead down when the button is let go, so a still frame is timed from here.
+window.addEventListener(
+  "pointerup",
+  (event) => {
+    if (!pressed) return;
+    note("pointerup", { where: pressed.where, travel: Math.round(Math.abs(event.clientX - pressed.x)) });
+    pressed = null;
   },
   true,
 );

@@ -8,7 +8,8 @@ import { openFiles } from "../app/openFile.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import { newTabStore, type OnRead } from "../app/tabStore.ts";
-import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab } from "../preload/api.ts";
+import { newPictureFrames, type PictureFrames } from "../picture/pictureFrames.ts";
+import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab, PictureFramesAnswer, PictureState } from "../preload/api.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
@@ -68,6 +69,18 @@ function registerHandlers(window: BrowserWindow): void {
    * Recording read can end up in another's cut (ADR-0025).
    */
   const tabs = newTabStore(() => analysisTools(window));
+
+  /**
+   * The picture's frames: one Recording's at a time, the Tab on screen, made ahead by ffmpeg (ADR-0028). Made on the
+   * first wish, so nothing runs until a picture is wanted, and let go when that Tab closes or the picture folds away.
+   */
+  let pictures: PictureFrames | null = null;
+  let pictureTabId: number | null = null;
+
+  function stopPicture(): void {
+    pictures?.stop();
+    pictureTabId = null;
+  }
 
   /** Tells the window how far reading one Tab's SourceTracks has got. */
   const progressOf =
@@ -141,6 +154,8 @@ function registerHandlers(window: BrowserWindow): void {
     "tab:close",
     answering((tabId: number): null => {
       tabs.close(tabId);
+      // Its picture is not made on: ffmpeg would keep the graphics card busy for a Tab nobody can see any more.
+      if (pictureTabId === tabId) stopPicture();
       return null;
     }),
   );
@@ -170,21 +185,40 @@ function registerHandlers(window: BrowserWindow): void {
   );
 
   // The picture above the SourceTracks: frames ffmpeg makes ahead in this process, handed to the window by number
-  // (ADR-0028). Wishing answers at once; the frames follow in the background.
+  // (ADR-0028). Wishing answers at once; the frames follow in the background. One Recording's frames are held at a
+  // time — the Tab on screen — so a wish for another Tab lets go of the ones before.
   ipcMain.handle(
     "picture:want",
     answering(async ({ tabId, fromSeconds }: { tabId: number; fromSeconds: number }): Promise<null> => {
-      await tabs.wantPicture(tabId, fromSeconds);
+      const recording = tabs.recordingOf(tabId);
+      pictures ??= newPictureFrames((await analysisTools(window)).ffmpeg);
+      // The Tab may have been closed while the tools were found.
+      tabs.recordingOf(tabId);
+      pictureTabId = tabId;
+      pictures.want(recording, fromSeconds);
       return null;
     }),
   );
   ipcMain.handle(
     "picture:frames",
-    answering(({ tabId, indices }: { tabId: number; indices: readonly number[] }) => tabs.pictureFrames(tabId, indices)),
+    answering(({ tabId, indices }: { tabId: number; indices: readonly number[] }): PictureFramesAnswer => {
+      const recording = tabs.recordingOf(tabId);
+      return {
+        jpegs: pictures ? [...pictures.frames(recording, indices)] : indices.map(() => null),
+        failure: pictures?.failure(recording) ?? null,
+      };
+    }),
+  );
+  ipcMain.handle(
+    "picture:stop",
+    answering((): null => {
+      stopPicture();
+      return null;
+    }),
   );
   ipcMain.handle(
     "picture:state",
-    answering(() => tabs.pictureState()),
+    answering((): PictureState => ({ heldBytes: pictures?.heldBytes() ?? 0, runs: pictures?.runs() ?? [] })),
   );
 
   ipcMain.handle(

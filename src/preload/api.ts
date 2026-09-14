@@ -1,7 +1,7 @@
 import type { AnalysisRequest } from "../analysis/analyseRecording.ts";
 import type { Preset } from "../app/cutSession.ts";
 import type { Refusal } from "../app/openFile.ts";
-import type { PictureState } from "../app/tabStore.ts";
+import type { PictureRun } from "../picture/pictureFrames.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { CutSummary, PlanSettings, SourceTrackWaveform } from "../app/runCut.ts";
@@ -40,6 +40,21 @@ export interface ExcerptRequest {
   position: number;
   fromSeconds: number;
   toSeconds: number;
+}
+
+/**
+ * What the window gets when it asks for picture frames: the JPEGs it asked for, null for each one not made yet, and —
+ * once ffmpeg has been given up on — why no frame of this Recording can be made (ADR-0028).
+ */
+export interface PictureFramesAnswer {
+  jpegs: (Uint8Array | null)[];
+  failure: string | null;
+}
+
+/** How the picture is doing: the memory its frames hold and how its ffmpeg runs went, for the measuring scripts. */
+export interface PictureState {
+  heldBytes: number;
+  runs: readonly PictureRun[];
 }
 
 /** How far reading the SourceTracks of a Tab's Recording has got. */
@@ -92,8 +107,10 @@ export interface SmartTrimApi {
    * background (ADR-0028). Answers at once.
    */
   wantPicture(tabId: number, fromSeconds: number): Promise<Answer<null>>;
-  /** The JPEGs of these frames of a Tab's Recording, null for each one not made yet. Frame k is on screen from k / fps. */
-  pictureFrames(tabId: number, indices: readonly number[]): Promise<Answer<(Uint8Array | null)[]>>;
+  /** The JPEGs of these picture frames of a Tab's Recording, and why the picture cannot be made if it cannot. */
+  pictureFrames(tabId: number, indices: readonly number[]): Promise<Answer<PictureFramesAnswer>>;
+  /** Stops making frames and lets go of the ones held — when the picture is folded away or no Tab is left. */
+  stopPicture(): Promise<Answer<null>>;
   /** How much memory the picture holds and how its ffmpeg runs went — what the measuring scripts read. */
   pictureState(): Promise<Answer<PictureState>>;
   /** Called as each SourceTrack finishes being read, so the window can say how far it has got. */

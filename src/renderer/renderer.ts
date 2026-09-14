@@ -55,8 +55,9 @@ import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from ".
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
 import type { CutSummary, SourceTrackWaveform } from "../app/runCut.ts";
-import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Join, type Playback } from "../playback/playback.ts";
-import { frameAtSeconds, framesDue } from "../picture/framesDue.ts";
+import { LONGEST_EXCERPT_SECONDS, playbackOf, recordingSecondsAt, type Playback } from "../playback/playback.ts";
+import { PICTURE_HEIGHT, frameAtSeconds, framesDue, pictureSizeOf } from "../picture/framesDue.ts";
+import { pictureWaitMs } from "../picture/pictureWait.ts";
 import type { Answer, OpenedInWindow, SmartTrimApi } from "../preload/api.ts";
 
 declare global {
@@ -1461,11 +1462,19 @@ let playRequest = 0;
 let playheadFrame = 0;
 /** Where the Playhead was on the frame before, so the view pages along only when the Playhead runs out of it. */
 let lastHeard: number | null = null;
+/** Where the sound on its way will start, so unfolding the picture while it is read asks for the picture from there. */
+let startingFrom: number | null = null;
+/**
+ * The fastest Excerpt read of each Tab. A read that lost no time to frames being made beside it is the fastest there
+ * has been, so it stands for a read without a picture — what the sound may be measured against (ADR-0028).
+ */
+const fastestExcerptMs = new Map<number, number>();
 
 /** Stops the sound and forgets an Excerpt still on its way. */
 function stopPlaying(): void {
   playRequest += 1;
   fetchingFor = null;
+  startingFrom = null;
   cancelAnimationFrame(playheadFrame);
   const was = playing;
   playing = null;
@@ -1560,7 +1569,9 @@ async function play(position: number): Promise<void> {
   const toSeconds = Math.min(fromSeconds + LONGEST_EXCERPT_SECONDS, seconds);
   // The Playhead starts in view, so a start that skipping carries past the right edge still turns the page.
   lastHeard = fromSeconds;
-  // The picture's frames are made from here while the Excerpt is read (ADR-0028).
+  // The picture's frames are made from here while the Excerpt is read (ADR-0028), and unfolding it meanwhile asks for
+  // the same place.
+  startingFrom = fromSeconds;
   preparePicture(tab, fromSeconds);
   // The cut as it is on screen when the button is pressed; before a cut there is nothing to skip.
   const kept = tab.finished?.keptRanges ?? null;
@@ -1569,7 +1580,9 @@ async function play(position: number): Promise<void> {
   clearStatus(tab);
   draw();
 
+  const readFrom = performance.now();
   const answer = await window.smarttrim.readExcerpt({ tabId: tab.id, position, fromSeconds, toSeconds });
+  const readMs = performance.now() - readFrom;
   // Something else was pressed, another Tab was shown, or this one closed, while the Excerpt was on its way.
   if (request !== playRequest || !isOpen(tab)) return;
   fetchingFor = null;
@@ -1594,12 +1607,16 @@ async function play(position: number): Promise<void> {
     return;
   }
 
-  // The sound waits a moment for the picture's first frames, so both start together (ADR-0028). Until it starts it still
-  // counts as on its way, so a click meanwhile jumps instead of finding nothing to stop.
+  // The sound waits a moment for the picture's first frames, so both start together — but only for what is left of the
+  // owner's allowance after this read lost time to the frames being made beside it (ADR-0028). Until the sound starts it
+  // still counts as on its way, so a click meanwhile jumps instead of finding nothing to stop.
+  const fastest = fastestExcerptMs.get(tab.id) ?? null;
+  fastestExcerptMs.set(tab.id, Math.min(fastest ?? readMs, readMs));
   fetchingFor = position;
-  await waitForPicture(tab, playback, () => request === playRequest && isOpen(tab));
+  await waitForPicture(tab, playback, pictureWaitMs(readMs, fastest), () => request === playRequest && isOpen(tab));
   if (request !== playRequest || !isOpen(tab)) return;
   fetchingFor = null;
+  startingFrom = null;
 
   // `play` runs detached from the button, so a failure here would otherwise vanish without a word.
   let sound: ReturnType<typeof startSound>;
@@ -1683,8 +1700,6 @@ view.overview.addEventListener("pointerdown", (event) => {
 
 /* ── The picture ───────────────────────────────────────────────────────────────────────────────────────────── */
 
-/** The highest the picture is drawn, in CSS pixels — a little more than the 360 first proposed, at the owner's word. */
-const PICTURE_HEIGHT_PX = 450;
 /** Where the window remembers whether the picture is unfolded, across starts. */
 const PICTURE_OPEN_KEY = "smarttrim.pictureOpen";
 
@@ -1705,10 +1720,10 @@ let pictureOpen = (() => {
 
 /** How far ahead of the sound frames are unpacked, so drawing never waits for one. */
 const UNPACK_AHEAD_SECONDS = 0.5;
-/** How long the sound may wait for the picture's first frames: the owner allowed 0.3 s later than without a picture. */
-const PICTURE_WAIT_MS = 300;
 /** How much of the start the sound waits for, so the picture does not stop again right after it has begun. */
 const PICTURE_START_SECONDS = 0.25;
+/** How long a still frame is waited for before the picture is left as it is. */
+const STILL_WAIT_MS = 5000;
 
 const pictureContext = view.pictureCanvas.getContext("2d") as CanvasRenderingContext2D;
 /** Frames unpacked and ready to draw, by number, all of the Recording of `pictureTabId`. */
@@ -1745,14 +1760,29 @@ function forgetPicture(tabId: number | null): void {
   pictureContext.clearRect(0, 0, view.pictureCanvas.width, view.pictureCanvas.height);
 }
 
+/** Says under the frame why the picture cannot be shown. */
+function sayAboutPicture(reason: string): void {
+  const said = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen: ${reason}`;
+  if (pictureFailed === said) return;
+  pictureFailed = said;
+  drawPicture(viewed());
+}
+
 /** Asks the main process for the picture of a Tab from a moment on, unless the picture is folded away. */
 function preparePicture(tab: OpenTab, seconds: number): void {
   if (!pictureOpen) return;
+  pictureFailed = null;
   void window.smarttrim.wantPicture(tab.id, seconds).then((answer) => {
     if (answer.ok || pictureTabId !== tab.id) return;
-    pictureFailed = `Das Bild dieser Aufnahme lässt sich hier nicht zeigen: ${answer.message}`;
-    drawPicture(viewed());
+    sayAboutPicture(answer.message);
   });
+}
+
+/** Lets the main process stop making frames and let go of the ones it holds: folded away, nobody sees them. */
+function stopPictureFrames(): void {
+  keepUnpacked(new Set());
+  shownFrame = null;
+  void window.smarttrim.stopPicture();
 }
 
 /** Fetches these frames from the main process and unpacks them. Frames not made yet stay missing until asked again. */
@@ -1763,8 +1793,10 @@ async function unpackFrames(tabId: number, indices: readonly number[]): Promise<
   try {
     const answer = await window.smarttrim.pictureFrames(tabId, wanted);
     if (!answer.ok || pictureTabId !== tabId) return;
+    // ffmpeg was given up on for this Recording: the reason belongs under the frame rather than nowhere.
+    if (answer.value.failure !== null) sayAboutPicture(answer.value.failure);
     await Promise.all(
-      answer.value.map(async (jpeg, at) => {
+      answer.value.jpegs.map(async (jpeg, at) => {
         if (!jpeg) return;
         const index = wanted[at] as number;
         const bitmap = await createImageBitmap(new Blob([jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
@@ -1777,6 +1809,17 @@ async function unpackFrames(tabId: number, indices: readonly number[]): Promise<
   } finally {
     for (const index of wanted) unpacking.delete(index);
   }
+}
+
+/** Fetches frames until they are all unpacked, until nobody wants them any more, or until `limitMs` has passed. */
+async function unpackUntil(tabId: number, indices: readonly number[], limitMs: number, stillWanted: () => boolean): Promise<boolean> {
+  const since = performance.now();
+  while (stillWanted() && performance.now() - since < limitMs) {
+    await unpackFrames(tabId, indices);
+    if (indices.every((index) => unpacked.has(index))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  return indices.every((index) => unpacked.has(index));
 }
 
 /** Puts a frame on the canvas, if it is unpacked. A frame still missing leaves the one before on screen. */
@@ -1808,19 +1851,19 @@ function drawPicture(tab: OpenTab | null): void {
   }
   if (pictureTabId !== tab.id) forgetPicture(tab.id);
   // The canvas holds the frames at the size they are made, in the Recording's own shape; CSS fits it to the frame.
-  const width = Math.round((PICTURE_HEIGHT_PX * recording.width) / recording.height / 2) * 2;
-  if (view.pictureCanvas.width !== width || view.pictureCanvas.height !== PICTURE_HEIGHT_PX) {
+  const { width, height } = pictureSizeOf(recording);
+  if (view.pictureCanvas.width !== width || view.pictureCanvas.height !== height) {
     view.pictureCanvas.width = width;
-    view.pictureCanvas.height = PICTURE_HEIGHT_PX;
+    view.pictureCanvas.height = height;
     shownFrame = null;
   }
   view.pictureToggle.textContent = pictureOpen ? "Bild ausblenden" : "Bild zeigen";
   view.pictureFrame.hidden = !pictureOpen;
   view.pictureNote.hidden = pictureFailed === null;
   view.pictureNote.textContent = pictureFailed ?? "";
-  // As wide as the waveforms and no higher than PICTURE_HEIGHT_PX, in the Recording's own shape.
+  // As wide as the waveforms and no higher than the frames are made, in the Recording's own shape (PICTURE_HEIGHT).
   view.pictureFrame.style.aspectRatio = `${recording.width} / ${recording.height}`;
-  view.pictureFrame.style.maxWidth = `${(PICTURE_HEIGHT_PX * recording.width) / recording.height}px`;
+  view.pictureFrame.style.maxWidth = `${width}px`;
   // While a sound plays, or its Excerpt is on its way, the sound decides what is shown.
   if (!pictureOpen || playing?.tab === tab || fetchingFor !== null) return;
   const wanted = tab.playheadSeconds ?? 0;
@@ -1836,18 +1879,12 @@ async function showStill(tab: OpenTab, seconds: number): Promise<void> {
   if (!recording) return;
   const index = frameAtSeconds(recording, seconds);
   preparePicture(tab, seconds);
-  const stillWanted = () => stillAt === seconds && pictureTabId === tab.id && playing?.tab !== tab;
-  // Where ffmpeg has not been yet the frame takes a few hundred milliseconds; after five seconds it is given up on.
-  const asked = performance.now();
-  while (stillWanted() && performance.now() - asked < 5000) {
-    await unpackFrames(tab.id, [index]);
-    if (!stillWanted()) return;
-    if (drawFrame(index)) {
-      keepUnpacked(new Set([index]));
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 15));
-  }
+  const stillWanted = () => stillAt === seconds && pictureTabId === tab.id && playing?.tab !== tab && pictureOpen;
+  // Where ffmpeg has not been yet the frame takes a few hundred milliseconds; past STILL_WAIT_MS it is given up on and
+  // whatever stands on the canvas is left there.
+  if (!(await unpackUntil(tab.id, [index], STILL_WAIT_MS, stillWanted)) || !stillWanted()) return;
+  drawFrame(index);
+  keepUnpacked(new Set([index]));
 }
 
 /** The moment of what is played that is leaving the speakers now — later than the audio clock by the output latency. */
@@ -1873,19 +1910,16 @@ function followPicture(sound: NonNullable<typeof playing>): void {
 }
 
 /**
- * Lets the sound wait up to PICTURE_WAIT_MS for the picture's first quarter second, so both start together. Past that
- * the sound starts anyway and the picture joins it once its frames are there.
+ * Lets the sound wait for the picture's first quarter second, so that both start together. How long it may wait is
+ * what is left of the owner's allowance once the Excerpt read has lost time to the frames being made (`pictureWaitMs`).
+ * Past that the sound starts anyway and the picture joins it as soon as its frames are there.
  */
-async function waitForPicture(tab: OpenTab, playback: Playback, stillWanted: () => boolean): Promise<void> {
+async function waitForPicture(tab: OpenTab, playback: Playback, waitMs: number, stillWanted: () => boolean): Promise<void> {
   const recording = tab.session.recording;
   if (!pictureOpen || pictureTabId !== tab.id || !recording) return;
   const { ahead } = framesDue(playback, 0, recording, PICTURE_START_SECONDS);
-  const since = performance.now();
-  while (stillWanted() && performance.now() - since < PICTURE_WAIT_MS) {
-    await unpackFrames(tab.id, ahead);
-    if (ahead.every((index) => unpacked.has(index))) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  // Folded away while it waits, the picture takes the reason for waiting with it.
+  await unpackUntil(tab.id, ahead, waitMs, () => stillWanted() && pictureOpen);
 }
 
 view.pictureToggle.addEventListener("click", () => {
@@ -1896,8 +1930,17 @@ view.pictureToggle.addEventListener("click", () => {
     // Not remembered, then; the choice still holds until SmartTrim is closed.
   }
   pausePicture();
-  // Unfolded while a SourceTrack plays: the picture is asked for from where the sound is.
-  if (pictureOpen && playing) preparePicture(playing.tab, heardIn(playing));
+  if (!pictureOpen) {
+    // Folded away, nothing is made for it: ffmpeg stops and the frames held are let go (ADR-0028).
+    stopPictureFrames();
+  } else if (playing) {
+    // Unfolded while a SourceTrack plays, the picture is asked for from where the sound is — and while its Excerpt is
+    // still on its way, from where that sound will start.
+    preparePicture(playing.tab, heardIn(playing));
+  } else if (startingFrom !== null) {
+    const tab = viewed();
+    if (tab) preparePicture(tab, startingFrom);
+  }
   draw();
 });
 

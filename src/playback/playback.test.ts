@@ -8,22 +8,24 @@ const kept = (...pairs: readonly (readonly [number, number])[]): TimeRange[] =>
   pairs.map(([startSeconds, endSeconds]) => ({ startSeconds, endSeconds }));
 
 /**
- * An Excerpt at 10 samples per second whose samples carry their own frame number, +n on the left Channel and -n on
- * the right, so which frames were played, and in what order, can be read straight off the result.
+ * An Excerpt at 10 samples per second whose samples carry their own frame number, n / 32768 on the left Channel and
+ * -n / 32768 on the right, so which frames were played, and in what order, can be read straight off the result.
  */
 function numberedExcerpt(fromSeconds: number, seconds: number): Excerpt {
   const sampleRate = 10;
-  const samples = new Int16Array(seconds * sampleRate * 2);
+  const left = new Float32Array(seconds * sampleRate);
+  const right = new Float32Array(seconds * sampleRate);
   for (let frame = 0; frame < seconds * sampleRate; frame++) {
-    samples[frame * 2] = frame;
-    samples[frame * 2 + 1] = -frame;
+    left[frame] = frame / 32768;
+    // 0 - n rather than -n, so frame 0 is 0 and not -0, which a comparison would tell apart.
+    right[frame] = 0 - frame / 32768;
   }
-  return { fromSeconds, sampleRate, channelCount: 2, samples };
+  return { fromSeconds, sampleRate, channelCount: 2, channels: [left, right] };
 }
 
-/** A Channel of what is played, back in the Excerpt's 16-bit numbers. */
-const channelOf = (played: { channels: Float32Array[] }, channel: number) =>
-  [...(played.channels[channel] ?? [])].map((value) => value * 32768);
+/** A Channel of an Excerpt or of what is played, back in the frame numbers its samples carry. */
+const channelOf = (sound: { channels: Float32Array[] }, channel: number) =>
+  [...(sound.channels[channel] ?? [])].map((value) => value * 32768);
 
 describe("listening to the cut", () => {
   // 3 s of Recording from 100 s. Kept: until 100.5 s, 101.2 to 101.8 s, from 102.5 s on — the first and the last
@@ -31,8 +33,7 @@ describe("listening to the cut", () => {
   test("skipping what is removed plays the kept frames back to back, with a Join wherever a removed stretch was", () => {
     const played = playbackOf(numberedExcerpt(100, 3), kept([99, 100.5], [101.2, 101.8], [102.5, 110]), true);
 
-    // One run per Channel from -1 to 1, the way Web Audio takes it: the window copies each in whole when ▶ is pressed,
-    // instead of converting three minutes of samples one by one, which froze it for up to half a second (ADR-0028).
+    // One run per Channel, the way Web Audio takes it, so ▶ copies each Channel in whole (ADR-0028).
     expect(played.channels).toHaveLength(2);
     expect(channelOf(played, 0)).toEqual([0, 1, 2, 3, 4, 12, 13, 14, 15, 16, 17, 25, 26, 27, 28, 29]);
     expect(channelOf(played, 1)).toEqual([0, -1, -2, -3, -4, -12, -13, -14, -15, -16, -17, -25, -26, -27, -28, -29]);
@@ -68,8 +69,8 @@ describe("listening to the cut", () => {
 
     const played = playbackOf(excerpt, kept([99, 100.5], [101.2, 101.8], [102.5, 110]), false);
 
-    expect(channelOf(played, 0)).toEqual([...excerpt.samples].filter((_sample, index) => index % 2 === 0));
-    expect(channelOf(played, 1)).toEqual([...excerpt.samples].filter((_sample, index) => index % 2 === 1));
+    expect(channelOf(played, 0)).toEqual(channelOf(excerpt, 0));
+    expect(channelOf(played, 1)).toEqual(channelOf(excerpt, 1));
     expect(played.joins).toEqual([]);
     expect(recordingSecondsAt(played, 0)).toBeCloseTo(100, 9);
     expect(recordingSecondsAt(played, 0.8)).toBeCloseTo(100.8, 9);
