@@ -144,6 +144,50 @@ Not measured yet: following the Web Audio clock instead of the prototype's own, 
 three-minute Excerpts, the still frame on a click, graphics memory. Building it would replace the two `<video>`
 elements and the address they read through.
 
+## WebCodecs, built and taken back
+
+The owner chose to build it. On 2026-09-13 it was built test-first on the seams the owner approved: `videoIndexOf` reads
+the MP4's own sample tables, `picturePlanOf` says what to decode for each kept piece, and `PictureRun` in the window
+decodes a little ahead of the sound. Its acceptance runs over the DevTools protocol passed: 60 frames a second and no
+gap over 50 ms at the densest stretches of the 25-minute capture and on the long Recording from the external drive, the first moving frame 70–225 ms
+after the sound. It is kept on branch `webcodecs-picture`, with the ADR text it had there and the diagnosis tools in
+`bench/webcodecs-picture-diagnosis/`. On 2026-09-14 main went back to the two `<video>` elements above.
+
+The owner's own look found what the scripted runs had not: "hängt das Bild hinterher und braucht erst mal bis es läuft,
+Ton läuft aber schon weiterhin", before a cut and after. A recorder left in the window while the owner used SmartTrim
+measured the first moving frame 1.6–2.5 s after the sound on every play but the first. A probe of each decoder in that
+window showed why. From the moment the sound started, the playback decoder was fed and gave frames back at about 60 a
+second with its queue full. So the frames decoded only to get from the keyframe to the start, up to 4.17 s of them,
+took as long as they would take to play.
+
+**The brake.** A WebCodecs hardware HEVC decoder in the window hands out about 63 frames a second whenever the page puts
+anything new on screen on every animation frame, and 850–1100 at rest. Measured with the same 192 real frames:
+
+| while the decoder runs | frames a second |
+|---|---|
+| nothing drawn, or an animation-frame loop that draws nothing | 850–1100 |
+| a canvas redrawn by a 16 ms timer, no animation frames | 716 |
+| a 2D canvas redrawn every animation frame, 32×32 or 1600×200, on the GPU or not | 63–64 |
+| a WebGL canvas, a 960×540 `drawImage`, or only an element moved by CSS | 61–63 |
+| the same with the decoder in a Worker | 62 |
+| two decoders at once | 32 each |
+
+- **Nothing tried lifted it.** Not `--disable-features=CalculateNativeWinOcclusion`, `--disable-backgrounding-occluded-windows`,
+  `--disable-renderer-backgrounding`, `--disable-gpu-vsync` or `--disable-direct-composition`. Not
+  `--disable-frame-rate-limit`: animation frames rose to 4383 a second and decoding stayed at 66. Not
+  `--enable-features=D3D12VideoDecoder`, which was slower at rest and the same while drawing. Not `optimizeForLatency: false`.
+- **No way around the hardware.** `prefer-software` is refused for HEVC.
+- **Not the machine's settings.** It is a desktop on mains power, its screen at 89 Hz and the window at 91 animation frames a
+  second, the system timer at 1 ms.
+- **No headroom by design.** The picture's own drawing counts as drawing. A 60-frame picture therefore always runs
+  against the brake, and every start and every Join needs frames it cannot get in time.
+- **No switch found.** Discussion #680 of w3c/webcodecs names a decoder waiting for output buffers as a cause of stalls.
+
+Two things stay unexplained. The prototype decoded 187–259 frames a second while playing
+(`bench/out/prototype-webcodecs-picture.json`). The acceptance runs of 2026-09-13 started the picture quickly. Neither
+was measured again under the owner's conditions. What found the fault was not a scripted run but a passive recorder in
+the window while the owner used SmartTrim as they do. Measure any picture that way before calling it done.
+
 ## Tested, and not
 
 - `src/video/serveRecording.test.ts`, a real file of 1000 bytes that each carry their own place: a named piece, a piece
