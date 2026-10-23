@@ -53,6 +53,7 @@ import {
 import type { Refusal } from "../app/openFile.ts";
 import { TEXTS, decimalsIn, isLanguage, languageOf, type Language, type Texts } from "../app/texts.ts";
 import { waitOf } from "../app/waiting.ts";
+import { updateNotice, type UpdateState } from "../app/selfUpdate.ts";
 import { cuttingAllDoes, savingAllDoes, settingsCopied, type TakenOver } from "../app/allTabs.ts";
 import { bandsIn, keptShareByColumn, type CutBand } from "../waveform/cutShape.ts";
 import { CLOSEST_WINDOW_SECONDS, pannedBy, zoomedTo, type ZoomWindow } from "../waveform/zoomWindow.ts";
@@ -155,6 +156,10 @@ const view = {
   status: element("status"),
   result: element("result"),
   dropOverlay: element("dropOverlay"),
+  updateNote: element("updateNote"),
+  updateText: element("updateText"),
+  restartForUpdate: element<HTMLButtonElement>("restartForUpdate"),
+  cancelRestart: element<HTMLButtonElement>("cancelRestart"),
 };
 
 /* ── The language the window speaks (ADR-0030) ─────────────────────────────────────────────────────────────── */
@@ -302,6 +307,10 @@ let naming = false;
 let asking: { question: string; yes: () => void } | null = null;
 /** True until ffmpeg and the model are there: on a first run they have to be downloaded first. */
 let preparing = true;
+/** Where SmartTrim's own update stands, as the main process last said (ADR-0032). */
+let selfUpdate: UpdateState = { kind: "idle" };
+/** True while the update line asks whether to restart although held stretches are not saved. */
+let confirmingRestart = false;
 
 function viewed(): OpenTab | null {
   return tabs.find((tab) => tab.id === viewedId) ?? null;
@@ -867,6 +876,7 @@ function draw(): void {
   // After the waveforms: whether there is anything to hold on follows whether they are shown.
   drawHeld(tab);
   drawStatus();
+  drawUpdate();
   const settingsLocked = !tab || tab.working;
   view.chooseRecording.disabled = preparing;
   view.openProject.disabled = preparing;
@@ -1318,6 +1328,8 @@ async function pump(): Promise<void> {
   if (!next || !tab) return;
   job = next;
   drawTabs();
+  // "Jetzt neu starten" waits while a Recording is read; this is the only redraw before the read begins.
+  drawUpdate();
   try {
     if (next.kind === "scan") await scanTab(tab);
     else if (next.kind === "read") await readTab(tab, next.positions);
@@ -2299,7 +2311,7 @@ view.saveClose.addEventListener("click", async () => {
     return;
   }
   // The Tab is about to go, so where its project landed is said where opening files reports.
-  openNotes = [{ tone: "info", name: fileName(saved), text: "Als Projekt gespeichert.", detail: `Ordner: ${folderOf(saved)}` }];
+  openNotes = [{ tone: "info", name: fileName(saved), text: T.savedAsProject, detail: T.folderIs(folderOf(saved)) }];
   if (closeAsking === tab) closeTab(tab);
   else draw();
 });
@@ -2765,6 +2777,67 @@ view.takeOverAsking.addEventListener("click", (event) => {
   if (event.target === view.takeOverAsking) closeTakeOver();
 });
 
+/* ── SmartTrim's own update (ADR-0032) ─────────────────────────────────────────────────────────────────────── */
+
+/** Tabs holding stretches no saved project holds: a restart closes every Tab at once, and those would be gone. */
+function tabsLosingHeld(): number {
+  return tabs.filter((tab) => askBeforeClosing(tab.session)).length;
+}
+
+/** The line under the header: a download under way, an update ready to install, or one that did not arrive. */
+function drawUpdate(): void {
+  const notice = updateNotice(selfUpdate, T);
+  view.updateNote.hidden = notice === null;
+  const losing = tabsLosingHeld();
+  // Saved meanwhile, or the update moved on: nothing is left to ask about.
+  if (!notice?.restart || losing === 0) confirmingRestart = false;
+  if (!notice) return;
+  view.updateText.textContent = confirmingRestart ? T.restartLosesHeld(losing) : notice.text;
+  view.restartForUpdate.hidden = !notice.restart;
+  view.restartForUpdate.textContent = confirmingRestart ? T.restartAnyway : T.restartNow;
+  // A restart ends everything at once; a Recording being read, cut or saved would be left halfway.
+  const busy = preparing || job !== null || allTabsBusy();
+  view.restartForUpdate.disabled = busy;
+  view.restartForUpdate.title = busy ? T.restartWaits : "";
+  view.cancelRestart.hidden = !confirmingRestart;
+}
+
+view.restartForUpdate.addEventListener("click", async (event) => {
+  // The question appears on the very button that was pressed: the second click of a double click must not answer it.
+  // A click made with the keyboard counts nought, a double click's second click two.
+  if (event.detail > 1) return;
+  if (!confirmingRestart && tabsLosingHeld() > 0) {
+    confirmingRestart = true;
+    drawUpdate();
+    // As in the dialog before closing a Tab: a stray Enter cancels rather than throws held stretches away.
+    view.cancelRestart.focus();
+    return;
+  }
+  confirmingRestart = false;
+  view.restartForUpdate.disabled = true;
+  // When it works SmartTrim closes under this window; only a refusal comes back.
+  show(viewed(), await window.smarttrim.restartToInstall(), T.restartFailed);
+  draw();
+});
+view.cancelRestart.addEventListener("click", () => {
+  confirmingRestart = false;
+  drawUpdate();
+});
+
+window.smarttrim.onUpdateState((state) => {
+  selfUpdate = state;
+  drawUpdate();
+});
+// Asked once the window listens, so a download that began before it had loaded is shown too.
+void (async () => {
+  const answer = await window.smarttrim.updateState();
+  // A state that arrived meanwhile through onUpdateState is newer than this answer.
+  if (answer.ok && selfUpdate.kind === "idle") {
+    selfUpdate = answer.value;
+    drawUpdate();
+  }
+})();
+
 draw();
 
 window.smarttrim.onReadProgress(({ tabId, done, total }) => {
@@ -2775,10 +2848,13 @@ window.smarttrim.onReadProgress(({ tabId, done, total }) => {
   drawReading(tab);
 });
 
-// A first run has to fetch ffmpeg (172 MB) and the Silero model before anything can be read. Later runs find them
-// and this is over before the window has finished drawing.
-window.smarttrim.onToolsProgress(({ name, percent }) => {
-  setStatus(null, T.loadingTool(name, percent));
+// A first run has to fetch ffmpeg (176 MB) and the Silero model before anything can be read, and so does the first
+// run after an update that pins another build. An installation without a record of what was checked — one made by
+// 1.1.0 — hashes what is there first, for most of a second (ADR-0031). Later runs trust the record, and this is over
+// before the window has finished drawing.
+window.smarttrim.onToolsProgress(({ name, step, replacing, percent }) => {
+  if (step === "checking") setStatus(null, T.checkingTool(name, percent));
+  else setStatus(null, replacing ? T.reloadingTool(name, percent) : T.loadingTool(name, percent));
 });
 // The user's own Presets are read once at startup; without them the dropdown shows only the built-in three.
 void (async () => {

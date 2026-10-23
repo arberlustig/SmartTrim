@@ -25,7 +25,9 @@ Only Premiere can confirm an import truly works, and only the owner can run it. 
 
 ## Tooling
 
-`vendor/` holds ffmpeg (LGPL build) and the Silero VAD model, git-ignored; they are downloaded on first run in production. `bench/` holds measurement scripts, not product code.
+`vendor/` holds ffmpeg (LGPL build) and the Silero VAD model, git-ignored; they are downloaded on first run in production, every file pinned by its own checksum (ADR-0031). The pinned ffmpeg build lives at BtbN only until about 2028-09: move the pin to a newer month-end build before then, checked with `bench/compare_ffmpeg_builds.ts`. `bench/` holds measurement scripts, not product code.
+
+An installed SmartTrim updates itself from the latest GitHub release (ADR-0032). Every release carries the installer and `latest.yml` (without them no installed copy can update) and the `.blockmap`; publishing one is outward-facing, so ask the owner first.
 
 ## Working with the owner
 

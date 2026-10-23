@@ -154,6 +154,7 @@ export interface Texts {
   readonly saveProject: string;
   readonly saveProjectTitle: string;
   readonly projectSavedAt: (path: string) => string;
+  readonly savedAsProject: string;
   readonly playFailed: string;
   readonly nothingKeptHere: string;
   readonly because: (detail: string) => string;
@@ -184,9 +185,21 @@ export interface Texts {
   readonly savedDot: string;
   readonly folderIs: (folder: string) => string;
 
-  // The first start
+  // The first start, and the first start after an update that pins other tools (ADR-0031)
   readonly loadingTool: (name: string, percent: number) => string;
+  readonly reloadingTool: (name: string, percent: number) => string;
+  readonly checkingTool: (name: string, percent: number) => string;
   readonly toolsMissing: string;
+
+  // SmartTrim's own update (ADR-0032)
+  readonly updateLoading: (version: string, percent: number) => string;
+  readonly updateReady: (version: string) => string;
+  readonly updateFailed: (version: string) => string;
+  readonly restartNow: string;
+  readonly restartWaits: string;
+  readonly restartLosesHeld: (tabCount: number) => string;
+  readonly restartAnyway: string;
+  readonly restartFailed: string;
 }
 
 /** Counts with their words, the ones at nought left out; "nothing to do" when every count is nought. */
@@ -363,6 +376,7 @@ const de: Texts = {
   saveProject: "Projekt speichern",
   saveProjectTitle: "Speichert neben der Aufnahme – oder in das Projekt, aus dem dieser Tab kommt",
   projectSavedAt: (path) => `Projekt gespeichert: ${path}`,
+  savedAsProject: "Als Projekt gespeichert.",
   playFailed: "Der Ton ließ sich nicht abspielen",
   nothingKeptHere: "Hier wird alles herausgeschnitten – zum Anhören weiter herauszoomen oder „überspringen“ ausschalten.",
   because: (detail) => `Grund: ${detail}`,
@@ -421,7 +435,21 @@ const de: Texts = {
   folderIs: (folder) => `Ordner: ${folder}`,
 
   loadingTool: (name, percent) => `Lädt ${name} … ${percent} % (nur beim ersten Start)`,
+  reloadingTool: (name, percent) => `Lädt ${name} neu … ${percent} %`,
+  checkingTool: (name, percent) => `Prüft ${name} … ${percent} %`,
   toolsMissing: "Die Werkzeuge fehlen",
+
+  updateLoading: (version, percent) => `SmartTrim ${version} wird geladen … ${percent} %`,
+  updateReady: (version) => `SmartTrim ${version} ist bereit und wird beim Schließen installiert.`,
+  updateFailed: (version) => `SmartTrim ${version} ließ sich nicht laden – SmartTrim versucht es später wieder.`,
+  restartNow: "Jetzt neu starten",
+  restartWaits: "Geht, sobald nichts mehr läuft",
+  restartLosesHeld: (tabCount) =>
+    tabCount === 1
+      ? "In einem Tab sind festgehaltene Stellen nicht gespeichert – beim Neustart sind sie weg."
+      : `In ${tabCount} Tabs sind festgehaltene Stellen nicht gespeichert – beim Neustart sind sie weg.`,
+  restartAnyway: "Trotzdem neu starten",
+  restartFailed: "Der Neustart ging nicht",
 };
 
 const en: Texts = {
@@ -590,6 +618,7 @@ const en: Texts = {
   saveProject: "Save project",
   saveProjectTitle: "Saves next to the recording – or into the project this tab came from",
   projectSavedAt: (path) => `Project saved: ${path}`,
+  savedAsProject: "Saved as a project.",
   playFailed: "The sound could not be played",
   nothingKeptHere: "Everything here is cut out – zoom out to listen, or switch off “skip”.",
   because: (detail) => `Reason: ${detail}`,
@@ -647,7 +676,21 @@ const en: Texts = {
   folderIs: (folder) => `Folder: ${folder}`,
 
   loadingTool: (name, percent) => `Loading ${name} … ${percent} % (first start only)`,
+  reloadingTool: (name, percent) => `Loading ${name} again … ${percent} %`,
+  checkingTool: (name, percent) => `Checking ${name} … ${percent} %`,
   toolsMissing: "The tools are missing",
+
+  updateLoading: (version, percent) => `Loading SmartTrim ${version} … ${percent} %`,
+  updateReady: (version) => `SmartTrim ${version} is ready and will be installed when you close it.`,
+  updateFailed: (version) => `SmartTrim ${version} could not be loaded – SmartTrim will try again later.`,
+  restartNow: "Restart now",
+  restartWaits: "Possible once nothing is running",
+  restartLosesHeld: (tabCount) =>
+    tabCount === 1
+      ? "Held stretches in one tab are not saved – restarting loses them."
+      : `Held stretches in ${tabCount} tabs are not saved – restarting loses them.`,
+  restartAnyway: "Restart anyway",
+  restartFailed: "The restart failed",
 };
 
 export const TEXTS: Record<Language, Texts> = { de, en };

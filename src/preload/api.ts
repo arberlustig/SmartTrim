@@ -9,6 +9,7 @@ import type { CutSummary, PlanSettings, SourceTrackWaveform } from "../app/runCu
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import type { UpdateState } from "../app/selfUpdate.ts";
 
 /**
  * Every answer the window gets from the main process, so a refusal reaches the user as a sentence instead of as an
@@ -65,11 +66,14 @@ export interface ReadProgress {
   total: number;
 }
 
-/** How far the first-run download has got. */
+/**
+ * How far making sure of the tools has got: checking files that are there, or fetching them — the first time, or
+ * replacing what an update no longer pins (ADR-0031).
+ */
 export interface ToolsProgress {
   name: string;
-  receivedBytes: number;
-  totalBytes: number;
+  step: "checking" | "fetching";
+  replacing: boolean;
   percent: number;
 }
 
@@ -79,10 +83,19 @@ export interface ToolsProgress {
  * answered from the wrong one (ADR-0025).
  */
 export interface SmartTrimApi {
-  /** Finds ffmpeg and the Silero model, downloading them on a first run. Everything else waits for this. */
+  /**
+   * Finds ffmpeg and the Silero model, downloading them on a first run and after an update that pins other ones.
+   * Everything else waits for this.
+   */
   ensureTools(): Promise<Answer<null>>;
-  /** Called while the first-run download runs. */
+  /** Called while files are checked or downloaded. */
   onToolsProgress(listen: (progress: ToolsProgress) => void): void;
+  /** Where SmartTrim's own update stands now (ADR-0032). */
+  updateState(): Promise<Answer<UpdateState>>;
+  /** Called whenever SmartTrim's own update moves on. */
+  onUpdateState(listen: (state: UpdateState) => void): void;
+  /** Closes SmartTrim, installs the downloaded update and starts it again. */
+  restartToInstall(): Promise<Answer<null>>;
   /** Opens the file dialog, in the window's words, and opens every file the user picked, each in a Tab. */
   chooseRecording(dialogs: DialogTexts): Promise<Answer<OpenedInWindow | null>>;
   /** Where a file dropped on the window lives on disk; empty for something dropped that is no file on disk. */

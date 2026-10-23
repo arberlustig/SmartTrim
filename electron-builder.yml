@@ -3,8 +3,10 @@ productName: SmartTrim
 directories:
   buildResources: build
   output: release
-# Only what the app runs: the three bundles, the manifest, and the one runtime dependency. ffmpeg and the Silero
-# model are not in here — they are downloaded on first run into the user's own folder (ADR-0015).
+# Only what the app runs: the three bundles and the manifest. electron-builder adds the runtime dependencies itself
+# (onnxruntime-node, electron-updater); onnxruntime-node is named here only to prune its binaries for other systems.
+# ffmpeg and the Silero model are not in here — they are downloaded on first run into the user's own folder
+# (ADR-0015, ADR-0031).
 files:
   - out/**/*
   - package.json
@@ -29,3 +31,13 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: SmartTrim
+  # No spaces: GitHub turns a space in an uploaded file's name into a dot, while latest.yml names the installer with
+  # dashes. The two must agree, or every installed SmartTrim finds the update and cannot download it (ADR-0032).
+  artifactName: ${productName}-Setup-${version}.${ext}
+# Where installed copies look for a newer SmartTrim: the releases of the public repository (ADR-0032). Nothing is
+# uploaded by the build itself (`--publish never`); a release is made by hand with the installer, its .blockmap and
+# latest.yml from release/.
+publish:
+  provider: github
+  owner: arberlustig
+  repo: SmartTrim

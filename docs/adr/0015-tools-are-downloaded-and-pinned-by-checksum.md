@@ -1,5 +1,10 @@
 # ffmpeg and the Silero model are downloaded on first run, pinned by checksum
 
+> **Since 2026-10-23 (ADR-0031):** the BtbN build pinned below was deleted by BtbN after two weeks, so fresh
+> installations failed. ffmpeg now comes from BtbN's month-end build of 2026-09-30, which answered every question
+> SmartTrim asks byte for byte like this one; every kept file is pinned by its own checksum, and what was checked is
+> recorded so an update that pins another build replaces the old one.
+
 SmartTrim ships neither ffmpeg nor the Silero VAD model. On a first run `src/tools/ensureTools.ts` fetches both into
 the user's own folder — `%APPDATA%/SmartTrim/tools` for the installed app, the git-ignored `vendor/` in a checkout,
 where the `bench/` scripts already look. Measured on the owner's machine: 174 MB in **20 s**, and a later start finds

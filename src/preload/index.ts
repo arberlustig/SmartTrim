@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { UpdateState } from "../app/selfUpdate.ts";
 import type { ReadProgress, SmartTrimApi, ToolsProgress } from "./api.ts";
 
 // The window runs without Node (contextIsolation), so this is the whole surface it can reach. An IPC handler takes a
@@ -8,6 +9,11 @@ const api: SmartTrimApi = {
   onToolsProgress: (listen) => {
     ipcRenderer.on("tools:progress", (_event, progress: ToolsProgress) => listen(progress));
   },
+  updateState: () => ipcRenderer.invoke("update:state"),
+  onUpdateState: (listen) => {
+    ipcRenderer.on("update:state", (_event, state: UpdateState) => listen(state));
+  },
+  restartToInstall: () => ipcRenderer.invoke("update:restart"),
   chooseRecording: (dialogs) => ipcRenderer.invoke("recording:choose", dialogs),
   // A dropped File no longer carries its path (Electron 32 removed File.path); only this call can still ask for it.
   pathOf: (file) => webUtils.getPathForFile(file),

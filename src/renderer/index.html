@@ -83,6 +83,31 @@
         clip: rect(0 0 0 0);
         white-space: nowrap;
       }
+      /* SmartTrim's own update (ADR-0032): one line under the header, in the muted voice of the status line, with the
+         accent only on the button that acts. */
+      .updateNote {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        align-items: center;
+        padding: 7px 32px;
+        border-bottom: 1px solid var(--line);
+        background: var(--raised);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .updateNote[hidden],
+      .updateNote button[hidden] {
+        display: none;
+      }
+      .updateNote button {
+        padding: 4px 12px;
+        font-size: 13px;
+      }
+      .updateNote button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
       /* One Tab per Recording. A long row of them scrolls sideways rather than wrapping into a second strip. */
       .tabStrip {
         display: flex;
@@ -938,6 +963,12 @@
         </select>
       </label>
     </header>
+    <!-- SmartTrim's own update (ADR-0032): a calm line under the header, there only while there is something to say. -->
+    <div class="updateNote" id="updateNote" role="status" hidden>
+      <span id="updateText"></span>
+      <button id="restartForUpdate" class="primary" type="button"></button>
+      <button id="cancelRestart" type="button" data-text="cancel" hidden>Abbrechen</button>
+    </div>
     <nav class="tabStrip" id="tabStrip" hidden></nav>
     <div class="openNotes" id="openNotes" hidden>
       <p class="notesHeading" id="openNotesHeading"></p>

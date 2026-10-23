@@ -12,11 +12,21 @@ import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
 import { newTabStore, type OnRead } from "../app/tabStore.ts";
 import { newPictureFrames, type PictureFrames } from "../picture/pictureFrames.ts";
-import type { Answer, ExcerptRequest, OpenedInWindow, OpenedTab, PictureFramesAnswer, PictureState } from "../preload/api.ts";
+import type {
+  Answer,
+  ExcerptRequest,
+  OpenedInWindow,
+  OpenedTab,
+  PictureFramesAnswer,
+  PictureState,
+  ToolsProgress,
+} from "../preload/api.ts";
 import type { Excerpt } from "../playback/readExcerpt.ts";
 import type { SavedChoices } from "../project/openTrimProject.ts";
 import { PINNED_TOOLS, ensureTools } from "../tools/ensureTools.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
+import type { UpdateState } from "../app/selfUpdate.ts";
+import { keepUpToDate } from "./keepUpToDate.ts";
 
 /**
  * Where ffmpeg, ffprobe and the Silero model live: next to the installed app they belong to the user, so they go in
@@ -34,21 +44,31 @@ function presetDirectory(): string {
   return app.getPath("userData");
 }
 
-/** The tools, once they have been found or downloaded. Downloading 172 MB is a first-run affair. */
+/**
+ * The tools, once they have been found or downloaded. Downloading 176 MB is a first-run affair — and happens again
+ * only after an update that pins another build (ADR-0031).
+ */
 let tools: AnalysisTools | null = null;
 
 /**
- * Hands back the tools, downloading what is missing (ADR-0015) and telling the window how far it has got. The
- * progress is thinned out to whole percent: 172 MB arrive in thousands of chunks, and the window only draws a line.
+ * Hands back the tools, checking and downloading what is not the pinned files (ADR-0015, ADR-0031) and telling the
+ * window how far it has got. The progress is thinned out to whole percent: 176 MB arrive in thousands of chunks, and
+ * the window only draws a line.
  */
 async function analysisTools(window: BrowserWindow): Promise<AnalysisTools> {
   if (tools) return tools;
-  let lastPercent = -1;
+  let lastSaid = "";
   tools = await ensureTools(toolsDirectory(), PINNED_TOOLS, (step) => {
-    const percent = Math.floor((step.receivedBytes / Math.max(step.totalBytes, 1)) * 100);
-    if (percent === lastPercent || window.isDestroyed()) return;
-    lastPercent = percent;
-    window.webContents.send("tools:progress", { ...step, percent });
+    const progress: ToolsProgress = {
+      name: step.name,
+      step: step.step,
+      replacing: step.replacing ?? false,
+      percent: Math.floor((step.doneBytes / Math.max(step.totalBytes, 1)) * 100),
+    };
+    const said = JSON.stringify(progress);
+    if (said === lastSaid || window.isDestroyed()) return;
+    lastSaid = said;
+    window.webContents.send("tools:progress", progress);
   });
   return tools;
 }
@@ -408,9 +428,38 @@ function createWindow(): void {
   }
 }
 
+/**
+ * An installed SmartTrim runs once. The silent installer of an update ends every SmartTrim in its folder without a
+ * question (ADR-0032), so a second one could lose held stretches nobody was asked about. A second start shows the
+ * window that is open instead. A checkout takes no lock, so it can still run beside the installed SmartTrim for tests.
+ */
+const onlyInstance = !app.isPackaged || app.requestSingleInstanceLock();
+if (!onlyInstance) app.quit();
+
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
+
 void app.whenReady().then(() => {
+  if (!onlyInstance) return;
   // The Windows title bar follows this, so it is dark like the window under it.
   nativeTheme.themeSource = "dark";
+  // SmartTrim's own update runs beside everything else and is never waited for (ADR-0032). The window asks for the
+  // state once it has loaded, so a change sent before it listened is not lost.
+  const selfUpdate = keepUpToDate((state) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("update:state", state);
+  });
+  ipcMain.handle("update:state", answering((): UpdateState => selfUpdate.state()));
+  ipcMain.handle(
+    "update:restart",
+    answering((): null => {
+      selfUpdate.restartToInstall();
+      return null;
+    }),
+  );
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
