@@ -98,7 +98,8 @@ line. electron-updater worked out that 1.1 MB of 129 MB had changed; the local s
 ranges at once, so it fell back to the whole installer — GitHub answers them one by one, as electron-updater asks it
 to. Every request carried the shared `x-user-staging-id`.
 
-Seen and not explained: the first start after that restart checked for an update (the server saw the request) but
-left `update.log` as the previous version had written it; the next start wrote it as it should. Not checked: the
-silent installation on closing without the button, the question about held stretches in a real window, and an update
-from GitHub itself, which needs a published release — the owner's check, from 1.2.0 to the next version.
+The first start after that restart wrote its check to `update.log` as it should ("Update for version 0.9.2 is not
+available"); for a while it looked missing, because the session's own tools saw a separate view of the data folder.
+Not checked: the silent installation on closing without the button, the question about held stretches in a real
+window, and an update from GitHub itself, which needs a published release — the owner's check, from 1.2.0 to the next
+version.
