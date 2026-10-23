@@ -93,10 +93,14 @@ export function recordingInfoFromProbe(path: string, ffprobeOutput: string): Rec
     };
   };
 
-  // Frame positions are only times if every frame lasts equally long, so the frames must fill the video's duration
-  // exactly. Under a variable frame rate every cut would drift.
+  // Frame positions are only times if every frame lasts equally long, so the frames must fill the video's duration.
+  // Under a variable frame rate every cut would drift. OBS writes that duration in whole milliseconds, so it may miss
+  // the last frame's end by less than one; a millisecond or more is refused (ADR-0009). Compared as exact fractions:
+  // |frames - spanned| frames, times the seconds per frame, must stay under 1/1000 s.
   const videoSpan = framesSpanned(video);
-  if (BigInt(durationFrames) * videoSpan.denominator !== videoSpan.numerator) {
+  const missedBy = BigInt(durationFrames) * videoSpan.denominator - videoSpan.numerator;
+  const missedSecondsTimes1000 = (missedBy < 0n ? -missedBy : missedBy) * BigInt(frameRate.denominator) * 1000n;
+  if (missedSecondsTimes1000 >= videoSpan.denominator * BigInt(frameRate.numerator)) {
     const spanned = Number((Number(videoSpan.numerator) / Number(videoSpan.denominator)).toFixed(2));
     throw new Error(
       `${path} has ${durationFrames} video frames, but its video lasts ${spanned} frames at ${frameRate.numerator}/${frameRate.denominator} fps: the frame rate is not constant.`,

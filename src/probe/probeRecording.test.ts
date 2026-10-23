@@ -76,6 +76,27 @@ describe("recordingInfoFromProbe", () => {
     );
   });
 
+  // Measured on a 30-minute OBS Recording on 2026-10-23: all 109205 frames sit exactly on their 1/60 s, yet the video
+  // reports 27956475 ticks of 1/15360 s, five short of the last frame's end. OBS writes the length in whole
+  // milliseconds — 1820.083 s for 1820.0833… s — so at 60 fps two Recordings in three cannot fill it exactly (ADR-0009).
+  test("frames that fill the video's duration to within the millisecond it is written in are a constant frame rate", () => {
+    const obs = withStream(multitrackProbe, 0, { time_base: "1/15360", duration_ts: 27956475, nb_frames: "109205" });
+
+    const recording = recordingInfoFromProbe("C:\\media\\long-recording.mp4", obs);
+
+    expect(recording.durationFrames).toBe(109205);
+    expect(recording.sourceTracks[0]?.durationFrames).toBe(109205);
+  });
+
+  test("frames that miss the video's duration by a millisecond or more are still refused", () => {
+    // 16 ticks of 1/15360 s are 1.04 ms.
+    const variable = withStream(multitrackProbe, 0, { time_base: "1/15360", duration_ts: 27956480 - 16, nb_frames: "109205" });
+
+    expect(() => recordingInfoFromProbe("C:\\media\\long-recording.mp4", variable)).toThrow(
+      "C:\\media\\long-recording.mp4 has 109205 video frames, but its video lasts 109204.94 frames at 60/1 fps: the frame rate is not constant.",
+    );
+  });
+
   // Matroska, for one, reports no duration_ts per stream. A guessed length would move where clips end.
   test("a stream that does not report a value SmartTrim needs is refused instead of guessed", () => {
     const withoutLength = withStream(multitrackProbe, 2, { duration_ts: undefined });

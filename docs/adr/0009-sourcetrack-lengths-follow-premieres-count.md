@@ -24,11 +24,31 @@ The single-track Recording agrees but cannot tell the rules apart: its audio run
 
 ## Refused rather than guessed
 
-- **A variable frame rate.** The video's frame count must fill its duration at `r_frame_rate` exactly, compared as fractions without tolerance; otherwise every cut would drift. Both Recordings and ffmpeg-generated test files fill it exactly. If a Recording with a truly constant frame rate is ever refused, loosen the check with that Recording in hand.
+- **A variable frame rate.** The video's frame count must fill its duration at `r_frame_rate` to within **less than one millisecond**, compared as exact fractions; otherwise every cut would drift. Until 2026-10-23 it had to fill it exactly — see "Loosened by a millisecond" below.
 - **A value ffprobe does not report.** Matroska, for one, reports no `duration_ts` or `nb_frames` per stream, so MKV Recordings are refused until someone measures how to read their lengths.
 - **Audio codecs other than AAC that report no bit depth**, such as Opus. AAC reports none either; both Premiere exports write 16 for it. Codecs with a bit depth of their own, like PCM, keep theirs.
 - **Anything but exactly one video stream.** ffprobe lists a cover picture as a video stream too.
 - **A stream that does not start at pts 0.** The export places every SourceTrack's clips at the same Recording frames as the video's.
+
+## Loosened by a millisecond (2026-10-23)
+
+The exact check refused a 30-minute OBS Recording (60 fps, six stereo SourceTracks) with "109205 video frames, but its
+video lasts 109204.98 frames". Its video counts time in 1/15360 s, 256 ticks a frame. Reading every packet showed all
+109205 frames exactly on their slot (pts = 256 k) and every one 256 ticks long, so the last ends at 27956480 — but the
+stream reports `duration_ts` 27956475. OBS writes the length in whole milliseconds, 1820.083 s for 1820.0833… s, the
+same millisecond rounding this ADR found in the audio's edit lists. At 60 fps a length is a whole millisecond only when
+the frame count divides by three, so roughly two OBS Recordings in three were refused although nothing about them
+varies. The two fixtures count video time in 1/60 s and 1/15360 s with a frame count that happens to fit, which is why
+nothing was refused before.
+
+The check now allows the frames and the duration to differ by less than one millisecond, either way — the precision
+the length is written in, and far below a frame (16.7 ms at 60 fps), so a real variable frame rate is still refused.
+`durationFrames` stays `nb_frames`: the frames are all there. Tested with the Recording's own numbers in
+`probeRecording.test.ts`, and the Recording cut end to end: 81 KeepSegments, the last ending at frame 109205.
+
+Not checked: whether Premiere counts such a video as 109205 frames, like ffprobe's `nb_frames`, or reads the
+millisecond length and makes it 109204. Only the last KeepSegment touches that frame; a real import of a cut that keeps
+the end of such a Recording settles it.
 
 ## Consequences
 
