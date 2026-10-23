@@ -86,5 +86,19 @@ from 1.2.0 to the next version, since 1.1.0 left no `.blockmap` on GitHub.
 `src/app/selfUpdate.test.ts`: a found version loads and becomes ready; no newer version leaves SmartTrim current; a
 check that fails before anything was found shows nothing; a found version that does not arrive is said to have failed;
 a ready update stays ready whatever comes after; when another check may run; and what the window says in each state, in
-both languages. The line itself and its button are window glue (ADR-0012), checked over the Chrome DevTools protocol.
-A real update from GitHub can only be checked once a release with `latest.yml` exists — the owner's check.
+both languages. The line itself and its button are window glue (ADR-0012).
+
+Checked end to end on 2026-10-23 with a copy built under another name (SmartTrimUpdateTest: its own appId, folder,
+data and shortcut) reading a local server instead of GitHub. Version 0.9.1, installed silently into a chosen folder,
+found 0.9.2 at start and downloaded it while — a fresh installation — it fetched ffmpeg from the month-end build of
+ADR-0031 and recorded the pinned checksums. The line said "SmartTrim 0.9.2 ist bereit und wird beim Schließen
+installiert.", and "Jetzt neu starten" waited ("Geht, sobald nichts mehr läuft") until ffmpeg was there. Pressing it
+installed 0.9.2 silently into the same folder and started it, and the new version found itself current and showed no
+line. electron-updater worked out that 1.1 MB of 129 MB had changed; the local server could not answer several byte
+ranges at once, so it fell back to the whole installer — GitHub answers them one by one, as electron-updater asks it
+to. Every request carried the shared `x-user-staging-id`.
+
+Seen and not explained: the first start after that restart checked for an update (the server saw the request) but
+left `update.log` as the previous version had written it; the next start wrote it as it should. Not checked: the
+silent installation on closing without the button, the question about held stretches in a real window, and an update
+from GitHub itself, which needs a published release — the owner's check, from 1.2.0 to the next version.
