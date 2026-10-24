@@ -72,35 +72,52 @@ export function recordingInfoFromProbe(path: string, ffprobeOutput: string): Rec
     return value as NonNullable<ProbeStream[Field]>;
   };
 
-  // The export places every SourceTrack's clips at the same Recording frames as the video's, which only holds when
-  // every stream starts with the Recording.
-  for (const stream of [video, ...audio]) {
-    const startPts = read(stream, "start_pts");
-    if (startPts !== 0) {
-      throw new Error(`${path}: ${labelOf(stream)} starts at pts ${startPts}, not at the start of the Recording.`);
-    }
-  }
-
   const frameRate = parseRatio(read(video, "r_frame_rate"));
+  // Every check below divides by it. ffprobe reports 1/0 for a video whose frames all share one moment.
+  if (![frameRate.numerator, frameRate.denominator].every((part) => Number.isInteger(part) && part > 0)) {
+    throw new Error(`${path}: the video stream reports a frame rate of ${read(video, "r_frame_rate")}.`);
+  }
   const durationFrames = Number(read(video, "nb_frames"));
 
-  // How many frames at the Recording's frame rate a stream's duration spans, as an exact fraction.
-  const framesSpanned = (stream: ProbeStream) => {
+  // How many frames at the Recording's frame rate a number of a stream's ticks spans, as an exact fraction.
+  const framesIn = (stream: ProbeStream, ticks: number) => {
     const timeBase = parseRatio(read(stream, "time_base"));
     return {
-      numerator: BigInt(read(stream, "duration_ts")) * BigInt(timeBase.numerator) * BigInt(frameRate.numerator),
+      numerator: BigInt(ticks) * BigInt(timeBase.numerator) * BigInt(frameRate.numerator),
       denominator: BigInt(timeBase.denominator) * BigInt(frameRate.denominator),
     };
   };
+  const framesSpanned = (stream: ProbeStream) => framesIn(stream, read(stream, "duration_ts"));
+  /** Whether `numerator / denominator` frames, either way, stay under half a frame. */
+  const underHalfAFrame = (numerator: bigint, denominator: bigint) =>
+    2n * (numerator < 0n ? -numerator : numerator) < denominator;
+
+  // The export places every SourceTrack's clips at the same Recording frames as the video's, and the audio is read
+  // from its own first sample, which only holds when every stream starts with the Recording. A start less than half a
+  // frame away counts as the start: no frame the export writes can tell them apart. A user's Recording started its
+  // video at pts 90, most likely a millisecond in 1/90000 s (ADR-0009). Anything further would shift every cut, and
+  // how far goes into the refusal.
+  for (const stream of [video, ...audio]) {
+    const startPts = read(stream, "start_pts");
+    const start = framesIn(stream, startPts);
+    if (!underHalfAFrame(start.numerator, start.denominator)) {
+      const timeBase = read(stream, "time_base");
+      const { numerator, denominator } = parseRatio(timeBase);
+      const milliseconds = Number(((Math.abs(startPts) * numerator * 1000) / denominator).toFixed(2));
+      throw new Error(
+        `${path}: ${labelOf(stream)} starts ${milliseconds} ms ${startPts > 0 ? "after" : "before"} the start of the Recording (pts ${startPts} in ${timeBase} s); only a stream that starts within half a frame of it can be cut exactly.`,
+      );
+    }
+  }
 
   // Frame positions are only times if every frame lasts equally long, so the frames must fill the video's duration.
-  // Under a variable frame rate every cut would drift. OBS writes that duration in whole milliseconds, so it may miss
-  // the last frame's end by less than one; a millisecond or more is refused (ADR-0009). Compared as exact fractions:
-  // |frames - spanned| frames, times the seconds per frame, must stay under 1/1000 s.
+  // Under a variable frame rate every cut would drift. A recorder that keeps every frame on its slot can still miss
+  // the last frame's end by a little — OBS writes the duration in whole milliseconds, the NVIDIA App stamps every frame
+  // with a jittered time —, but a frame dropped or doubled misses it by a whole frame. Half a frame or more is refused
+  // (ADR-0009), compared as exact fractions.
   const videoSpan = framesSpanned(video);
   const missedBy = BigInt(durationFrames) * videoSpan.denominator - videoSpan.numerator;
-  const missedSecondsTimes1000 = (missedBy < 0n ? -missedBy : missedBy) * BigInt(frameRate.denominator) * 1000n;
-  if (missedSecondsTimes1000 >= videoSpan.denominator * BigInt(frameRate.numerator)) {
+  if (!underHalfAFrame(missedBy, videoSpan.denominator)) {
     const spanned = Number((Number(videoSpan.numerator) / Number(videoSpan.denominator)).toFixed(2));
     throw new Error(
       `${path} has ${durationFrames} video frames, but its video lasts ${spanned} frames at ${frameRate.numerator}/${frameRate.denominator} fps: the frame rate is not constant.`,

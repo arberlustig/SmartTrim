@@ -314,6 +314,14 @@ export function newPictureFrames(ffmpegPath: string, options: PictureFramesOptio
           stock.beyond = fromFrame + run.made;
           if (stock.wanted) stock.wanted = { ...stock.wanted, toFrame: Math.min(stock.wanted.toFrame, stock.beyond) };
         }
+      } else if (code === 0 && !errors && fromFrame > 0 && fromFrame === lastPictureFrameOf(stock.recording)) {
+        // Nothing at or after the last frame's slot, and ffmpeg content: that frame lies a little before its slot, as
+        // a jittered recorder stamps it (ADR-0009). The frame before stands in, as for frames the Recording lacks.
+        stock.beyond = fromFrame;
+        if (stock.wanted) {
+          const { wanted } = stock;
+          stock.wanted = { fromFrame: Math.min(wanted.fromFrame, fromFrame - 1), toFrame: Math.min(wanted.toFrame, fromFrame) };
+        }
       } else {
         stock.emptyRuns += 1;
         // The graphics card refused: this stretch goes to the processor, and the card is asked again next time.

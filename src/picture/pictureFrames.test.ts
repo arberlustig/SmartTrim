@@ -205,6 +205,39 @@ describe("pictureFrames", () => {
     }
   }, 60000);
 
+  // The NVIDIA App stamps every frame with a jittered moment, so its last frame can lie a little before its own slot
+  // (ADR-0009). ffmpeg sought to that slot keeps nothing, and three such empty runs used to be reported as a picture
+  // that cannot be shown — on a Recording whose every other frame comes.
+  test("a last frame stamped just before its slot is stood in for by the frame before, not reported as a failure", async () => {
+    const path = join(workDir, "last-frame-early.mp4");
+    execFileSync(vendor("ffmpeg.exe"), [
+      ...["-v", "error"],
+      ...[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=black:size=160x90:rate=30:duration=2,format=yuv420p,geq=lum='16+4*mod(N\\,50)':cb=128:cr=128," +
+          "settb=1/90000,setpts=N*3000-90*eq(N\\,59)",
+      ],
+      ...["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"],
+      // Without its own time base the encoder would round the frame back onto its slot.
+      ...["-map", "0:v", "-map", "1:a", "-t", "2", "-fps_mode", "passthrough", "-enc_time_base:v", "1/90000"],
+      ...["-c:v", "libopenh264", "-g", "90", "-b:v", "2M", "-c:a", "aac", "-video_track_timescale", "90000", path],
+    ]);
+    const early = await probeRecording(path, vendor("ffprobe.exe"));
+    expect(early.durationFrames).toBe(60);
+    const pictures = newPictureFrames(vendor("ffmpeg.exe"), { height: HEIGHT, wantSeconds: 1 });
+    try {
+      pictures.want(early, 59 / 30);
+
+      expect(whichFrame(await madeFrame(pictures, early, 59), path, [57, 58, 59])).toBe(58);
+      await vi.waitFor(() => expect(pictures.runs().some((run) => run.running)).toBe(false), { timeout: 15000 });
+      expect(pictures.failure(early)).toBeNull();
+    } finally {
+      pictures.stop();
+    }
+  }, 60000);
+
   // A Recording ffmpeg cannot read — moved away since it was opened, say — has to say so. Left to itself the window
   // shows an empty picture and nothing else.
   test("a Recording ffmpeg makes no frames of is reported with ffmpeg's own reason", async () => {
