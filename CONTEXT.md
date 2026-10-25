@@ -76,7 +76,7 @@ slices. It decides which SourceTracks are EmptyTracks and therefore hidden, and 
 _Avoid_: analysis, level check, probe
 
 **Preset**:
-A named set of thresholds suited to a kind of video, such as Gaming, Reaction or Podcast. TrackRoles are **not** part of it: which SourceTrack carries the microphone belongs to the Recording's OBS setup, not to the kind of video (ADR-0017). SmartTrim ships three; the user can save their own beside them, which live in their own folder and outlast any one Recording (ADR-0018). The three built-in ones cannot be overwritten or deleted.
+A named set of thresholds suited to a kind of video, such as Gaming, Reaction or Podcast. TrackRoles are **not** part of it: which SourceTrack carries the microphone belongs to the Recording's OBS setup, not to the kind of video (ADR-0017). SmartTrim ships three; the user can save their own beside them, which live in their own folder and outlast any one Recording (ADR-0018). The three built-in ones cannot be overwritten or deleted. Not to be confused with a PremierePreset.
 
 ## Output
 
@@ -91,11 +91,40 @@ a Recording nothing was scanned on (ADR-0014).
 _Avoid_: selected track, output track
 
 **TimelineTrack**:
-One audio track in the exported Premiere sequence. Premiere explodes every stereo SourceTrack into two TimelineTracks, one per Channel.
+One audio track in the exported Premiere sequence. Premiere explodes every stereo SourceTrack into two TimelineTracks, one per Channel. The video tracks are not TimelineTracks: the sequence has one plain video track, or one per VideoLayer.
 _Avoid_: track, output track
 
+**VideoLayer**:
+One of the video tracks (V1, V2, …) the exported sequence gets when the Tab has a LayerSetup; the window calls it a
+Videospur. It is the whole picture of the Recording seen through its own PremierePresets, in a Nest of its own, and its
+piece of every KeepSegment can start switched off so the user switches single pieces on in Premiere. Without a
+LayerSetup the sequence has one plain video track and no VideoLayer (ADR-0033). Say VideoLayer, not "video track", when
+one of these is meant.
+_Avoid_: track, copy, duplicate
+
+**Nest**:
+The nested sequence a VideoLayer becomes. It holds the whole uncut Recording once, as one clip carrying the
+VideoLayer's clip PremierePreset. On the timeline the VideoLayer has one **piece** per KeepSegment: a clipitem of the
+Nest with the KeepSegment's in and out, carrying the Nest PremierePreset. Pulling a piece's edge in Premiere brings back
+what was removed, and an effect applied to the clip inside the Nest reaches every piece at once (ADR-0033).
+_Avoid_: nested sequence, compound clip, Verschachtelung
+
+**PremierePreset**:
+One Premiere effect preset read from a `.prfpset` file; the window calls it a Premiere-Vorgabe. It is not a Preset,
+which is SmartTrim's own set of thresholds; in code it is always `premierePreset`, never `preset`. SmartTrim carries
+only its Motion, Crop and a pure Transform scale into the XML and names every other effect of it when it is added
+(ADR-0033).
+_Avoid_: preset, effect, Vorgabe
+
+**LayerSetup**:
+The VideoLayers a Tab exports with, in order, each with its optional clip PremierePreset (on the clip inside its Nest),
+its optional Nest PremierePreset (on every piece) and whether it starts switched off. A Tab has one once it has more
+than V1, or V1 carries a PremierePreset or the tick. Remembered per aspect ratio and saved in the TrimProject; on a
+Recording wider than 16:9 it makes the sequence frame 16:9 at the Recording's height (ADR-0033).
+_Avoid_: template, layout, arrangement, Video-Vorlage
+
 **TrimProject**:
-SmartTrim's own saved file (`.smarttrim`), holding the Recording as probed, what was ticked, the settings and the stretches the analysis found worth keeping — so that a session can be reopened and re-exported without analysing the Recording again. Neither the CutPlan nor the decoded audio is in it: the plan is recomputed, and a new threshold needs a fresh read (ADR-0016).
+SmartTrim's own saved file (`.smarttrim`), holding the Recording as probed, what was ticked, the settings, the LayerSetup and the stretches the analysis found worth keeping — so that a session can be reopened and re-exported without analysing the Recording again. Neither the CutPlan nor the decoded audio is in it: the plan is recomputed, and a new threshold needs a fresh read (ADR-0016).
 _Avoid_: project file, session, save file
 
 **Cut** (verb):
@@ -106,8 +135,9 @@ To remove a DeadZone. Note that in Premiere "cut" means splitting a clip *withou
 **Tab**:
 One Recording open in the window, with everything the window keeps about it: its CutSession, its cut, what was read
 of its SourceTracks, its Playhead. Nothing passes from one Tab to another unless the user takes settings over ("Für
-alle übernehmen", ADR-0026) — held stretches never —, a Recording is open in at most one Tab, and Tabs are not restored
-when SmartTrim starts again (ADR-0025).
+alle übernehmen", ADR-0026) — held stretches never — or a new Tab starts with the LayerSetup remembered for its aspect
+ratio (ADR-0033), a Recording is open in at most one Tab, and Tabs are not restored when SmartTrim starts again
+(ADR-0025).
 _Avoid_: document, workspace, session, window
 
 **CutSession**:

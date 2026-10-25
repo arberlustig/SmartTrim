@@ -21,6 +21,8 @@ Architecture decisions live in [docs/adr/](./docs/adr/). Read the relevant one b
 
 Exporting only some SourceTracks has no fixture: the Channel numbers of the exported SourceTracks stay as they are in the Recording, `<link>` numbering shrinks with the sequence (ADR-0014). The owner confirmed both cases in a real Premiere import on 2026-09-12.
 
+Several video tracks (VideoLayers, each a Nest dressed by PremierePresets) are decided in ADR-0033 and not built yet. Their ground truth is `fixtures/premiere/video-layers/`: four Premiere exports of the manual steps and the four `.prfpset` presets.
+
 Only Premiere can confirm an import truly works, and only the owner can run it. When export behaviour changes, say that a real import check is needed rather than claiming it works.
 
 ## Tooling

@@ -45,3 +45,10 @@ All SourceTracks are exported, EmptyTracks included — the owner's decision, so
 ## Consequences
 
 Passing tests mean the XML matches what Premiere writes, corrected where a real import proved Premiere reads it differently. They do not prove Premiere imports it: only a real import by the owner confirms that, and it is needed again whenever export behaviour changes.
+
+## Amended by ADR-0033
+
+With a LayerSetup the export writes VideoLayers: Nests, Basic Motion and Crop filters, a sequence frame other than the
+Recording's, and possibly fewer links than every clip of a KeepSegment to all the others. Some of it departs from what
+Premiere writes (a moved anchor is written centre-anchored, a pure Transform scale is folded into Motion) and is written
+pending a real import rather than refused. Without a LayerSetup everything above stands unchanged.

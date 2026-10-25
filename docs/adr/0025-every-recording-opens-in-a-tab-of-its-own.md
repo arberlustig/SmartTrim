@@ -142,3 +142,7 @@ status line. No project save dialog is left; the Premiere save dialog, which the
   kept the Tab, Schließen showed the right neighbour; the project then opened with its held stretch and closed without
   a question; showing another Tab stopped a playing SourceTrack. Real mouse drags and the multi-select dialogs need
   the owner.
+
+## Amended by ADR-0033
+
+A new Tab still starts on Gaming, but it also starts with the LayerSetup remembered for its Recording's aspect ratio.

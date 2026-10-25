@@ -114,3 +114,9 @@ by hand.
   "Alle Premiere-Dateien speichern" then wrote `PartA.xml` and `PartB (2).xml` (a foreign `PartB.xml` untouched), no
   project, and passed Handy over. Real Recordings, a failing cut and a Premiere import of files written this way need
   the owner.
+
+## Amended by ADR-0033
+
+"Für alle übernehmen" also carries the LayerSetup, with either button, but only into Tabs whose Recording has the same
+aspect ratio; the others are told it stayed behind. "Nur Regler" therefore no longer carries only the sliders, and its
+label and question change in both languages.
