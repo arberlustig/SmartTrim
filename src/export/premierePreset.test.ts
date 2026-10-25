@@ -268,4 +268,9 @@ describe("readPremierePresets", () => {
     const broken = withParameter(premierePresetFile("raw-v1"), matchName, parameterId, value);
     expect(readPremierePresets(broken)).toEqual([{ kind: "refused", name: "RAWCUT - V1", why: "brokenValue" }]);
   });
+
+  test("a PremierePreset without a name is refused: the window could neither offer nor delete it", () => {
+    const unnamed = premierePresetFile("raw-v1").replace("<Name>RAWCUT - V1</Name>", "<Name>   </Name>");
+    expect(readPremierePresets(unnamed)).toEqual([{ kind: "refused", name: "", why: "unnamed" }]);
+  });
 });

@@ -34,6 +34,7 @@ import {
   addVideoLayer,
   changeVideoLayer,
   removeVideoLayer,
+  takeVideoLayers,
 } from "./cutSession";
 import { PLAIN_LAYER, RAW_V1 } from "../testing/premierePresets";
 import { isLayerSetup } from "../export/layerSetup";
@@ -593,6 +594,13 @@ describe("VideoLayers (ADR-0033)", () => {
     const dressed = addVideoLayer(chooseRecording(newCutSession(), wide(String.raw`C:Aufnahmena.mp4`, 3840, 1080)));
     expect(chooseRecording(dressed, wide(String.raw`C:Aufnahmen.mp4`, 5120, 1440)).videoLayers).toEqual(dressed.videoLayers);
     expect(chooseRecording(dressed, wide(String.raw`C:Aufnahmenc.mp4`, 1920, 1080)).videoLayers).toEqual([PLAIN_LAYER]);
+  });
+
+  test("a new Tab takes the LayerSetup remembered for its shape as it was, V1 first", () => {
+    const remembered = [{ ...PLAIN_LAYER, clipPremierePreset: RAW_V1 }, { ...PLAIN_LAYER, startsSwitchedOff: true }];
+    expect(takeVideoLayers(newCutSession(), remembered).videoLayers).toEqual(remembered);
+    // Nothing remembered leaves V1 alone, and an empty list would leave the sequence without a video track.
+    expect(takeVideoLayers(newCutSession(), []).videoLayers).toEqual([PLAIN_LAYER]);
   });
 
   test("a LayerSetup changes the Premiere file, never the cut", () => {

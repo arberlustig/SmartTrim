@@ -106,8 +106,9 @@ _Avoid_: track, copy, duplicate
 The nested sequence a VideoLayer becomes. It holds the whole uncut Recording once, as one clip carrying the
 VideoLayer's clip PremierePreset. On the timeline the VideoLayer has one **piece** per KeepSegment: a clipitem of the
 Nest with the KeepSegment's in and out, carrying the Nest PremierePreset. Pulling a piece's edge in Premiere brings back
-what was removed, and an effect applied to the clip inside the Nest reaches every piece at once (ADR-0033).
-_Avoid_: nested sequence, compound clip, Verschachtelung
+what was removed, and an effect applied to the clip inside the Nest reaches every piece at once (ADR-0033). The
+window calls it Verschachtelung, as Premiere does.
+_Avoid_: nested sequence, compound clip
 
 **PremierePreset**:
 One Premiere effect preset read from a `.prfpset` file; the window calls it a Premiere-Vorgabe. It is not a Preset,

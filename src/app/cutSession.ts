@@ -184,6 +184,14 @@ export function removeVideoLayer(session: CutSession, index: number): CutSession
   return { ...session, videoLayers: session.videoLayers.filter((_layer, position) => position !== index) };
 }
 
+/**
+ * Takes over a whole LayerSetup — the one remembered for a new Tab's aspect ratio (ADR-0033). An empty list leaves V1
+ * alone: the sequence always has a video track.
+ */
+export function takeVideoLayers(session: CutSession, videoLayers: readonly VideoLayer[]): CutSession {
+  return { ...session, videoLayers: videoLayers.length > 0 ? [...videoLayers] : [PLAIN_VIDEO_LAYER] };
+}
+
 /** Sets a VideoLayer's PremierePresets or its tick, leaving what the change does not name as it is. */
 export function changeVideoLayer(session: CutSession, index: number, change: Partial<VideoLayer>): CutSession {
   checkVideoLayer(session, index);

@@ -30,10 +30,18 @@ import {
   setThresholdDbfs,
   toggleExportSourceTrack,
   visibleSourceTracks,
+  addVideoLayer,
+  changeVideoLayer,
+  removeVideoLayer,
+  takeVideoLayers,
   type Preset,
   type CutSession,
   type TrackRole,
 } from "../app/cutSession.ts";
+import { aspectRatioOf, isLayerSetup, sequenceFrameFor, type VideoLayer } from "../export/layerSetup.ts";
+import type { NotCarried, PremierePreset } from "../export/premierePreset.ts";
+import { EMPTY_LIBRARY, rememberedVideoLayers, type VideoLayerLibrary } from "../app/videoLayerLibrary.ts";
+import type { PremierePresetFile } from "../app/videoLayerStore.ts";
 import { allPresets, presetFromSliders } from "../app/presets.ts";
 import {
   askBeforeClosing,
@@ -136,6 +144,13 @@ const view = {
   takeOverRoles: element<HTMLButtonElement>("takeOverRoles"),
   takeOverSliders: element<HTMLButtonElement>("takeOverSliders"),
   cancelTakeOver: element<HTMLButtonElement>("cancelTakeOver"),
+  videoLayerSection: element("videoLayerSection"),
+  videoLayers: element("videoLayers"),
+  addVideoLayer: element<HTMLButtonElement>("addVideoLayer"),
+  addPremierePresets: element<HTMLButtonElement>("addPremierePresets"),
+  videoLayerNote: element("videoLayerNote"),
+  premierePresetsBox: element("premierePresetsBox"),
+  premierePresetList: element("premierePresetList"),
   cutPicture: element("cutPicture"),
   cutHint: element("cutHint"),
   language: element<HTMLSelectElement>("language"),
@@ -298,6 +313,8 @@ const NO_TAB_SESSION: CutSession = newCutSession();
 
 /** The Presets the user saved themselves, as the main process last reported them. */
 let ownPresets: readonly Preset[] = [];
+/** The PremierePresets the user added and the last LayerSetup per aspect ratio, as main last reported them. */
+let videoLayerLibrary: VideoLayerLibrary = EMPTY_LIBRARY;
 /** True while the name field is open, so the dropdown does not fight the user for the same row. */
 let naming = false;
 /**
@@ -783,6 +800,154 @@ function drawSettings(tab: OpenTab | null): void {
   view.eventTailValue.textContent = `${decimals(session.eventTailSeconds, 1)} s`;
 }
 
+/** How the window names what does not reach Premiere: the effect, or the effect and one parameter of it. */
+function notCarriedName(entry: NotCarried): string {
+  return entry.parameter ? T.notCarriedParameter(entry.effect, T.uncarriedParameters[entry.parameter]) : entry.effect;
+}
+
+/** A select for one of a VideoLayer's two places: no PremierePreset, or one of the library's by name. */
+function premierePresetSelect(chosen: PremierePreset | undefined, place: "clip" | "nest", index: number): HTMLSelectElement {
+  const select = document.createElement("select");
+  select.dataset["index"] = String(index);
+  select.dataset["place"] = place;
+  const options: [string, string][] = [["", T.noPremierePreset]];
+  for (const premierePreset of videoLayerLibrary.premierePresets) options.push([premierePreset.name, premierePreset.name]);
+  // A PremierePreset deleted from the library stays where it was chosen: the Tab keeps its own copy (ADR-0033).
+  const gone = chosen && !videoLayerLibrary.premierePresets.some((each) => each.name === chosen.name);
+  if (chosen && gone) options.push([chosen.name, T.premierePresetGone(chosen.name)]);
+  for (const [value, label] of options) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  }
+  select.value = chosen?.name ?? "";
+  return select;
+}
+
+function drawVideoLayers(tab: OpenTab | null): void {
+  const recording = tab?.session.recording ?? null;
+  view.videoLayerSection.hidden = !tab || !recording;
+  if (!tab || !recording) return;
+  // While every Tab is cut or saved, a LayerSetup changed underneath would reach some files and not others.
+  const locked = allTabsBusy();
+  const { videoLayers } = tab.session;
+  // Drawing builds the rows anew, which would drop the keyboard focus to the page; it goes back to the same control.
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const focusKey =
+    focused && view.videoLayers.contains(focused)
+      ? (focused.dataset["remove"] ? `remove:${focused.dataset["remove"]}` : `${focused.dataset["index"]}:${focused.dataset["place"]}`)
+      : null;
+
+  view.videoLayers.replaceChildren(
+    ...videoLayers.map((layer, index) => {
+      const row = document.createElement("div");
+      row.className = "videoLayerRow";
+      const name = document.createElement("span");
+      name.className = "layerName";
+      name.textContent = T.videoLayerLabel(index + 1);
+      const place = (text: string, select: HTMLSelectElement, which: "clip" | "nest") => {
+        const label = document.createElement("label");
+        select.disabled = locked;
+        select.setAttribute("aria-label", T.videoLayerPlaceLabel(index + 1, which));
+        label.append(text, select);
+        return label;
+      };
+      const switchedOff = document.createElement("label");
+      switchedOff.className = "switchedOff";
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = layer.startsSwitchedOff;
+      tick.disabled = locked;
+      tick.dataset["index"] = String(index);
+      tick.dataset["place"] = "switchedOff";
+      tick.setAttribute("aria-label", T.videoLayerSwitchedOffLabel(index + 1));
+      switchedOff.append(tick, T.startsSwitchedOff);
+      row.append(
+        name,
+        place(T.clipPremierePreset, premierePresetSelect(layer.clipPremierePreset, "clip", index), "clip"),
+        place(T.nestPremierePreset, premierePresetSelect(layer.nestPremierePreset, "nest", index), "nest"),
+        switchedOff,
+      );
+      // V1 stays: the sequence always has a video track.
+      if (index > 0) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "icon";
+        remove.textContent = "×";
+        remove.title = T.removeVideoLayer(index + 1);
+        remove.setAttribute("aria-label", T.removeVideoLayer(index + 1));
+        remove.dataset["remove"] = String(index);
+        remove.disabled = locked;
+        row.append(remove);
+      }
+      return row;
+    }),
+  );
+  if (focusKey) {
+    const controls = [...view.videoLayers.querySelectorAll<HTMLElement>("select, input, button")];
+    const same = controls.find((control) =>
+      control.dataset["remove"]
+        ? `remove:${control.dataset["remove"]}` === focusKey
+        : `${control.dataset["index"]}:${control.dataset["place"]}` === focusKey,
+    );
+    // After a removal its button is gone; the "+ Videospur" button below the rows takes the focus instead.
+    (same ?? view.addVideoLayer).focus();
+  }
+  view.addVideoLayer.disabled = locked;
+  view.addPremierePresets.disabled = locked;
+
+  const notes: string[] = [];
+  if (isLayerSetup(videoLayers)) {
+    notes.push(T.videoLayersNotWrittenYet);
+    const frame = sequenceFrameFor(recording, videoLayers);
+    if (frame.width !== recording.width || frame.height !== recording.height) {
+      notes.push(T.sequenceFrameNote(frame.width, frame.height));
+    }
+  }
+  view.videoLayerNote.hidden = notes.length === 0;
+  view.videoLayerNote.textContent = notes.join(" ");
+
+  const { premierePresets } = videoLayerLibrary;
+  view.premierePresetsBox.hidden = premierePresets.length === 0;
+  view.premierePresetList.replaceChildren(
+    ...premierePresets.map((premierePreset) => {
+      const item = document.createElement("li");
+      const name = document.createElement("span");
+      name.textContent = premierePreset.name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "link";
+      remove.textContent = T.presetDelete;
+      remove.title = T.deletePremierePreset(premierePreset.name);
+      remove.setAttribute("aria-label", T.deletePremierePreset(premierePreset.name));
+      remove.dataset["deletePremierePreset"] = premierePreset.name;
+      remove.disabled = locked;
+      const summary = document.createElement("small");
+      summary.textContent = T.premierePresetSummary(premierePreset.carried, premierePreset.notCarried.map(notCarriedName));
+      item.append(name, remove, summary);
+      return item;
+    }),
+  );
+}
+
+/**
+ * After the Tab's VideoLayers changed: remembered for the next Recording of this shape (ADR-0033). They change the
+ * Premiere file, never the cut, so nothing is planned again.
+ */
+async function videoLayersChanged(tab: OpenTab): Promise<void> {
+  draw();
+  const recording = tab.session.recording;
+  if (!recording) return;
+  const library = show(
+    tab,
+    await window.smarttrim.rememberLayerSetup(aspectRatioOf(recording), tab.session.videoLayers),
+    T.layerSetupRememberFailed,
+  );
+  if (library) videoLayerLibrary = library;
+  draw();
+}
+
 function drawResult(tab: OpenTab | null): void {
   view.result.replaceChildren();
   const cut = tab?.finished ?? null;
@@ -870,6 +1035,7 @@ function draw(): void {
   drawPicture(tab);
   drawSourceTracks(tab);
   drawSettings(tab);
+  drawVideoLayers(tab);
   drawResult(tab);
   // The colours over the waveform come from the plan, so every redraw of the numbers redraws them too.
   drawWaveforms();
@@ -2405,6 +2571,15 @@ function openingNotes(opened: OpenedInWindow): OpenNote[] {
   return notes;
 }
 
+/** A new Tab of a Recording, with the LayerSetup last used for its aspect ratio, if any (ADR-0033). */
+function withRememberedLayerSetup(work: TabWork): TabWork {
+  const recording = work.session.recording;
+  const remembered: readonly VideoLayer[] | undefined = recording
+    ? rememberedVideoLayers(videoLayerLibrary, aspectRatioOf(recording))
+    : undefined;
+  return remembered ? { ...work, session: takeVideoLayers(work.session, remembered) } : work;
+}
+
 /**
  * The one way files reach the window, whether picked in a dialog or dropped. Each file opened gets a Tab at the end
  * of the strip; the first of them — or the Tab an already open Recording has — is put on screen.
@@ -2424,7 +2599,7 @@ async function openAndShow(opening: () => Promise<Answer<OpenedInWindow | null>>
     if (one.alreadyOpen || tabById(one.tabId)) continue;
     tabs.push(
       one.kind === "recording"
-        ? openTabFrom(recordingTab(one.tabId, one.recording), null)
+        ? openTabFrom(withRememberedLayerSetup(recordingTab(one.tabId, one.recording)), null)
         : openTabFrom(projectTab(one.tabId, one.project), one.summary),
     );
   }
@@ -2713,7 +2888,11 @@ function drawTakeOverQuestion(): void {
   view.takeOverAsking.hidden = !takeOverAsking || !from;
   if (!takeOverAsking || !from) return;
   const others = tabs.length - 1;
-  view.takeOverQuestion.textContent = T.takeOverQuestion(fileName(from.session.recording?.path ?? ""), others);
+  view.takeOverQuestion.textContent = T.takeOverQuestion(
+    fileName(from.session.recording?.path ?? ""),
+    others,
+    isLayerSetup(from.session.videoLayers),
+  );
 }
 
 function closeTakeOver(): void {
@@ -2732,13 +2911,22 @@ function takeOverInto(what: TakenOver): void {
   }
   const others = tabs.filter((tab) => tab !== from);
   const leftOut: OpenNote[] = [];
+  let videoLayersCarried = false;
   for (const tab of others) {
-    const { session, rolesLeftOut } = settingsCopied(from.session, tab.session, what);
+    const { session, rolesLeftOut, layerSetupLeftOut } = settingsCopied(from.session, tab.session, what);
+    if (isLayerSetup(from.session.videoLayers) && !layerSetupLeftOut) videoLayersCarried = true;
     // Roles taken over ask for their SourceTracks' waveforms, so a Tab whose read was refused tries again (ADR-0025).
     if (what === "slidersAndRoles" && !rolesLeftOut) Object.assign(tab, roleGiven(tab, session));
     else tab.session = session;
     // A finished cut in that Tab is planned again, decided again, or stops being offered — as if moved by hand.
     afterSettingChange(tab);
+    if (layerSetupLeftOut) {
+      leftOut.push({
+        tone: "info",
+        name: fileName(tab.session.recording?.path ?? ""),
+        text: T.layerSetupStayedBehind(fileName(from.session.recording?.path ?? "")),
+      });
+    }
     if (rolesLeftOut) {
       leftOut.push({
         tone: "info",
@@ -2755,12 +2943,14 @@ function takeOverInto(what: TakenOver): void {
     {
       tone: "info",
       name: "",
-      text: T.takenOver(what, fileName(from.session.recording?.path ?? ""), others.length),
+      text: T.takenOver(what, fileName(from.session.recording?.path ?? ""), others.length, videoLayersCarried),
     },
     ...leftOut,
   ];
   draw();
   void pump();
+  // The LayerSetup handed out is now the last one of its shape, so the next Tab of that shape starts with it too.
+  if (videoLayersCarried) void videoLayersChanged(from);
 }
 
 view.takeOver.addEventListener("click", () => {
@@ -2856,6 +3046,91 @@ window.smarttrim.onToolsProgress(({ name, step, replacing, percent }) => {
   if (step === "checking") setStatus(null, T.checkingTool(name, percent));
   else setStatus(null, replacing ? T.reloadingTool(name, percent) : T.loadingTool(name, percent));
 });
+// One listener for every row of the Videospuren section: the rows are drawn again on every change.
+view.videoLayers.addEventListener("change", (event) => {
+  const tab = viewed();
+  const target = event.target as HTMLInputElement | HTMLSelectElement;
+  const index = Number(target.dataset["index"]);
+  const place = target.dataset["place"];
+  if (!tab || !place || allTabsBusy()) return;
+  if (place === "switchedOff") {
+    tab.session = changeVideoLayer(tab.session, index, { startsSwitchedOff: (target as HTMLInputElement).checked });
+  } else {
+    const current = tab.session.videoLayers[index];
+    const chosenBefore = place === "clip" ? current?.clipPremierePreset : current?.nestPremierePreset;
+    // A name the library no longer has is the Tab's own copy of a deleted PremierePreset: it stays as it is.
+    const picked =
+      target.value === ""
+        ? undefined
+        : (videoLayerLibrary.premierePresets.find((each) => each.name === target.value) ?? chosenBefore);
+    tab.session = changeVideoLayer(
+      tab.session,
+      index,
+      place === "clip" ? { clipPremierePreset: picked } : { nestPremierePreset: picked },
+    );
+  }
+  void videoLayersChanged(tab);
+});
+view.videoLayers.addEventListener("click", (event) => {
+  const tab = viewed();
+  const remove = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-remove]");
+  // The rows move up after a removal: the second click of a double click would take the next VideoLayer too.
+  if (!tab || !remove || allTabsBusy() || event.detail > 1) return;
+  tab.session = removeVideoLayer(tab.session, Number(remove.dataset["remove"]));
+  void videoLayersChanged(tab);
+});
+view.addVideoLayer.addEventListener("click", () => {
+  const tab = viewed();
+  if (!tab || allTabsBusy()) return;
+  tab.session = addVideoLayer(tab.session);
+  void videoLayersChanged(tab);
+});
+view.addPremierePresets.addEventListener("click", async () => {
+  const tab = viewed();
+  const answer = show(tab, await window.smarttrim.addPremierePresets(T.dialogs), T.premierePresetsAddFailed);
+  // null means the user closed the dialog.
+  if (!answer) return;
+  videoLayerLibrary = answer.library;
+  const notes = answer.files.flatMap(premierePresetNotes);
+  const added = answer.files.flatMap((each) => each.readings.filter((reading) => reading.kind === "read")).length;
+  openNotes = notes;
+  notesHeading = { notes, text: T.premierePresetsAdded(added) };
+  draw();
+});
+view.premierePresetList.addEventListener("click", async (event) => {
+  const remove = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-delete-premiere-preset]");
+  const name = remove?.dataset["deletePremierePreset"];
+  // The list moves up after a deletion: the second click of a double click would delete the next one too.
+  if (name === undefined || allTabsBusy() || event.detail > 1) return;
+  // Nothing is lost: every Tab, remembered LayerSetup and project keeps its own copy (ADR-0033).
+  const left = show(viewed(), await window.smarttrim.deletePremierePreset(name), T.premierePresetDeleteFailed);
+  if (left) videoLayerLibrary = left;
+  draw();
+});
+
+/** What adding one `.prfpset` file did, one note per PremierePreset in it, or one for a file that gave none. */
+function premierePresetNotes(file: PremierePresetFile): OpenNote[] {
+  const name = fileName(file.path);
+  if (file.unreadable) return [{ tone: "refused", name, text: T.premierePresetFileUnreadable }];
+  if (file.readings.length === 0) return [{ tone: "refused", name, text: T.premierePresetFileEmpty }];
+  return file.readings.map((reading): OpenNote =>
+    reading.kind === "read"
+      ? {
+          tone: "info",
+          name: reading.premierePreset.name,
+          text: T.premierePresetSummary(reading.premierePreset.carried, reading.premierePreset.notCarried.map(notCarriedName)),
+        }
+      : { tone: "refused", name: reading.name, text: T.premierePresetRefusals[reading.why] },
+  );
+}
+
+// The PremierePresets and remembered LayerSetups are read once at startup, before a Recording can be opened.
+void (async () => {
+  const library = show(null, await window.smarttrim.loadVideoLayers(), T.premierePresetsLoadFailed);
+  if (library) videoLayerLibrary = library;
+  draw();
+})();
+
 // The user's own Presets are read once at startup; without them the dropdown shows only the built-in three.
 void (async () => {
   const saved = show(null, await window.smarttrim.loadPresets(), T.presetsLoadFailed);

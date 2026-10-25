@@ -10,6 +10,9 @@ import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 import type { UpdateState } from "../app/selfUpdate.ts";
+import type { VideoLayerLibrary } from "../app/videoLayerLibrary.ts";
+import type { PremierePresetFile } from "../app/videoLayerStore.ts";
+import type { VideoLayer } from "../export/layerSetup.ts";
 
 /**
  * Every answer the window gets from the main process, so a refusal reaches the user as a sentence instead of as an
@@ -168,6 +171,19 @@ export interface SmartTrimApi {
   savePreset(preset: Preset): Promise<Answer<readonly Preset[]>>;
   /** Deletes one of the user's own Presets by name. Returns the ones left. */
   deletePreset(name: string): Promise<Answer<readonly Preset[]>>;
+  /** The PremierePresets the user added and the last LayerSetup per aspect ratio (ADR-0033). */
+  loadVideoLayers(): Promise<Answer<VideoLayerLibrary>>;
+  /**
+   * Opens the dialog for `.prfpset` files and adds what they hold. Returns the library as it now is and, per file,
+   * what was read or refused; null when the user closed the dialog.
+   */
+  addPremierePresets(
+    dialogs: DialogTexts,
+  ): Promise<Answer<{ library: VideoLayerLibrary; files: readonly PremierePresetFile[] } | null>>;
+  /** Takes a PremierePreset out of the library; LayerSetups keep their own copy. Returns the library left. */
+  deletePremierePreset(name: string): Promise<Answer<VideoLayerLibrary>>;
+  /** Remembers the LayerSetup of one aspect ratio for the next Tab of that shape. Returns the library. */
+  rememberLayerSetup(aspectRatio: string, videoLayers: readonly VideoLayer[]): Promise<Answer<VideoLayerLibrary>>;
   /** Shows a saved file in Explorer. */
   reveal(path: string): Promise<Answer<null>>;
 }

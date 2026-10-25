@@ -10,6 +10,15 @@ import type { Preset } from "../app/cutSession.ts";
 import { openFiles } from "../app/openFile.ts";
 import { loadOwnPresets, storeOwnPresets } from "../app/presetStore.ts";
 import { withPreset, withoutPreset } from "../app/presets.ts";
+import { withLayerSetupRemembered, withoutPremierePreset, type VideoLayerLibrary } from "../app/videoLayerLibrary.ts";
+import {
+  addPremierePresetFiles,
+  loadVideoLayerLibrary,
+  oneAtATime,
+  storeVideoLayerLibrary,
+  type PremierePresetFile,
+} from "../app/videoLayerStore.ts";
+import type { VideoLayer } from "../export/layerSetup.ts";
 import { newTabStore, type OnRead } from "../app/tabStore.ts";
 import { newPictureFrames, type PictureFrames } from "../picture/pictureFrames.ts";
 import type {
@@ -351,6 +360,53 @@ function registerHandlers(window: BrowserWindow): void {
       await storeOwnPresets(presetDirectory(), left);
       return left;
     }),
+  );
+
+  // The PremierePresets and remembered LayerSetups sit beside the own Presets, in a file of their own (ADR-0033).
+  // Every change to it waits for the one before, so two changes close together cannot lose one or tear the file.
+  const libraryChange = oneAtATime();
+  ipcMain.handle(
+    "videoLayers:load",
+    answering(async (): Promise<VideoLayerLibrary> => loadVideoLayerLibrary(presetDirectory())),
+  );
+
+  ipcMain.handle(
+    "premierePresets:add",
+    answering(
+      async (dialogs: DialogTexts): Promise<{ library: VideoLayerLibrary; files: readonly PremierePresetFile[] } | null> => {
+        const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+          title: dialogs.addPremierePresets.title,
+          properties: ["openFile", "multiSelections"],
+          filters: [{ name: dialogs.addPremierePresets.premierePresets, extensions: ["prfpset"] }],
+        });
+        if (canceled || filePaths.length === 0) return null;
+        return libraryChange(() => addPremierePresetFiles(presetDirectory(), filePaths));
+      },
+    ),
+  );
+
+  ipcMain.handle(
+    "premierePresets:delete",
+    answering(
+      (name: string): Promise<VideoLayerLibrary> =>
+        libraryChange(async () => {
+          const left = withoutPremierePreset(await loadVideoLayerLibrary(presetDirectory()), name);
+          await storeVideoLayerLibrary(presetDirectory(), left);
+          return left;
+        }),
+    ),
+  );
+
+  ipcMain.handle(
+    "layerSetups:remember",
+    answering(
+      ({ aspectRatio, videoLayers }: { aspectRatio: string; videoLayers: readonly VideoLayer[] }): Promise<VideoLayerLibrary> =>
+        libraryChange(async () => {
+          const remembered = withLayerSetupRemembered(await loadVideoLayerLibrary(presetDirectory()), aspectRatio, videoLayers);
+          await storeVideoLayerLibrary(presetDirectory(), remembered);
+          return remembered;
+        }),
+    ),
   );
 
   ipcMain.handle(

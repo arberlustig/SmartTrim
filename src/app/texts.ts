@@ -1,15 +1,24 @@
+import type { PremierePresetRefusal, UncarriedParameter } from "../export/premierePreset.ts";
 import type { BackgroundJob } from "./tabs.ts";
+
+/** Effect names in order, each named once with how often it occurs: "Kanten aufrauen, Schlagschatten (2×)". */
+function countedNames(names: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return [...counts].map(([name, count]) => (count === 1 ? name : `${name} (${count}×)`)).join(", ");
+}
 
 /** The languages the window speaks (ADR-0030). */
 export type Language = "de" | "en";
 
 export const LANGUAGES: readonly Language[] = ["de", "en"];
 
-/** What the three file dialogs of the main process say; handed over with the request, so main holds no texts. */
+/** What the four file dialogs of the main process say; handed over with the request, so main holds no texts. */
 export interface DialogTexts {
   readonly chooseRecordings: { readonly title: string; readonly recordings: string; readonly allFiles: string };
   readonly openProjects: { readonly title: string; readonly project: string };
   readonly savePremiere: { readonly title: string; readonly premiereProject: string };
+  readonly addPremierePresets: { readonly title: string; readonly premierePresets: string };
 }
 
 /**
@@ -115,11 +124,49 @@ export interface Texts {
   readonly takeOver: string;
   readonly takeOverTitle: string;
   readonly takeOverQuestionTitle: string;
-  readonly takeOverQuestion: (name: string, others: number) => string;
+  readonly takeOverQuestion: (name: string, others: number, withVideoLayers: boolean) => string;
   readonly takeOverRoles: string;
   readonly takeOverSliders: string;
   readonly onlySlidersTaken: (thisTracks: number, fromName: string, fromTracks: number) => string;
-  readonly takenOver: (what: "slidersAndRoles" | "sliders", fromName: string, others: number) => string;
+  readonly takenOver: (
+    what: "slidersAndRoles" | "sliders",
+    fromName: string,
+    others: number,
+    videoLayersCarried: boolean,
+  ) => string;
+  readonly layerSetupStayedBehind: (fromName: string) => string;
+
+  // The video tracks (ADR-0033)
+  readonly sectionVideoLayers: string;
+  readonly videoLayerLabel: (number: number) => string;
+  readonly clipPremierePreset: string;
+  readonly nestPremierePreset: string;
+  readonly noPremierePreset: string;
+  readonly premierePresetGone: (name: string) => string;
+  readonly startsSwitchedOff: string;
+  readonly addVideoLayer: string;
+  readonly removeVideoLayer: (number: number) => string;
+  readonly addPremierePresets: string;
+  readonly premierePresetsHeading: string;
+  readonly deletePremierePreset: (name: string) => string;
+  /** What reaches Premiere of a PremierePreset and what does not, effect names as the file has them. */
+  readonly premierePresetSummary: (carried: readonly string[], notCarried: readonly string[]) => string;
+  /** A parameter of a carried effect that does not reach Premiere, shown after the effect's own name. */
+  readonly uncarriedParameters: Readonly<Record<UncarriedParameter, string>>;
+  readonly notCarriedParameter: (effect: string, parameter: string) => string;
+  /** What a screen reader says for a VideoLayer's select or tick, so the rows can be told apart. */
+  readonly videoLayerPlaceLabel: (number: number, place: "clip" | "nest") => string;
+  readonly videoLayerSwitchedOffLabel: (number: number) => string;
+  readonly premierePresetRefusals: Readonly<Record<PremierePresetRefusal, string>>;
+  readonly premierePresetFileEmpty: string;
+  readonly premierePresetFileUnreadable: string;
+  readonly premierePresetsAdded: (count: number) => string;
+  readonly sequenceFrameNote: (width: number, height: number) => string;
+  readonly videoLayersNotWrittenYet: string;
+  readonly premierePresetsLoadFailed: string;
+  readonly premierePresetsAddFailed: string;
+  readonly premierePresetDeleteFailed: string;
+  readonly layerSetupRememberFailed: string;
 
   // Cutting, waiting, the result
   readonly cut: string;
@@ -216,6 +263,7 @@ const de: Texts = {
     chooseRecordings: { title: "Aufnahmen wählen", recordings: "Aufnahmen", allFiles: "Alle Dateien" },
     openProjects: { title: "SmartTrim-Projekte öffnen", project: "SmartTrim-Projekt" },
     savePremiere: { title: "Premiere-Datei speichern", premiereProject: "Premiere-Projekt (FCP7 XML)" },
+    addPremierePresets: { title: "Premiere-Vorgaben hinzufügen", premierePresets: "Premiere-Vorgaben" },
   },
 
   duration: (seconds) => {
@@ -326,19 +374,75 @@ const de: Texts = {
   takeOver: "Für alle übernehmen",
   takeOverTitle: "Diese Einstellungen in alle anderen Tabs übernehmen",
   takeOverQuestionTitle: "Haben alle Aufnahmen dieselbe Tonspur-Aufteilung?",
-  takeOverQuestion: (name, others) =>
+  takeOverQuestion: (name, others, withVideoLayers) =>
     `Die Regler von „${name}“ gehen an ${others === 1 ? "den anderen Tab" : `die ${others} anderen Tabs`}. ` +
     "Nur wenn die Tonspuren überall gleich belegt sind, sollen auch die Tonspur-Rollen und die Premiere-Häkchen mit. " +
-    "Aufnahmen mit einer anderen Zahl an Tonspuren bekommen so oder so nur die Regler. Festgehaltene Stellen bleiben, wo sie sind.",
-  takeOverRoles: "Regler und Tonspur-Rollen",
-  takeOverSliders: "Nur Regler",
+    "Aufnahmen mit einer anderen Zahl an Tonspuren bekommen so oder so keine Tonspur-Rollen. " +
+    (withVideoLayers
+      ? "Die Videospuren gehen mit beiden Knöpfen mit, aber nur in Aufnahmen mit demselben Seitenverhältnis. "
+      : "") +
+    "Festgehaltene Stellen bleiben, wo sie sind.",
+  takeOverRoles: "Mit Tonspur-Rollen",
+  takeOverSliders: "Ohne Tonspur-Rollen",
   onlySlidersTaken: (thisTracks, fromName, fromTracks) => {
     const tracks = (count: number) => (count === 1 ? "eine Tonspur" : `${count} Tonspuren`);
-    return `Nur die Regler übernommen: Diese Aufnahme hat ${tracks(thisTracks)}, „${fromName}“ hat ${tracks(fromTracks)}.`;
+    return `Ohne Tonspur-Rollen übernommen: Diese Aufnahme hat ${tracks(thisTracks)}, „${fromName}“ hat ${tracks(fromTracks)}.`;
   },
-  takenOver: (what, fromName, others) =>
-    `${what === "slidersAndRoles" ? "Regler und Tonspur-Rollen" : "Regler"} von „${fromName}“ in ` +
+  takenOver: (what, fromName, others, videoLayersCarried) =>
+    `${what === "slidersAndRoles" ? "Regler und Tonspur-Rollen" : "Regler"}${videoLayersCarried ? " samt Videospuren" : ""} ` +
+    `von „${fromName}“ in ` +
     `${others === 1 ? "den anderen Tab" : `${others} Tabs`} übernommen. Festgehaltene Stellen sind geblieben.`,
+  layerSetupStayedBehind: (fromName) =>
+    `Die Videospuren von „${fromName}“ gingen nicht mit: Diese Aufnahme hat ein anderes Seitenverhältnis.`,
+
+  sectionVideoLayers: "Videospuren",
+  videoLayerLabel: (number) => `V${number}`,
+  clipPremierePreset: "auf den Clip",
+  nestPremierePreset: "auf die Verschachtelung",
+  noPremierePreset: "keine Premiere-Vorgabe",
+  premierePresetGone: (name) => `${name} (nicht in der Liste)`,
+  startsSwitchedOff: "startet ausgeschaltet",
+  addVideoLayer: "+ Videospur",
+  removeVideoLayer: (number) => `V${number} entfernen`,
+  addPremierePresets: "Premiere-Vorgaben hinzufügen …",
+  premierePresetsHeading: "Premiere-Vorgaben",
+  deletePremierePreset: (name) => `„${name}“ löschen`,
+  premierePresetSummary: (carried, notCarried) =>
+    `Kommt mit: ${carried.length > 0 ? countedNames(carried) : "nichts"}.` +
+    (notCarried.length > 0 ? ` Kommt nicht mit: ${countedNames(notCarried)}.` : ""),
+  // Premiere's own labels, so they can be found in its effect controls.
+  uncarriedParameters: {
+    motionAntiFlicker: "Anti-Flimmer-Filter",
+    motionCrop: "Zuschneiden",
+    cropZoom: "Zoom",
+    cropEdgeFeather: "Weiche Kanten",
+  },
+  notCarriedParameter: (effect, parameter) => `${effect} (${parameter})`,
+  videoLayerPlaceLabel: (number, place) =>
+    `V${number}: Premiere-Vorgabe ${place === "clip" ? "auf den Clip" : "auf die Verschachtelung"}`,
+  videoLayerSwitchedOffLabel: (number) => `V${number} startet ausgeschaltet`,
+  premierePresetRefusals: {
+    animated:
+      "Abgelehnt: Die Vorgabe verändert sich mit der Zeit, und eine Animation passt nicht auf Teile, die woanders in der " +
+      "Aufnahme anfangen.",
+    rotated: "Abgelehnt: Die Vorgabe dreht das Bild. Wie Premiere eine Drehung aus der Premiere-Datei liest, ist noch nicht geklärt.",
+    nonUniformScale:
+      "Abgelehnt: Die Vorgabe streckt das Bild nur in eine Richtung, die Premiere-Datei kennt aber nur eine Größe für beide.",
+    noVideoEffect: "Abgelehnt: Die Vorgabe enthält keinen Videoeffekt.",
+    brokenValue: "Abgelehnt: Ein Wert darin ist keine Zahl.",
+    unnamed: "Abgelehnt: Die Vorgabe hat keinen Namen.",
+  },
+  premierePresetFileEmpty: "Enthält keine Premiere-Vorgabe.",
+  premierePresetFileUnreadable: "Ließ sich nicht lesen.",
+  premierePresetsAdded: (count) =>
+    count === 0 ? "Keine Premiere-Vorgabe hinzugefügt" : count === 1 ? "Eine Premiere-Vorgabe hinzugefügt" : `${count} Premiere-Vorgaben hinzugefügt`,
+  sequenceFrameNote: (width, height) => `Dann wird die Premiere-Sequenz ${width} × ${height}.`,
+  videoLayersNotWrittenYet:
+    "Noch schreibt SmartTrim die Videospuren nicht in die Premiere-Datei. Das kommt in einer der nächsten Fassungen.",
+  premierePresetsLoadFailed: "Die Premiere-Vorgaben ließen sich nicht lesen",
+  premierePresetsAddFailed: "Die Premiere-Vorgaben ließen sich nicht hinzufügen",
+  premierePresetDeleteFailed: "Die Premiere-Vorgabe ließ sich nicht löschen",
+  layerSetupRememberFailed: "Die Videospuren ließen sich nicht für die nächste Aufnahme merken",
 
   cut: "Schneiden",
   working: "Arbeitet …",
@@ -458,6 +562,7 @@ const en: Texts = {
     chooseRecordings: { title: "Choose recordings", recordings: "Recordings", allFiles: "All files" },
     openProjects: { title: "Open SmartTrim projects", project: "SmartTrim project" },
     savePremiere: { title: "Save Premiere file", premiereProject: "Premiere project (FCP7 XML)" },
+    addPremierePresets: { title: "Add Premiere effect presets", premierePresets: "Premiere effect presets" },
   },
 
   duration: (seconds) => {
@@ -568,19 +673,68 @@ const en: Texts = {
   takeOver: "Apply to all",
   takeOverTitle: "Apply these settings to every other tab",
   takeOverQuestionTitle: "Do all recordings have the same track layout?",
-  takeOverQuestion: (name, others) =>
+  takeOverQuestion: (name, others, withVideoLayers) =>
     `The sliders of “${name}” go to ${others === 1 ? "the other tab" : `the ${others} other tabs`}. ` +
     "Only if the tracks are laid out the same everywhere should the track roles and the Premiere ticks go along. " +
-    "Recordings with a different number of tracks get the sliders only either way. Held stretches stay where they are.",
-  takeOverRoles: "Sliders and track roles",
-  takeOverSliders: "Sliders only",
+    "Recordings with a different number of tracks get no track roles either way. " +
+    (withVideoLayers ? "The video tracks go along with either button, but only into recordings of the same aspect ratio. " : "") +
+    "Held stretches stay where they are.",
+  takeOverRoles: "With track roles",
+  takeOverSliders: "Without track roles",
   onlySlidersTaken: (thisTracks, fromName, fromTracks) => {
     const tracks = (count: number) => (count === 1 ? "one track" : `${count} tracks`);
-    return `Sliders only: this recording has ${tracks(thisTracks)}, “${fromName}” has ${tracks(fromTracks)}.`;
+    return `Track roles left out: this recording has ${tracks(thisTracks)}, “${fromName}” has ${tracks(fromTracks)}.`;
   },
-  takenOver: (what, fromName, others) =>
-    `${what === "slidersAndRoles" ? "Sliders and track roles" : "Sliders"} of “${fromName}” applied to ` +
+  takenOver: (what, fromName, others, videoLayersCarried) =>
+    `${what === "slidersAndRoles" ? "Sliders and track roles" : "Sliders"}${videoLayersCarried ? " with video tracks" : ""} ` +
+    `of “${fromName}” applied to ` +
     `${others === 1 ? "the other tab" : `${others} tabs`}. Held stretches stayed where they were.`,
+  layerSetupStayedBehind: (fromName) =>
+    `The video tracks of “${fromName}” did not come along: this recording has a different aspect ratio.`,
+
+  sectionVideoLayers: "Video tracks",
+  videoLayerLabel: (number) => `V${number}`,
+  clipPremierePreset: "on the clip",
+  nestPremierePreset: "on the nest",
+  noPremierePreset: "no effect preset",
+  premierePresetGone: (name) => `${name} (not in your list)`,
+  startsSwitchedOff: "starts switched off",
+  addVideoLayer: "+ Video track",
+  removeVideoLayer: (number) => `Remove V${number}`,
+  addPremierePresets: "Add Premiere effect presets …",
+  premierePresetsHeading: "Premiere effect presets",
+  deletePremierePreset: (name) => `Delete “${name}”`,
+  premierePresetSummary: (carried, notCarried) =>
+    `Carried over: ${carried.length > 0 ? countedNames(carried) : "nothing"}.` +
+    (notCarried.length > 0 ? ` Not carried over: ${countedNames(notCarried)}.` : ""),
+  uncarriedParameters: {
+    motionAntiFlicker: "Anti-flicker Filter",
+    motionCrop: "Crop",
+    cropZoom: "Zoom",
+    cropEdgeFeather: "Edge Feather",
+  },
+  notCarriedParameter: (effect, parameter) => `${effect} (${parameter})`,
+  videoLayerPlaceLabel: (number, place) => `V${number}: effect preset ${place === "clip" ? "on the clip" : "on the nest"}`,
+  videoLayerSwitchedOffLabel: (number) => `V${number} starts switched off`,
+  premierePresetRefusals: {
+    animated: "Refused: it changes over time, and an animation does not fit pieces that start elsewhere in the recording.",
+    rotated: "Refused: it rotates the picture. How Premiere reads a rotation from the Premiere file is not settled yet.",
+    nonUniformScale: "Refused: it stretches the picture one way only, but the Premiere file knows one size for both.",
+    noVideoEffect: "Refused: it holds no video effect.",
+    brokenValue: "Refused: a value in it is not a number.",
+    unnamed: "Refused: the preset has no name.",
+  },
+  premierePresetFileEmpty: "Holds no Premiere effect preset.",
+  premierePresetFileUnreadable: "Could not be read.",
+  premierePresetsAdded: (count) =>
+    count === 0 ? "No Premiere effect preset added" : count === 1 ? "One Premiere effect preset added" : `${count} Premiere effect presets added`,
+  sequenceFrameNote: (width, height) => `The Premiere sequence will then be ${width} × ${height}.`,
+  videoLayersNotWrittenYet:
+    "SmartTrim does not write the video tracks into the Premiere file yet. That comes in one of the next versions.",
+  premierePresetsLoadFailed: "The Premiere effect presets could not be read",
+  premierePresetsAddFailed: "The Premiere effect presets could not be added",
+  premierePresetDeleteFailed: "The Premiere effect preset could not be deleted",
+  layerSetupRememberFailed: "The video tracks could not be remembered for the next recording",
 
   cut: "Cut",
   working: "Working …",

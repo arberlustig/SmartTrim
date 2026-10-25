@@ -44,7 +44,13 @@ export interface NotCarried {
 }
 
 /** Why a PremierePreset is refused; the window words each reason itself (ADR-0030). */
-export type PremierePresetRefusal = "animated" | "rotated" | "nonUniformScale" | "noVideoEffect" | "brokenValue";
+export type PremierePresetRefusal =
+  | "animated"
+  | "rotated"
+  | "nonUniformScale"
+  | "noVideoEffect"
+  | "brokenValue"
+  | "unnamed";
 
 export type PremierePresetReading =
   | { kind: "read"; premierePreset: PremierePreset }
@@ -192,6 +198,8 @@ function readingOf(objects: Objects, item: Element): PremierePresetReading | und
   const filterPresets = filterPresetItem && child(filterPresetItem, "FilterPresets");
   if (!base || !filterPresets) return undefined;
   const name = (childText(base, "Name") ?? "").trim();
+  // The window offers and deletes PremierePresets by name; one without could be neither.
+  if (name === "") return { kind: "refused", name, why: "unnamed" };
 
   const allEffects: Effect[] = [];
   for (const entry of childElements(filterPresets, "FilterPreset")) {

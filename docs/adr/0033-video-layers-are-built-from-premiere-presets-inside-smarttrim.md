@@ -184,7 +184,15 @@ SmartTrims keep opening it.
 Smaller decisions taken while writing this down; the owner can overrule any of them.
 
 - A Tab has a LayerSetup once it has more than V1, or V1 carries a PremierePreset or the tick. The "Videospuren"
-  section sits below "Tonspuren".
+  section sits in the right column below "Einstellungen", beside the other choices about the Premiere file.
+- Deleting a PremierePreset does not ask first, unlike an own Preset: nothing is lost, since every Tab, remembered
+  LayerSetup and project keeps its own copy, and adding the `.prfpset` again brings it back. A double click deletes
+  one, not two.
+- "Für alle übernehmen" names its two buttons "Mit Tonspur-Rollen" and "Ohne Tonspur-Rollen" ("With track roles",
+  "Without track roles"), since both now carry more than the sliders; the question mentions the video tracks only
+  when the Tab on screen has a LayerSetup, and handing one out makes it the remembered one of its shape.
+- Changes to `videoLayers.json` from the window run one after another in the main process, so two close together
+  (a double click) can neither lose one nor tear the file.
 - A PremierePreset is kept as its name and parsed values, never as a path to the user's file. A LayerSetup and a
   TrimProject keep their own copy of the values, so deleting a PremierePreset only takes it out of the list.
 - A `.prfpset` holding several presets adds all of them; one with no video effect is refused. Names are trimmed (the
@@ -241,11 +249,15 @@ them. Asked for on 2026-10-25.
   `videoLayers.json`. Choosing a Recording of another shape drops the Tab's LayerSetup.
 - `fixtures/trimproject/version-3.smarttrim`: a project as SmartTrim wrote it before VideoLayers, which must keep
   opening with no LayerSetup.
+- The window: the "Videospuren" section (`drawVideoLayers` in `src/renderer/renderer.ts`), adding `.prfpset` files
+  through a dialog (`addPremierePresetFiles`, IPC `premierePresets:add`) and deleting them, a new Tab of a Recording
+  starting with the remembered LayerSetup (`takeVideoLayers`), and the note when "Für alle übernehmen" leaves one
+  behind. Until the XML is written, the section says plainly that the Premiere file does not have the video tracks
+  yet. The window glue is untested by design (ADR-0012); it was checked in the built app over CDP with a generated
+  3840x1080 Recording and a throwaway user-data folder, except the file dialog itself, which only a real click opens.
 
-Not built yet: writing the XML (waits for fixture 5), the window (the "Videospuren" section, adding and deleting
-Premiere-Vorgaben, the reminder after the export, the note when "Für alle übernehmen" leaves a LayerSetup behind),
-starting a new Tab with the remembered LayerSetup, and dropping the LayerSetup of a reopened project whose Recording
-changed shape.
+Not built yet: writing the XML (waits for fixture 5) and with it the reminder after the export; adding a `.prfpset`
+by dropping it on the window; dropping the LayerSetup of a reopened project whose Recording changed shape.
 
 ## Consequences
 

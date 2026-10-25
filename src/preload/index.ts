@@ -41,6 +41,11 @@ const api: SmartTrimApi = {
   loadPresets: () => ipcRenderer.invoke("presets:load"),
   savePreset: (preset) => ipcRenderer.invoke("presets:save", preset),
   deletePreset: (name) => ipcRenderer.invoke("presets:delete", name),
+  loadVideoLayers: () => ipcRenderer.invoke("videoLayers:load"),
+  addPremierePresets: (dialogs) => ipcRenderer.invoke("premierePresets:add", dialogs),
+  deletePremierePreset: (name) => ipcRenderer.invoke("premierePresets:delete", name),
+  rememberLayerSetup: (aspectRatio, videoLayers) =>
+    ipcRenderer.invoke("layerSetups:remember", { aspectRatio, videoLayers }),
   reveal: (path) => ipcRenderer.invoke("file:reveal", path),
 };
 

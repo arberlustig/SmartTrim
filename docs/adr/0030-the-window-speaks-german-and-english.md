@@ -19,9 +19,9 @@ sat where it was shown, in `index.html` and `renderer.ts`.
   English anywhere else (`navigator.language`); the choice at the top right of the header is remembered in
   `localStorage` under `smarttrim.language`. Switching redraws the window at once. A status line put up before the
   switch keeps its language until it is replaced; they are short-lived.
-- **The main process holds no sentences.** The three file dialogs (choose Recordings, open projects, save the Premiere
-  file) take their title and filter names from the window with the request (`DialogTexts`), so main need not know
-  which language is spoken.
+- **The main process holds no sentences.** The four file dialogs (choose Recordings, open projects, add Premiere
+  effect presets, save the Premiere file) take their title and filter names from the window with the request
+  (`DialogTexts`), so main need not know which language is spoken.
 - **Technical refusals stay English.** What the modules throw — "ffprobe could not read …", "There is no preset named
   …" — is the grey detail line under a localized sentence ("Grund: …" / "Reason: …"), and was English already for all
   but the presets' four, which now are too. Translating the detail lines would mean threading a language through every

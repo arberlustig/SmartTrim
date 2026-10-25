@@ -860,6 +860,88 @@
         }
       }
 
+      /* ── Video tracks (ADR-0033) ──────────────────────────────────────────────────────────────────────────── */
+      .videoLayerRow {
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        padding: 4px 0;
+      }
+      .videoLayerRow .layerName {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .videoLayerRow label {
+        display: grid;
+        gap: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .videoLayerRow select {
+        width: 100%;
+      }
+      .videoLayerRow .switchedOff {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        color: var(--text);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      .videoLayerRow button.icon {
+        padding: 2px 9px;
+        font-size: 15px;
+        line-height: 1;
+      }
+      .videoLayerButtons {
+        padding-top: 8px;
+      }
+      .premierePresets[hidden] {
+        display: none;
+      }
+      .premierePresets h3 {
+        margin: 16px 0 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      #premierePresetList {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      #premierePresetList li {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 2px 12px;
+        align-items: baseline;
+      }
+      #premierePresetList small {
+        grid-column: 1;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      #premierePresetList button.link {
+        grid-column: 2;
+        grid-row: 1;
+        margin-top: 0;
+      }
+      @media (min-width: 1200px) {
+        .videoLayerRow {
+          grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr);
+        }
+        .videoLayerRow .switchedOff {
+          grid-column: 2;
+        }
+        .videoLayerRow button.icon {
+          grid-column: 3;
+          justify-self: end;
+        }
+      }
+
       /* ── Cutting and the result ───────────────────────────────────────────────────────────────────────────── */
       .actions {
         display: flex;
@@ -995,8 +1077,8 @@
         <h3 id="takeOverTitle" data-text="takeOverQuestionTitle">Haben alle Aufnahmen dieselbe Tonspur-Aufteilung?</h3>
         <p id="takeOverQuestion"></p>
         <div class="dialogButtons">
-          <button id="takeOverRoles" class="primary" type="button" data-text="takeOverRoles">Regler und Tonspur-Rollen</button>
-          <button id="takeOverSliders" type="button" data-text="takeOverSliders">Nur Regler</button>
+          <button id="takeOverRoles" class="primary" type="button" data-text="takeOverRoles">Mit Tonspur-Rollen</button>
+          <button id="takeOverSliders" type="button" data-text="takeOverSliders">Ohne Tonspur-Rollen</button>
           <button id="cancelTakeOver" type="button" data-text="cancel">Abbrechen</button>
         </div>
       </div>
@@ -1129,6 +1211,21 @@
             <div class="presetRow">
               <button id="takeOver" type="button" title="Diese Einstellungen in alle anderen Tabs übernehmen" data-text="takeOver" data-text-title="takeOverTitle">Für alle übernehmen</button>
             </div>
+          </div>
+        </section>
+
+        <!-- ADR-0033: the video tracks the Premiere sequence gets, and the Premiere effect presets they are dressed with. -->
+        <section class="videoLayers" id="videoLayerSection" hidden>
+          <h2 data-text="sectionVideoLayers">Videospuren</h2>
+          <div id="videoLayers"></div>
+          <div class="presetRow videoLayerButtons">
+            <button id="addVideoLayer" type="button" data-text="addVideoLayer">+ Videospur</button>
+            <button id="addPremierePresets" type="button" data-text="addPremierePresets">Premiere-Vorgaben hinzufügen …</button>
+          </div>
+          <p class="hint" id="videoLayerNote" hidden></p>
+          <div class="premierePresets" id="premierePresetsBox" hidden>
+            <h3 data-text="premierePresetsHeading">Premiere-Vorgaben</h3>
+            <ul id="premierePresetList"></ul>
           </div>
         </section>
 
