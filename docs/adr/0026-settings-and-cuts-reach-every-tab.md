@@ -118,5 +118,5 @@ by hand.
 ## Amended by ADR-0033
 
 "Für alle übernehmen" also carries the LayerSetup, with either button, but only into Tabs whose Recording has the same
-aspect ratio; the others are told it stayed behind. "Nur Regler" therefore no longer carries only the sliders, and its
+aspect ratio; the others are told it stayed behind. A Tab without a LayerSetup hands over none. "Nur Regler" therefore no longer carries only the sliders, and its
 label and question change in both languages.

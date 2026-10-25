@@ -12,6 +12,8 @@ import {
   setMarginSeconds,
   setSourceTrackRole,
   toggleExportSourceTrack,
+  addVideoLayer,
+  changeVideoLayer,
   type CutSession,
 } from "./cutSession";
 import type { SourceTrackScan } from "../scan/scanSourceTracks";
@@ -135,5 +137,54 @@ describe("all Tabs", () => {
     // A sequence without a single SourceTrack would look like an edit that lost its sound.
     const nothingExported = toggleExportSourceTrack(toggleExportSourceTrack(cut, 0), 1);
     expect(savingAllDoes(nothingExported, true)).toBe("skipNoExport");
+  });
+});
+
+describe("the LayerSetup across Tabs (ADR-0033)", () => {
+  /** A session on a Recording of the given frame, nothing changed yet. */
+  function framed(name: string, width: number, height: number, sourceTracks = 2): CutSession {
+    return chooseRecording(newCutSession(), { ...probed(`C:\\Aufnahmen\\${name}.mp4`, sourceTracks), width, height });
+  }
+  const withThreeLayers = (session: CutSession) =>
+    changeVideoLayer(addVideoLayer(addVideoLayer(session)), 2, { startsSwitchedOff: true });
+
+  test("the LayerSetup comes along with either button, into a Recording of the same aspect ratio", () => {
+    const from = withThreeLayers(framed("Part1", 3840, 1080));
+    const to = framed("Part2", 5120, 1440);
+    for (const what of ["sliders", "slidersAndRoles"] as const) {
+      const { session, layerSetupLeftOut } = settingsCopied(from, to, what);
+      expect(session.videoLayers).toEqual(from.videoLayers);
+      expect(layerSetupLeftOut).toBe(false);
+    }
+  });
+
+  test.each([
+    ["a 16:9 one", 1920, 1080, 2],
+    ["a 43:18 one, though both are wider than 16:9", 3440, 1440, 2],
+    ["a 16:9 one with another number of SourceTracks", 1920, 1080, 6],
+  ])("a 32:9 LayerSetup stays behind in %s, with either button, and the window is told", (_, width, height, tracks) => {
+    const from = withThreeLayers(framed("Wide", 3840, 1080));
+    const to = changeVideoLayer(framed("Other", width, height, tracks), 0, { startsSwitchedOff: true });
+    for (const what of ["sliders", "slidersAndRoles"] as const) {
+      const { session, layerSetupLeftOut } = settingsCopied(from, to, what);
+      // The other Tab keeps its own LayerSetup.
+      expect(session.videoLayers).toEqual(to.videoLayers);
+      expect(layerSetupLeftOut).toBe(true);
+    }
+  });
+
+  test("two Recordings both sold as 21:9 have different shapes: 2560x1080 is 64:27, 3440x1440 is 43:18", () => {
+    const from = withThreeLayers(framed("Ultrawide", 2560, 1080));
+    expect(settingsCopied(from, framed("Ultrawide2", 3440, 1440), "sliders").layerSetupLeftOut).toBe(true);
+  });
+
+  test("a Tab without a LayerSetup hands over nothing: the other Tab keeps its own, and nothing is reported", () => {
+    // Taking over the sliders must not quietly wipe out a LayerSetup someone built in another Tab.
+    const from = framed("Part1", 3840, 1080);
+    for (const to of [withThreeLayers(framed("Part2", 3840, 1080)), framed("Phone", 1920, 1080)]) {
+      const { session, layerSetupLeftOut } = settingsCopied(from, to, "sliders");
+      expect(session.videoLayers).toEqual(to.videoLayers);
+      expect(layerSetupLeftOut).toBe(false);
+    }
   });
 });

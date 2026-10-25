@@ -1,4 +1,5 @@
 import { canCut, canExport, redoNeeded, type CutSession } from "./cutSession.ts";
+import { aspectRatioOf, isLayerSetup } from "../export/layerSetup.ts";
 
 /**
  * What "Alle schneiden" does with one Tab when its turn comes: cut it, leave the cut it already has, or pass it over
@@ -44,14 +45,25 @@ export type TakenOver = "sliders" | "slidersAndRoles";
  * of a phone video. Held stretches never come: they are moments of one Recording.
  *
  * `rolesLeftOut` is true when the roles were asked for and could not come, so the window can say why that Tab differs.
+ *
+ * The LayerSetup comes with either button, but only into a Recording of the same aspect ratio: the PremierePresets
+ * place the picture for one shape of frame (ADR-0033). `layerSetupLeftOut` says when one could not. A Tab without a
+ * LayerSetup hands over none, so taking over the sliders never wipes out one that was built in another Tab.
  */
 export function settingsCopied(
   from: CutSession,
   to: CutSession,
   what: TakenOver,
-): { session: CutSession; rolesLeftOut: boolean } {
+): { session: CutSession; rolesLeftOut: boolean; layerSetupLeftOut: boolean } {
+  const sameShape =
+    from.recording !== null &&
+    to.recording !== null &&
+    aspectRatioOf(from.recording) === aspectRatioOf(to.recording);
+  const hasLayerSetup = isLayerSetup(from.videoLayers);
+  const layerSetupLeftOut = hasLayerSetup && !sameShape;
   const sliders: CutSession = {
     ...to,
+    ...(hasLayerSetup && sameShape ? { videoLayers: [...from.videoLayers] } : {}),
     selectedPreset: from.selectedPreset,
     thresholdDbfs: from.thresholdDbfs,
     marginSeconds: from.marginSeconds,
@@ -59,13 +71,13 @@ export function settingsCopied(
     eventTailSeconds: from.eventTailSeconds,
     minimumDeadZoneSeconds: from.minimumDeadZoneSeconds,
   };
-  if (what === "sliders") return { session: sliders, rolesLeftOut: false };
+  if (what === "sliders") return { session: sliders, rolesLeftOut: false, layerSetupLeftOut };
 
   const layoutMatches =
     from.recording !== null &&
     to.recording !== null &&
     from.recording.sourceTracks.length === to.recording.sourceTracks.length;
-  if (!layoutMatches) return { session: sliders, rolesLeftOut: true };
+  if (!layoutMatches) return { session: sliders, rolesLeftOut: true, layerSetupLeftOut };
 
   const listenTo = [...from.listenTo];
   const contentSourceTracks = [...from.contentSourceTracks];
@@ -80,5 +92,6 @@ export function settingsCopied(
   return {
     session: { ...sliders, listenTo, contentSourceTracks, exportSourceTracks, emptySourceTracksShown },
     rolesLeftOut: false,
+    layerSetupLeftOut,
   };
 }

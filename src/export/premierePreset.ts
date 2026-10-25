@@ -44,7 +44,7 @@ export interface NotCarried {
 }
 
 /** Why a PremierePreset is refused; the window words each reason itself (ADR-0030). */
-export type PremierePresetRefusal = "animated" | "rotated" | "nonUniformScale" | "noVideoEffect";
+export type PremierePresetRefusal = "animated" | "rotated" | "nonUniformScale" | "noVideoEffect" | "brokenValue";
 
 export type PremierePresetReading =
   | { kind: "read"; premierePreset: PremierePreset }
@@ -241,6 +241,12 @@ function readingOf(objects: Objects, item: Element): PremierePresetReading | und
     } else {
       notCarried.push({ effect: effect.displayName });
     }
+  }
+  // A value that is no number would be saved as null and refused on the next start, taking the user's whole
+  // library or project with it; it is refused here, where it came in.
+  const numbers = [motion.position.x, motion.position.y, motion.scale, motion.anchor.x, motion.anchor.y, transformScale];
+  if (![...numbers, ...(crop ? Object.values(crop) : [])].every(Number.isFinite)) {
+    return { kind: "refused", name, why: "brokenValue" };
   }
   return { kind: "read", premierePreset: { name, motion, crop, transformScale, carried, notCarried } };
 }

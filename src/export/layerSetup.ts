@@ -1,4 +1,4 @@
-import type { PremierePreset } from "./premierePreset.ts";
+import type { PremierePreset, UncarriedParameter } from "./premierePreset.ts";
 import type { FrameSize } from "./videoLayerMotion.ts";
 
 /** One VideoLayer of a LayerSetup, V1 first (ADR-0033). */
@@ -40,4 +40,51 @@ export function sequenceFrameFor(recording: FrameSize, videoLayers: readonly Vid
   const widerThan16x9 = recording.width * 9 > recording.height * 16;
   if (!isLayerSetup(videoLayers) || !widerThan16x9) return recording;
   return { width: Math.round((recording.height * 16) / 9 / 2) * 2, height: recording.height };
+}
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const isPoint = (value: unknown) => isRecord(value) && isNumber(value["x"]) && isNumber(value["y"]);
+const isStringArray = (value: unknown) => Array.isArray(value) && value.every((each) => typeof each === "string");
+/** The parameters the window has words for (ADR-0030); any other would reach it as a bare code. */
+const UNCARRIED_PARAMETERS: readonly UncarriedParameter[] = ["motionAntiFlicker", "motionCrop", "cropZoom", "cropEdgeFeather"];
+
+/** Whether a value read from a file is a whole PremierePreset as SmartTrim saves it. */
+export function isPremierePreset(value: unknown): value is PremierePreset {
+  if (!isRecord(value) || typeof value["name"] !== "string" || !isNumber(value["transformScale"])) return false;
+  const motion = value["motion"];
+  const crop = value["crop"];
+  const notCarried = value["notCarried"];
+  return (
+    isRecord(motion) &&
+    isPoint(motion["position"]) &&
+    isNumber(motion["scale"]) &&
+    isPoint(motion["anchor"]) &&
+    (crop === undefined || (isRecord(crop) && ["left", "top", "right", "bottom"].every((side) => isNumber(crop[side])))) &&
+    isStringArray(value["carried"]) &&
+    Array.isArray(notCarried) &&
+    notCarried.every(
+      (each) =>
+        isRecord(each) &&
+        typeof each["effect"] === "string" &&
+        (each["parameter"] === undefined || UNCARRIED_PARAMETERS.includes(each["parameter"] as UncarriedParameter)),
+    )
+  );
+}
+
+/**
+ * Reads VideoLayers saved in a file (a TrimProject, the remembered LayerSetups), or null when they are damaged. JSON
+ * leaves out a place that holds no PremierePreset; it comes back as one that holds none.
+ */
+export function videoLayersFrom(value: unknown): VideoLayer[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const layers: VideoLayer[] = [];
+  for (const each of value) {
+    if (!isRecord(each) || typeof each["startsSwitchedOff"] !== "boolean") return null;
+    const clip = each["clipPremierePreset"];
+    const nest = each["nestPremierePreset"];
+    if ((clip !== undefined && !isPremierePreset(clip)) || (nest !== undefined && !isPremierePreset(nest))) return null;
+    layers.push({ clipPremierePreset: clip, nestPremierePreset: nest, startsSwitchedOff: each["startsSwitchedOff"] });
+  }
+  return layers;
 }

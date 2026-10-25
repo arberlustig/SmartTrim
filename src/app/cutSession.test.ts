@@ -31,7 +31,12 @@ import {
   setEventTailSeconds,
   setSourceTrackRole,
   visibleSourceTracks,
+  addVideoLayer,
+  changeVideoLayer,
+  removeVideoLayer,
 } from "./cutSession";
+import { PLAIN_LAYER, RAW_V1 } from "../testing/premierePresets";
+import { isLayerSetup } from "../export/layerSetup";
 
 /** A probed Recording with `sourceTracks` stereo SourceTracks, like the OBS captures the owner feeds SmartTrim. */
 function probed(path: string, sourceTracks: number): RecordingInfo {
@@ -538,5 +543,90 @@ describe("cutSession", () => {
 
     expect(presetChoice(chosen, [])).toBe(null);
     expect(chosen.marginSeconds).toBe(0.08);
+  });
+});
+
+describe("VideoLayers (ADR-0033)", () => {
+  test("a fresh session has V1 alone and plain, which is no LayerSetup", () => {
+    expect(newCutSession().videoLayers).toEqual([PLAIN_LAYER]);
+    expect(isLayerSetup(newCutSession().videoLayers)).toBe(false);
+  });
+
+  test("+ Videospur adds a plain VideoLayer below the others", () => {
+    const two = addVideoLayer(changeVideoLayer(newCutSession(), 0, { clipPremierePreset: RAW_V1 }));
+    expect(two.videoLayers).toEqual([{ ...PLAIN_LAYER, clipPremierePreset: RAW_V1 }, PLAIN_LAYER]);
+  });
+
+  test("V1 stays; any other VideoLayer can be taken away", () => {
+    const three = addVideoLayer(addVideoLayer(newCutSession()));
+    const switchedOff = changeVideoLayer(three, 2, { startsSwitchedOff: true });
+    expect(removeVideoLayer(switchedOff, 0).videoLayers).toHaveLength(3);
+    expect(removeVideoLayer(switchedOff, 1).videoLayers).toEqual([PLAIN_LAYER, { ...PLAIN_LAYER, startsSwitchedOff: true }]);
+  });
+
+  test("a VideoLayer's places and tick change one at a time", () => {
+    const two = addVideoLayer(newCutSession());
+    const dressed = changeVideoLayer(changeVideoLayer(two, 1, { nestPremierePreset: RAW_V1 }), 1, { startsSwitchedOff: true });
+    expect(dressed.videoLayers[1]).toEqual({ ...PLAIN_LAYER, nestPremierePreset: RAW_V1, startsSwitchedOff: true });
+    expect(changeVideoLayer(dressed, 1, { nestPremierePreset: undefined }).videoLayers[1]).toEqual({
+      ...PLAIN_LAYER,
+      startsSwitchedOff: true,
+    });
+  });
+
+  test("a VideoLayer that is not there cannot be changed or taken away", () => {
+    // A button drawn before a redraw would otherwise hit whichever VideoLayer now sits at its place, or nothing.
+    const two = addVideoLayer(newCutSession());
+    for (const index of [2, -1, 1.5]) {
+      expect(() => changeVideoLayer(two, index, { startsSwitchedOff: true })).toThrow();
+      expect(() => removeVideoLayer(two, index)).toThrow();
+    }
+  });
+
+  test("a change that names the tick without a value leaves the tick as it is", () => {
+    const switchedOff = changeVideoLayer(addVideoLayer(newCutSession()), 1, { startsSwitchedOff: true });
+    expect(changeVideoLayer(switchedOff, 1, { startsSwitchedOff: undefined }).videoLayers[1]?.startsSwitchedOff).toBe(true);
+  });
+
+  test("choosing a Recording of another shape drops the LayerSetup; one of the same shape keeps it", () => {
+    const wide = (path: string, width: number, height: number) => ({ ...probed(path, 1), width, height });
+    const dressed = addVideoLayer(chooseRecording(newCutSession(), wide(String.raw`C:Aufnahmena.mp4`, 3840, 1080)));
+    expect(chooseRecording(dressed, wide(String.raw`C:Aufnahmen.mp4`, 5120, 1440)).videoLayers).toEqual(dressed.videoLayers);
+    expect(chooseRecording(dressed, wide(String.raw`C:Aufnahmenc.mp4`, 1920, 1080)).videoLayers).toEqual([PLAIN_LAYER]);
+  });
+
+  test("a LayerSetup changes the Premiere file, never the cut", () => {
+    const cut = cutFinished(chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\a.mp4`, 1)));
+    expect(redoNeeded(addVideoLayer(cut))).toBe("nothing");
+  });
+});
+
+describe("VideoLayers in a saved project (ADR-0033)", () => {
+  const chosen = chooseRecording(newCutSession(), probed(String.raw`C:\Aufnahmen\wide.mp4`, 1));
+
+  test("a saved project records the LayerSetup, and only when there is one", () => {
+    expect(savedChoicesFrom(chosen).videoLayers).toBeUndefined();
+    const dressed = changeVideoLayer(addVideoLayer(chosen), 1, { clipPremierePreset: RAW_V1 });
+    expect(savedChoicesFrom(dressed).videoLayers).toEqual(dressed.videoLayers);
+    // V1 alone with only its tick is a LayerSetup too, and is saved.
+    const switchedOffV1 = changeVideoLayer(chosen, 0, { startsSwitchedOff: true });
+    expect(savedChoicesFrom(switchedOffV1).videoLayers).toEqual([{ ...PLAIN_LAYER, startsSwitchedOff: true }]);
+  });
+
+  test("a reopened project brings its VideoLayers back; one without them opens with V1 alone", () => {
+    const dressed = changeVideoLayer(addVideoLayer(chosen), 1, { startsSwitchedOff: true });
+    const project: TrimProject = {
+      recording: probed(String.raw`C:\Aufnahmen\wide.mp4`, 1),
+      listenTo: [0],
+      exportSourceTracks: [0],
+      decideBy: { kind: "loudness", thresholdDbfs: -40 },
+      marginSeconds: 0.05,
+      minimumDeadZoneSeconds: 0.25,
+      worthKeeping: [],
+    };
+    expect(projectOpened(dressed, project).videoLayers).toEqual([PLAIN_LAYER]);
+    expect(projectOpened(chosen, { ...project, videoLayers: dressed.videoLayers }).videoLayers).toEqual(
+      dressed.videoLayers,
+    );
   });
 });

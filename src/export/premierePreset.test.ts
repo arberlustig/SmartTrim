@@ -260,4 +260,12 @@ describe("readPremierePresets", () => {
     const outcomes = readPremierePresets(rotatedFirst).map((reading) => (reading.kind === "refused" ? reading.why : "read"));
     expect(outcomes).toEqual(["rotated", "read"]);
   });
+
+  test.each([
+    ["a Position without its second coordinate", MOTION, 1, "0.99999999666283479"],
+    ["a Scale that is no number", MOTION, 2, "groß"],
+  ])("a PremierePreset with %s is refused: what SmartTrim saves it must read back", (_, matchName, parameterId, value) => {
+    const broken = withParameter(premierePresetFile("raw-v1"), matchName, parameterId, value);
+    expect(readPremierePresets(broken)).toEqual([{ kind: "refused", name: "RAWCUT - V1", why: "brokenValue" }]);
+  });
 });

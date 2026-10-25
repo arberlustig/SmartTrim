@@ -172,9 +172,10 @@ window means a SourceTrack, and the English window already says "track layout" f
 
 ## Where it is kept
 
-PremierePresets live in a file of their own in the user data folder, not in `presets.json`: a new field there would
-force its format 2 and lock older SmartTrims out of the owner's own Presets (ADR-0018). The remembered LayerSetups get a
-file of their own too. Both follow ADR-0018: written beside and renamed into place, a newer or malformed file refused.
+The PremierePresets and the remembered LayerSetups live together in `videoLayers.json` in the user data folder, not in
+`presets.json`: a new field there would force its format 2 and lock older SmartTrims out of the owner's own Presets
+(ADR-0018). It follows ADR-0018: written beside and renamed into place, a torn file read as empty, a newer or damaged
+one refused.
 The TrimProject goes to format 4 for a LayerSetup; a project without one is still written as format 3, so older
 SmartTrims keep opening it.
 
@@ -197,6 +198,9 @@ Smaller decisions taken while writing this down; the owner can overrule any of t
   format-3 project opens with no LayerSetup, as it was saved; a reopened Recording whose aspect ratio no longer matches
   its LayerSetup drops it with a note.
 - "Für alle übernehmen" tells Tabs of another aspect ratio that the LayerSetup stayed behind, like `onlySlidersTaken`.
+  A Tab without a LayerSetup hands over none: taking over the sliders never wipes out one built in another Tab.
+- A PremierePreset holding a value that is no number (a Position without its second coordinate, say) is refused when
+  it is added: saved, it would come back as null and take the whole library or project down with it.
 - The LayerSetup belongs to the CutSession, like the export ticks. Changing it changes the file, never the CutPlan, so
   no new cut is needed (ADR-0014).
 - VideoLayer rows other than V1 can be removed; they cannot be reordered yet. Nests are named after the Recording and
@@ -229,11 +233,19 @@ them. Asked for on 2026-10-25.
   what not. Tested against the four fixture presets and variants of them.
 - `src/export/videoLayerMotion.ts`: the Basic Motion a clip gets, including the centre-anchored encoding and the
   folded Transform. Tested against the centres in `3-presets-applied.xml` and worked examples.
-- `src/export/layerSetup.ts`: the VideoLayer, when a Tab has a LayerSetup, the sequence frame and the aspect-ratio
-  key.
+- `src/export/layerSetup.ts`: the VideoLayer, when a Tab has a LayerSetup, the sequence frame, the aspect-ratio key,
+  and reading VideoLayers back from a file.
+- The CutSession's `videoLayers` with "+ Videospur", removing and changing one; saved in and reopened from the
+  TrimProject (format 4, format 3 without a LayerSetup); carried by "Für alle übernehmen" (`src/app/allTabs.ts`).
+- `src/app/videoLayerLibrary.ts` and `videoLayerStore.ts`: the PremierePresets and remembered LayerSetups in
+  `videoLayers.json`. Choosing a Recording of another shape drops the Tab's LayerSetup.
+- `fixtures/trimproject/version-3.smarttrim`: a project as SmartTrim wrote it before VideoLayers, which must keep
+  opening with no LayerSetup.
 
-Not built yet: writing the XML (waits for fixture 5), the window, the stores for PremierePresets and remembered
-LayerSetups, the TrimProject's format 4 and "Für alle übernehmen".
+Not built yet: writing the XML (waits for fixture 5), the window (the "Videospuren" section, adding and deleting
+Premiere-Vorgaben, the reminder after the export, the note when "Für alle übernehmen" leaves a LayerSetup behind),
+starting a new Tab with the remembered LayerSetup, and dropping the LayerSetup of a reopened project whose Recording
+changed shape.
 
 ## Consequences
 

@@ -3,6 +3,7 @@ import type { Decision } from "../analysis/analyseRecording.ts";
 import type { TimeRange } from "../cutting/planCuts.ts";
 import { replanCut, type CutResult } from "../app/runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import { isLayerSetup, type VideoLayer } from "../export/layerSetup.ts";
 import { probeRecording } from "../probe/probeRecording.ts";
 import { readTrimProject, trimProjectText, type TrimProject } from "./trimProject.ts";
 
@@ -19,6 +20,8 @@ export interface SavedChoices {
   scan?: TrimProject["scan"];
   /** The stretches the user holds (ADR-0023). */
   lockedRanges?: readonly TimeRange[];
+  /** The LayerSetup, when there is one (ADR-0033). */
+  videoLayers?: readonly VideoLayer[];
 }
 
 /** Turns a finished cut and the choices behind it into the session that gets saved. */
@@ -33,6 +36,7 @@ export function trimProjectOf(cut: CutResult, choices: SavedChoices): TrimProjec
     worthKeeping: cut.worthKeeping,
     // Only written when there are any, like the Content SourceTracks below: an absent list means none.
     ...(choices.lockedRanges?.length ? { lockedRanges: [...choices.lockedRanges] } : {}),
+    ...(choices.videoLayers && isLayerSetup(choices.videoLayers) ? { videoLayers: [...choices.videoLayers] } : {}),
     // Only worth writing down when there are Content SourceTracks: a file that names none stays a format 1 session
     // in everything but its version number.
     ...(choices.contentSourceTracks?.length

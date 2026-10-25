@@ -46,6 +46,19 @@ describe("openTrimProject", () => {
     expect(reopened.cut.listened).toEqual([]);
   }, 60_000);
 
+  // The LayerSetup is part of what the user chose for this Recording (ADR-0033): reopened without it, the next
+  // Premiere file would come out with one plain video track.
+  test("a session saved with a LayerSetup reopens with it", async () => {
+    const videoLayers = [
+      { clipPremierePreset: undefined, nestPremierePreset: undefined, startsSwitchedOff: false },
+      { clipPremierePreset: undefined, nestPremierePreset: undefined, startsSwitchedOff: true },
+    ];
+    const cut = await runCut(request(), tools);
+    const saved = trimProjectText(trimProjectOf(cut, { ...request(), videoLayers, exportSourceTracks: [0] }));
+
+    expect((await openTrimProject(saved, tools.ffprobe)).project.videoLayers).toEqual(videoLayers);
+  }, 60_000);
+
   // A held stretch is the user's own decision about this Recording (ADR-0023). Reopened without it, the plan would
   // quietly cut away the second of silence the user had marked to keep.
   test("a session saved with a held stretch reopens with that stretch still kept", async () => {
@@ -103,4 +116,28 @@ describe("openTrimProject", () => {
       saveTrimProject(destination, trimProjectOf(cut, { ...request(), exportSourceTracks: [0] })),
     ).rejects.toThrow(`Could not write the SmartTrim project to ${destination}`);
   }, 60_000);
+});
+
+describe("trimProjectOf", () => {
+  // Only what trimProjectOf reads of a finished cut; the rest of a CutResult plays no part in what is saved.
+  const cut = {
+    recording: {
+      path: String.raw`C:\Aufnahmen\wide.mp4`,
+      frameRate: { numerator: 60, denominator: 1 },
+      width: 3840,
+      height: 1080,
+      durationFrames: 600,
+      sourceTracks: [{ channelCount: 2, sampleRate: 48000, bitDepth: 16, durationFrames: 600 }],
+    },
+    worthKeeping: [{ startSeconds: 1, endSeconds: 2 }],
+    contentEvents: [],
+  } as unknown as Parameters<typeof trimProjectOf>[0];
+  const choices = { voiceSourceTracks: [0], exportSourceTracks: [0], marginSeconds: 0.05, minimumDeadZoneSeconds: 0.25 };
+
+  test("V1 alone and plain is saved as no LayerSetup, so the file stays readable by an older SmartTrim", () => {
+    const plainV1 = [{ clipPremierePreset: undefined, nestPremierePreset: undefined, startsSwitchedOff: false }];
+    const text = trimProjectText(trimProjectOf(cut, { ...choices, videoLayers: plainV1 }));
+    expect(JSON.parse(text)).toMatchObject({ smarttrim: 3 });
+    expect(JSON.parse(text)).not.toHaveProperty("videoLayers");
+  });
 });

@@ -5,6 +5,7 @@ import type { SavedChoices } from "../project/openTrimProject.ts";
 import type { TrimProject } from "../project/trimProject.ts";
 import type { PlanSettings } from "./runCut.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import { aspectRatioOf, isLayerSetup, type VideoLayer } from "../export/layerSetup.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /** What one slider can be set to. `step` is what the window moves by, not something this module enforces. */
@@ -81,6 +82,11 @@ export interface CutSession {
    * throw work away (ADR-0025). A Premiere file does not count: it cannot be opened again.
    */
   lockedRangesSaved: readonly TimeRange[];
+  /**
+   * The video tracks the Premiere sequence gets, V1 first and always there (ADR-0033). V1 alone and plain is no
+   * LayerSetup and exports as before. Like the export ticks, they change the file, never the cut.
+   */
+  videoLayers: readonly VideoLayer[];
 }
 
 /** The settings a finished cut belongs to, so the window can tell what a change costs. */
@@ -149,6 +155,47 @@ export function newCutSession(): CutSession {
     lockedRanges: [],
     lockedRangeStart: null,
     lockedRangesSaved: [],
+    videoLayers: [PLAIN_VIDEO_LAYER],
+  };
+}
+
+/** A VideoLayer as "+ Videospur" adds it: no PremierePreset, switched on. */
+const PLAIN_VIDEO_LAYER: VideoLayer = { clipPremierePreset: undefined, nestPremierePreset: undefined, startsSwitchedOff: false };
+
+/** "+ Videospur": another plain VideoLayer below the others. */
+export function addVideoLayer(session: CutSession): CutSession {
+  return { ...session, videoLayers: [...session.videoLayers, PLAIN_VIDEO_LAYER] };
+}
+
+/**
+ * Refuses a VideoLayer that is not there, as `removeLockedRange` does: a button drawn before a redraw would otherwise
+ * hit whichever VideoLayer now sits at its place, or nothing.
+ */
+function checkVideoLayer(session: CutSession, index: number): void {
+  if (!Number.isInteger(index) || index < 0 || index >= session.videoLayers.length) {
+    throw new Error(`There is no VideoLayer ${index}.`);
+  }
+}
+
+/** Takes a VideoLayer away. V1 stays: the sequence always has a video track. */
+export function removeVideoLayer(session: CutSession, index: number): CutSession {
+  checkVideoLayer(session, index);
+  if (index === 0) return session;
+  return { ...session, videoLayers: session.videoLayers.filter((_layer, position) => position !== index) };
+}
+
+/** Sets a VideoLayer's PremierePresets or its tick, leaving what the change does not name as it is. */
+export function changeVideoLayer(session: CutSession, index: number, change: Partial<VideoLayer>): CutSession {
+  checkVideoLayer(session, index);
+  const changed = (layer: VideoLayer): VideoLayer => ({
+    ...layer,
+    ...change,
+    // The tick is always true or false; a saved project without it would not open again.
+    startsSwitchedOff: change.startsSwitchedOff ?? layer.startsSwitchedOff,
+  });
+  return {
+    ...session,
+    videoLayers: session.videoLayers.map((layer, position) => (position === index ? changed(layer) : layer)),
   };
 }
 
@@ -180,6 +227,11 @@ export function chooseRecording(
     exportSourceTracks: recording.sourceTracks
       .map((_sourceTrack, position) => position)
       .filter((position) => !scan || scan[position]?.carriesSound !== false),
+    // The PremierePresets place the picture for one shape of frame (ADR-0033); on another shape they would not fit.
+    videoLayers:
+      session.recording && aspectRatioOf(session.recording) === aspectRatioOf(recording)
+        ? session.videoLayers
+        : [PLAIN_VIDEO_LAYER],
   };
 }
 
@@ -417,6 +469,8 @@ export function projectOpened(session: CutSession, project: TrimProject): CutSes
     lockedRangeStart: null,
     // What was just opened is saved by definition.
     lockedRangesSaved: normalisedLockedRanges(project.lockedRanges ?? []),
+    // Exactly the project's own LayerSetup: a file without one exports plain, whatever the Tab showed before.
+    videoLayers: project.videoLayers ? [...project.videoLayers] : [PLAIN_VIDEO_LAYER],
   };
   return { ...opened, plannedWith: settingsNow(opened) };
 }
@@ -550,6 +604,8 @@ export function savedChoicesFrom(session: CutSession): SavedChoices {
     minimumDeadZoneSeconds: session.minimumDeadZoneSeconds,
     // The user's own work on this Recording; a reopened project without it would cut away what they held.
     ...heldIfAny(session),
+    // Only when there is one, so a project without it stays readable by an older SmartTrim (format 3).
+    ...(isLayerSetup(session.videoLayers) ? { videoLayers: [...session.videoLayers] } : {}),
   };
   return session.scan ? { ...choices, scan: session.scan } : choices;
 }

@@ -2,6 +2,7 @@ import type { Decision } from "../analysis/analyseRecording.ts";
 import { normalisedLockedRanges } from "../cutting/lockedRanges.ts";
 import type { TimeRange } from "../cutting/planCuts.ts";
 import type { RecordingInfo } from "../export/exportFcp7Xml.ts";
+import { isLayerSetup, videoLayersFrom, type VideoLayer } from "../export/layerSetup.ts";
 import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
 
 /**
@@ -10,9 +11,10 @@ import type { SourceTrackScan } from "../scan/scanSourceTracks.ts";
  *
  * 1: the first format. 2: Content SourceTracks, their moments, EventLead and EventTail — all absent in a format 1
  * file, which therefore opens as a session that has no Content SourceTracks. 3: held stretches (ADR-0023), absent in
- * older files, which open with none.
+ * older files, which open with none. 4: a LayerSetup (ADR-0033). A project without one is still written as format 3,
+ * so that an older SmartTrim keeps opening it.
  */
-const FORMAT = 3;
+const FORMAT = 4;
 
 /**
  * A saved session: the Recording as it was probed, what the user chose, and — the point of the whole file — the
@@ -43,13 +45,20 @@ export interface TrimProject {
   worthKeeping: readonly TimeRange[];
   /** The stretches the user holds whatever the sliders say (ADR-0023); absent in a file from before format 3. */
   lockedRanges?: readonly TimeRange[];
+  /** The LayerSetup, with its own copies of the PremierePresets (ADR-0033); absent when there is none. */
+  videoLayers?: readonly VideoLayer[];
 }
 
 /** Writes a session as the text of a `.smarttrim` file. */
 export function trimProjectText(project: TrimProject): string {
   // The version comes first so the file says what it is in its first line, and one space of indent keeps a file
   // with thousands of ranges readable without doubling its size.
-  return JSON.stringify({ smarttrim: FORMAT, savedAt: new Date().toISOString(), ...project }, undefined, 1);
+  // Without a LayerSetup — V1 alone and plain counts as none — the file stays format 3 and has no videoLayers.
+  const { videoLayers, ...rest } = project;
+  const layered = videoLayers !== undefined && isLayerSetup(videoLayers);
+  const format = layered ? FORMAT : 3;
+  const file = { smarttrim: format, savedAt: new Date().toISOString(), ...rest, ...(layered ? { videoLayers } : {}) };
+  return JSON.stringify(file, undefined, 1);
 }
 
 /** Reads a field that has to be there, refusing a file that is missing it rather than carrying on with a default. */
@@ -100,6 +109,10 @@ export function readTrimProject(text: string): TrimProject {
   // broken is refused like any other broken field: opening without it would silently cut away what the user held.
   const held = file["lockedRanges"];
   if (held !== undefined && !isRangeArray(held)) throw new Error("This SmartTrim project's lockedRanges are damaged.");
+  // Format 4 added the LayerSetup, refused when broken for the same reason: the Premiere file would come out plain.
+  const savedLayers = file["videoLayers"];
+  const videoLayers = savedLayers === undefined ? undefined : videoLayersFrom(savedLayers);
+  if (videoLayers === null) throw new Error("This SmartTrim project's videoLayers are damaged.");
 
   // Format 2 added these. A file from format 1 simply has no Content SourceTracks, which is what an absent field
   // means here — not a broken file.
@@ -111,6 +124,7 @@ export function readTrimProject(text: string): TrimProject {
     ...(isNumber(file["eventTailSeconds"]) ? { eventTailSeconds: file["eventTailSeconds"] as number } : {}),
     // Through the same rule as two presses in the window: in order, joined, edges the right way round (ADR-0023).
     ...(held === undefined ? {} : { lockedRanges: normalisedLockedRanges(held as TimeRange[]) }),
+    ...(videoLayers === undefined ? {} : { videoLayers }),
   };
 
   const scan = file["scan"];

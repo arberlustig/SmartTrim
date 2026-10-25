@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { TimeRange } from "../cutting/planCuts";
 import type { RecordingInfo } from "../export/exportFcp7Xml";
+import type { VideoLayer } from "../export/layerSetup";
+import { RAW_V2 } from "../testing/premierePresets";
 import { readTrimProject, trimProjectText, type TrimProject } from "./trimProject";
 
 const recording: RecordingInfo = {
@@ -106,6 +108,20 @@ describe("the TrimProject file", () => {
 
   // The point of a format number is that a file written by an earlier SmartTrim still opens. This one is checked in
   // and must keep opening for as long as format 1 is readable — whatever the code around it turns into.
+  // Every SmartTrim before VideoLayers writes format 3; such a file opens as a session without a LayerSetup.
+  test("a project file written in format 3 still opens, with no LayerSetup", () => {
+    const text = readFileSync(
+      fileURLToPath(new URL("../../fixtures/trimproject/version-3.smarttrim", import.meta.url)),
+      "utf8",
+    );
+
+    const reopened = readTrimProject(text);
+
+    expect(reopened.lockedRanges).toEqual([{ startSeconds: 300, endSeconds: 320.5 }]);
+    expect(reopened.contentSourceTracks).toEqual([0]);
+    expect(reopened.videoLayers).toBeUndefined();
+  });
+
   test("a project file written in format 1 still opens", () => {
     const text = readFileSync(
       fileURLToPath(new URL("../../fixtures/trimproject/version-1.smarttrim", import.meta.url)),
@@ -144,5 +160,36 @@ describe("the TrimProject file", () => {
     expect(reopened.contentEvents ?? []).toEqual([]);
     expect(reopened.eventLeadSeconds ?? 0).toBe(0);
     expect(reopened.eventTailSeconds ?? 0).toBe(0);
+  });
+});
+
+describe("the LayerSetup in the TrimProject file (ADR-0033)", () => {
+  const videoLayers: VideoLayer[] = [
+    { clipPremierePreset: undefined, nestPremierePreset: undefined, startsSwitchedOff: false },
+    { clipPremierePreset: RAW_V2, nestPremierePreset: undefined, startsSwitchedOff: false },
+    { clipPremierePreset: undefined, nestPremierePreset: RAW_V2, startsSwitchedOff: true },
+  ];
+  const formatOf = (text: string) => (JSON.parse(text) as { smarttrim: number }).smarttrim;
+
+  test("the VideoLayers come back out of the file with their own copies of the PremierePresets", () => {
+    const withLayers: TrimProject = { ...project, videoLayers };
+    const text = trimProjectText(withLayers);
+    expect(readTrimProject(text)).toEqual(withLayers);
+    expect(formatOf(text)).toBe(4);
+  });
+
+  test("a project without a LayerSetup is still written as format 3, so an older SmartTrim opens it", () => {
+    expect(formatOf(trimProjectText(project))).toBe(3);
+    expect(readTrimProject(trimProjectText(project)).videoLayers).toBeUndefined();
+    // V1 alone and plain is no LayerSetup either: written as format 3, without the field.
+    const plainV1Only = trimProjectText({ ...project, videoLayers: [videoLayers[0] as VideoLayer] });
+    expect(formatOf(plainV1Only)).toBe(3);
+    expect(JSON.parse(plainV1Only)).not.toHaveProperty("videoLayers");
+  });
+
+  test("a file whose VideoLayers are damaged is refused rather than opened without them", () => {
+    const damaged = JSON.parse(trimProjectText({ ...project, videoLayers })) as Record<string, unknown>;
+    damaged["videoLayers"] = [{ clipPremierePreset: { name: 7 } }];
+    expect(() => readTrimProject(JSON.stringify(damaged))).toThrow("videoLayers");
   });
 });
