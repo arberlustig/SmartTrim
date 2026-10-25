@@ -4,8 +4,8 @@ Some of the owner's colleagues record 32:9: the game fills the left 16:9 half, t
 they work with three copies of the picture: V1 shows the game half filling the frame, V2 a small facecam in the
 bottom-left corner, V3 the facecam large, switched on only where it is wanted. Each copy carries a Premiere effect
 preset, and each is nested. Done by hand after SmartTrim's cut, that means duplicating and dressing every KeepSegment
-one by one. SmartTrim now writes that arrangement itself. Decided with the owner on 2026-10-25; nothing of it is built
-yet, and building waits for fixture 5 (see Fixtures).
+one by one. SmartTrim now writes that arrangement itself. Decided with the owner on 2026-10-25; what is built so far
+is listed at the end, and writing the XML waits for fixture 5 (see Fixtures).
 
 What the owner decided:
 
@@ -49,16 +49,25 @@ the Three-Way Color Corrector; it exports the same set. SmartTrim translates onl
 Crop. The owner's RAWCUT - V2 holds Crop, Roughen Edges, two Drop Shadows, Transform and Motion; Premiere's own export
 of it (`fixtures/premiere/video-layers/3-presets-applied.xml`) writes Basic Motion and Crop and nothing else.
 
+- **Crop** is carried only when it is the first standard effect in the stack. The imported Crop always lands first,
+  and when the user re-applies the whole PremierePreset on top (below), its own Crop lands in its own place: the two
+  cut the same only if nothing comes before the Crop. A Crop further down, or a second Crop, is named instead. RAWCUT -
+  V2 has its Crop first.
 - **Transform** (`AE.ADBE Geometry2`) folds into Motion's scale when it is a pure uniform scale around the clip
-  centre: anchor and position 0.5:0.5, Uniform Scale on, no skew, no rotation, opacity 100 — and no carried effect
-  comes after it in the stack, since Premiere renders standard effects first and fixed ones such as Motion last.
-  RAWCUT - V2 meets this (Crop first, Transform 90 % last). Its parameter IDs: 1 Anchor Point, 2 Position, 3 Scale
-  Height, 4 Scale Width, 5 Skew, 6 Skew Axis, 7 Rotation, 8 Opacity, 11 Uniform Scale.
+  centre: anchor and position 0.5:0.5, a positive scale (a negative one turns the picture over), equal height and width
+  or Uniform Scale on, no skew, no rotation, opacity 100. It folds wherever it sits, because Premiere renders the
+  standard effects first and Motion last, and re-applying the PremierePreset sets Motion back and adds the Transform
+  again. Several pure Transforms multiply. RAWCUT - V2 has one at 90 %. Its parameter IDs: 1 Anchor Point, 2 Position,
+  3 Scale Height, 4 Scale Width, 5 Skew, 6 Skew Axis, 7 Rotation, 8 Opacity, 11 Uniform Scale.
 - **Everything else** (here Roughen Edges and the Drop Shadows; for any PremierePreset also Opacity and the filters
-  above until a fixture shows them) is named when the PremierePreset is added. After the export SmartTrim reminds the
-  user to drag a clip PremierePreset with such effects once onto the clip inside that Nest. That sets Motion back to the
-  preset's own values (RAWCUT - V2: scale 100) and adds Transform 90 % again, so the size stays; the second Crop with
-  the same percentages should change nothing. Neither is tested yet.
+  above until a fixture shows them) is named when the PremierePreset is added, together with what is carried. A
+  parameter of a carried effect that FCP7 XML cannot hold is named as a code the window words (Motion's anti-flicker
+  and hidden crop, Crop's Zoom and Edge Feather), because the file labels some of them in Premiere's language and
+  leaves Crop's Zoom blank. Audio effects saved into a PremierePreset are left alone: neither named nor checked for
+  animation. After the export SmartTrim reminds the user to drag a clip PremierePreset with such effects once onto the
+  clip inside that Nest. That sets Motion back to the preset's own values (RAWCUT - V2: scale 100) and adds Transform
+  90 % again, so the size stays; the second Crop with the same percentages should change nothing. Neither is tested
+  yet.
 - A **Nest PremierePreset** with such effects is allowed too (owner, 2026-10-25). It sits on every piece, so the
   reminder asks the user to select all pieces of that VideoLayer and drop the PremierePreset onto one of them: Adobe's
   help "Apply effect presets" says a preset dropped onto a clip that is part of the selection goes to every selected
@@ -181,7 +190,8 @@ Smaller decisions taken while writing this down; the owner can overrule any of t
   fixture's is "RAWCUT - V2 "); the same name again replaces in place, as ADR-0018 does for Presets. The window shows
   effect names as the file has them (`DisplayName`, in Premiere's language): data, not texts (ADR-0030). A `.prfpset`
   dropped on the window is added like one chosen with the button (ADR-0024).
-- Motion 7 to 11 and Crop 5 and 6 away from their defaults are named as not carried, like Opacity.
+- Motion 7 to 11 and Crop 5 and 6 away from their defaults are named as not carried, like Opacity. (`3-presets-applied`
+  writes Basic Motion's own `antiflicker` and crop fields, all 0; whether Premiere reads them back is unknown.)
 - The aspect ratio is the exact reduced width:height of the probed frame. The remembered LayerSetup follows every
   change, the last change in any Tab wins, and V1 alone without PremierePreset or tick is remembered as none. A
   format-3 project opens with no LayerSetup, as it was saved; a reopened Recording whose aspect ratio no longer matches
@@ -212,6 +222,18 @@ them. Asked for on 2026-10-25.
 - The `.prfpset` reader against the four fixture presets, including what it names as not carried for RAWCUT - V2.
 - The XML against `4-nested.xml` and fixture 5; without a LayerSetup, the existing export tests unchanged.
 - A checked-in format-3 `.smarttrim` that opens with no LayerSetup, as ADR-0016 does for format 1.
+
+## Built so far
+
+- `src/export/premierePreset.ts`: reads a `.prfpset` into PremierePresets or refusals, with what is carried and
+  what not. Tested against the four fixture presets and variants of them.
+- `src/export/videoLayerMotion.ts`: the Basic Motion a clip gets, including the centre-anchored encoding and the
+  folded Transform. Tested against the centres in `3-presets-applied.xml` and worked examples.
+- `src/export/layerSetup.ts`: the VideoLayer, when a Tab has a LayerSetup, the sequence frame and the aspect-ratio
+  key.
+
+Not built yet: writing the XML (waits for fixture 5), the window, the stores for PremierePresets and remembered
+LayerSetups, the TrimProject's format 4 and "Für alle übernehmen".
 
 ## Consequences
 
